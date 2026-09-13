@@ -1,0 +1,171 @@
+{
+  "summary": {
+    "activityId": 900001,
+    "activityName": "Synthetic Pool Swim",
+    "activityType": {
+      "typeKey": "lap_swimming"
+    },
+    "poolLength": 25,
+    "poolLengthUnit": {
+      "unitKey": "meter"
+    },
+    "numberOfActiveLengths": 6
+  },
+  "activity": {
+    "activityId": 900001,
+    "distance": 150,
+    "duration": 186,
+    "elapsedDuration": 216,
+    "averageHR": 132,
+    "maxHR": 158
+  },
+  "splits": {
+    "activityId": 900001,
+    "lapDTOs": [
+      {
+        "lapIndex": 7,
+        "messageIndex": 20,
+        "startTimeGMT": "2026-08-01T01:00:00.000Z",
+        "distance": 50,
+        "duration": 55,
+        "movingDuration": 55,
+        "elapsedDuration": 70,
+        "averageSpeed": 0.9090909,
+        "averageHR": 128,
+        "maxHR": 140,
+        "swimStroke": "FREESTYLE",
+        "numberOfActiveLengths": 2,
+        "numberOfLengths": 3,
+        "strokes": 29,
+        "avgSwolf": 42.5,
+        "intensityType": "ACTIVE",
+        "garminFutureField": "preserve-me",
+        "lengthDTOs": [
+          {
+            "messageIndex": 101,
+            "startTimeGMT": "2026-08-01T01:00:00.000Z",
+            "distance": 25,
+            "duration": 27,
+            "elapsedDuration": 27,
+            "averageSpeed": 0.9259259,
+            "averageHR": 124,
+            "maxHR": 132,
+            "lengthType": "ACTIVE",
+            "swimStroke": "FREESTYLE",
+            "strokeCount": 14,
+            "avgSwolf": 41
+          },
+          {
+            "messageIndex": 102,
+            "startTimeGMT": "2026-08-01T01:00:27.000Z",
+            "distance": 25,
+            "duration": 28,
+            "elapsedDuration": 28,
+            "averageSpeed": 0.8928571,
+            "averageHR": 131,
+            "maxHR": 140,
+            "lengthType": "ACTIVE",
+            "swimStroke": "FREESTYLE",
+            "strokeCount": 15,
+            "avgSwolf": 43
+          },
+          {
+            "messageIndex": 103,
+            "startTimeGMT": "2026-08-01T01:00:55.000Z",
+            "duration": 15,
+            "elapsedDuration": 15,
+            "lengthType": "IDLE"
+          }
+        ]
+      },
+      {
+        "lapIndex": 11,
+        "messageIndex": 21,
+        "startTimeGMT": "2026-08-01T01:01:10.000Z",
+        "distance": 50,
+        "duration": 61,
+        "elapsedDuration": 61,
+        "averageSpeed": 0.8196721,
+        "averageHR": 136,
+        "maxHR": 150,
+        "swimStroke": "MIXED",
+        "numberOfActiveLengths": 2,
+        "numberOfLengths": 2,
+        "strokes": 35,
+        "avgSwolf": 48,
+        "lengthDTOs": [
+          {
+            "messageIndex": 104,
+            "distance": 25,
+            "duration": 29,
+            "averageSpeed": 0.862069,
+            "lengthType": "ACTIVE",
+            "swimStroke": "BACKSTROKE",
+            "strokeCount": 17,
+            "avgSwolf": 46
+          },
+          {
+            "messageIndex": 105,
+            "distance": 25,
+            "duration": 32,
+            "averageSpeed": 0.78125,
+            "lengthType": "ACTIVE",
+            "swimStroke": "BREASTSTROKE",
+            "strokeCount": 18,
+            "avgSwolf": 50
+          }
+        ]
+      },
+      {
+        "lapIndex": 15,
+        "messageIndex": 22,
+        "startTimeGMT": "2026-08-01T01:02:11.000Z",
+        "distance": 50,
+        "duration": 70,
+        "elapsedDuration": 85,
+        "averageSpeed": 0.7142857,
+        "swimStroke": "DRILL",
+        "numberOfActiveLengths": 2,
+        "numberOfLengths": 2,
+        "intensityType": "ACTIVE",
+        "lengthDTOs": []
+      }
+    ]
+  },
+  "details": {
+    "activityId": 900001,
+    "measurementCount": 3,
+    "metricsCount": 2,
+    "metricDescriptors": [
+      {
+        "metricsIndex": 2,
+        "key": "directHeartRate",
+        "unit": {
+          "unitKey": "bpm"
+        }
+      },
+      {
+        "metricsIndex": 0,
+        "key": "directTimestamp",
+        "unit": {
+          "unitKey": "ms"
+        }
+      },
+      {
+        "metricsIndex": 1,
+        "key": "sumDistance",
+        "unit": {
+          "unitKey": "meter"
+        }
+      }
+    ],
+    "activityDetailMetrics": [
+      {
+        "metrics": [1785546000000, 0, 118]
+      },
+      {
+        "metrics": [1785546060000, 50, 132]
+      }
+    ]
+  }
+}
