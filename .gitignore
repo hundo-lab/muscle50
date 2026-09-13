@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Fitness data and authentication material must never be versioned.
+.env
+.env.*
+*.sqlite
+*.sqlite3
+*.db
+garmin_tokens.json
+tokens/
+raw/
+data/
+
