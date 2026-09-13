@@ -13,6 +13,7 @@ EXPECTED_TABLES = {
     "activities",
     "activity_metrics",
     "activity_corrections",
+    "strength_sets",
 }
 
 
@@ -33,7 +34,7 @@ def test_migration_recovers_when_only_version_table_and_marker_remain(tmp_path: 
         }
         versions = connection.execute("SELECT version FROM schema_migrations").fetchall()
     assert tables == EXPECTED_TABLES
-    assert versions == [(1,)]
+    assert versions == [(1,), (2,)]
 
 
 def test_migration_completes_partial_ddl_without_version_marker(tmp_path: Path) -> None:
@@ -68,7 +69,7 @@ def test_migration_completes_partial_ddl_without_version_marker(tmp_path: Path) 
         }
         versions = connection.execute("SELECT version FROM schema_migrations").fetchall()
     assert tables == EXPECTED_TABLES
-    assert versions == [(1,)]
+    assert versions == [(1,), (2,)]
 
 
 def test_first_migration_is_safe_under_concurrent_startup(tmp_path: Path) -> None:
@@ -79,4 +80,32 @@ def test_first_migration_is_safe_under_concurrent_startup(tmp_path: Path) -> Non
 
     with sqlite3.connect(database_path) as connection:
         versions = connection.execute("SELECT version FROM schema_migrations").fetchall()
-    assert versions == [(1,)]
+    assert versions == [(1,), (2,)]
+
+
+def test_strength_sets_migration_upgrades_existing_database(tmp_path: Path) -> None:
+    database_path = tmp_path / "existing.sqlite3"
+    initial_migration = (
+        Path(__file__).parents[1] / "src" / "muscle50" / "infrastructure" / "sqlite" / "migrations" / "001_initial.sql"
+    )
+    with sqlite3.connect(database_path) as connection:
+        connection.executescript(initial_migration.read_text(encoding="utf-8"))
+
+    ActivityRepository(database_path).migrate()
+
+    with sqlite3.connect(database_path) as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(strength_sets)")}
+        versions = connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
+    assert {
+        "activity_id",
+        "sequence",
+        "source_exercise_key",
+        "display_exercise_name",
+        "set_type",
+        "reps",
+        "source_weight",
+        "source_weight_unit",
+        "normalized_weight_kg",
+        "duration_seconds",
+    } <= columns
+    assert versions == [(1,), (2,)]

@@ -30,6 +30,11 @@ RUN_SUMMARY: dict[str, Any] = {
 }
 
 
+def _synthetic_strength_sets() -> dict[str, Any]:
+    path = Path(__file__).parent / "fixtures" / "synthetic_strength_sets.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 class FakeConnector:
     def __init__(
         self,
@@ -156,14 +161,17 @@ def test_duplicate_sync_does_not_refetch_or_duplicate(paths: AppPaths) -> None:
                 "duration": 2400,
                 "calories": 250,
             },
-            {
-                "exerciseSets": [
-                    {"setType": "ACTIVE", "repetitionCount": 10, "weight": 20},
-                    {"setType": "REST", "repetitionCount": 99},
-                    {"repetitionCount": 4, "weight": 25},
-                ]
-            },
-            ("종류: 웨이트", "세트: 2", "반복: 14"),
+            _synthetic_strength_sets(),
+            (
+                "종류: 웨이트",
+                "Barbell Bench Press",
+                "  60 kg × 10",
+                "  65 kg × 8",
+                "Seated Cable Row",
+                "  50 kg × 12",
+                "총 3세트 / 30회",
+                "휴식 구간: 1개 (운동 세트/반복 합계 제외)",
+            ),
         ),
     ],
 )
@@ -205,3 +213,89 @@ def test_yard_pool_length_is_normalized_to_meters(paths: AppPaths) -> None:
 
     assert pool_length.value == pytest.approx(22.86)
     assert pool_length.unit == "m"
+
+
+def test_strength_sets_are_stored_once_and_loaded_on_duplicate_sync(paths: AppPaths) -> None:
+    summary = {
+        "activityId": 222,
+        "activityName": "Synthetic Strength Session",
+        "activityType": {"typeKey": "strength_training"},
+    }
+    connector = FakeConnector(summary, exercise_sets=_synthetic_strength_sets())
+
+    first = _use_case(paths, connector).execute()
+    second = _use_case(paths, connector).execute()
+
+    assert first.created is True
+    assert second.created is False
+    assert len(first.activity.strength_sets) == 5
+    assert len(second.activity.strength_sets) == 5
+    assert connector.raw_calls == 1
+    with sqlite3.connect(paths.database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM strength_sets").fetchone()[0] == 5
+        active_count, active_reps = connection.execute(
+            """
+            SELECT COUNT(*), SUM(reps)
+            FROM strength_sets
+            WHERE set_type = 'ACTIVE'
+            """
+        ).fetchone()
+        assert (active_count, active_reps) == (3, 30)
+        first_row = connection.execute(
+            """
+            SELECT sequence, source_message_index, source_exercise_category,
+                   source_exercise_name, source_exercise_key, display_exercise_name,
+                   set_type, reps, source_weight, source_weight_unit,
+                   normalized_weight_kg, duration_seconds, started_at, workout_step_index
+            FROM strength_sets
+            WHERE sequence = 1
+            """
+        ).fetchone()
+        assert first_row == (
+            1,
+            0,
+            "BENCH_PRESS",
+            "BARBELL_BENCH_PRESS",
+            "BARBELL_BENCH_PRESS",
+            "Barbell Bench Press",
+            "ACTIVE",
+            10,
+            60000,
+            "g",
+            60,
+            35.5,
+            "2026-01-03T06:10:00.0",
+            1,
+        )
+        rest_row = connection.execute(
+            "SELECT set_type, reps, source_weight, normalized_weight_kg FROM strength_sets WHERE sequence = 2"
+        ).fetchone()
+        assert rest_row == ("REST", None, None, None)
+
+
+def test_existing_strength_activity_backfills_sets_from_local_raw(paths: AppPaths) -> None:
+    summary = {
+        "activityId": 222,
+        "activityName": "Synthetic Strength Session",
+        "activityType": {"typeKey": "strength_training"},
+    }
+    connector = FakeConnector(summary, exercise_sets=_synthetic_strength_sets())
+    use_case = _use_case(paths, connector)
+    use_case.execute()
+    with sqlite3.connect(paths.database_path) as connection:
+        connection.execute("DELETE FROM strength_sets")
+        connection.execute("UPDATE activities SET normalizer_version = 1")
+        connection.execute("UPDATE activity_metrics SET numeric_value = 4 WHERE metric_key = 'set_count'")
+        connection.execute("UPDATE activity_metrics SET numeric_value = 129 WHERE metric_key = 'rep_count'")
+
+    result = _use_case(paths, connector).execute()
+
+    assert result.created is False
+    assert len(result.activity.strength_sets) == 5
+    assert result.activity.normalizer_version == 2
+    metrics = {metric.key: metric.value for metric in result.activity.metrics}
+    assert metrics["set_count"] == 3
+    assert metrics["rep_count"] == 30
+    assert connector.raw_calls == 1
+    with sqlite3.connect(paths.database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM strength_sets").fetchone()[0] == 5

@@ -96,6 +96,21 @@ class RawStore:
         _write_atomic_replace(directory / "manifest.json", _json_bytes(manifest), self._tmp_dir)
         return tuple(artifacts)
 
+    def load_exercise_sets(self, activity_id: str) -> Mapping[str, Any] | None:
+        """Read an already-preserved strength payload without contacting Garmin."""
+        if not activity_id.isdigit() or int(activity_id) <= 0:
+            raise RawStoreError("올바르지 않은 Garmin activity ID입니다.")
+        path = self._root / activity_id / "exercise_sets.json"
+        if not path.exists():
+            return None
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise RawStoreError("기존 exercise_sets RAW 파일을 읽을 수 없습니다.") from exc
+        if not isinstance(payload, Mapping):
+            raise RawStoreError("기존 exercise_sets RAW 파일 형식이 올바르지 않습니다.")
+        return payload
+
 
 def _json_bytes(value: Mapping[str, Any]) -> bytes:
     return (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")

@@ -10,7 +10,14 @@ from datetime import UTC, datetime
 from importlib.resources import files
 from pathlib import Path
 
-from muscle50.domain.activity import ActivityMetric, ActivityType, NormalizedActivity
+from muscle50.domain.activity import (
+    NORMALIZER_VERSION,
+    ActivityMetric,
+    ActivityType,
+    NormalizedActivity,
+    StrengthSet,
+)
+from muscle50.domain.normalization import strength_set_metrics
 from muscle50.infrastructure.raw_store import RawArtifact
 
 
@@ -23,12 +30,12 @@ class ActivityRepository:
             # executescript commits any pending transaction before it runs. The migration
             # therefore owns its BEGIN/COMMIT and uses idempotent DDL so an interrupted
             # legacy/partial schema can be completed safely on the next startup.
-            migration = (
-                files("muscle50.infrastructure.sqlite.migrations")
-                .joinpath("001_initial.sql")
-                .read_text(encoding="utf-8")
-            )
-            connection.executescript(migration)
+            migrations = files("muscle50.infrastructure.sqlite.migrations")
+            for migration in sorted(
+                (item for item in migrations.iterdir() if item.name.endswith(".sql")),
+                key=lambda item: item.name,
+            ):
+                connection.executescript(migration.read_text(encoding="utf-8"))
 
     def find(self, source_activity_id: str) -> NormalizedActivity | None:
         with self._connect() as connection:
@@ -42,7 +49,11 @@ class ActivityRepository:
                 "SELECT * FROM activity_metrics WHERE activity_id = ? ORDER BY metric_key",
                 (row["id"],),
             ).fetchall()
-        return _activity_from_rows(row, metric_rows)
+            strength_set_rows = connection.execute(
+                "SELECT * FROM strength_sets WHERE activity_id = ? ORDER BY sequence",
+                (row["id"],),
+            ).fetchall()
+        return _activity_from_rows(row, metric_rows, strength_set_rows)
 
     def save(self, activity: NormalizedActivity, artifacts: tuple[RawArtifact, ...]) -> tuple[NormalizedActivity, bool]:
         if not artifacts:
@@ -129,12 +140,44 @@ class ActivityRepository:
                         """,
                         (activity_pk, metric.key, numeric, text, metric.unit, metric.source_path),
                     )
+                _insert_strength_sets(connection, activity_pk, activity.strength_sets)
         except sqlite3.IntegrityError:
             existing = self.find(activity.source_activity_id)
             if existing is not None:
                 return existing, False
             raise
         return activity, True
+
+    def save_strength_sets(self, source_activity_id: str, strength_sets: tuple[StrengthSet, ...]) -> None:
+        """Idempotently add normalized sets to an activity already stored in the database."""
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT id FROM activities WHERE provider = 'garmin' AND source_activity_id = ?",
+                (source_activity_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"activity is not stored: {source_activity_id}")
+            activity_id = int(row["id"])
+            _insert_strength_sets(connection, activity_id, strength_sets, ignore_existing=True)
+            connection.execute(
+                "DELETE FROM activity_metrics WHERE activity_id = ? AND metric_key IN ('set_count', 'rep_count')",
+                (activity_id,),
+            )
+            for metric in strength_set_metrics(strength_sets):
+                numeric, text = _metric_values(metric)
+                connection.execute(
+                    """
+                    INSERT INTO activity_metrics (
+                        activity_id, metric_key, numeric_value, text_value, unit, source_path
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (activity_id, metric.key, numeric, text, metric.unit, metric.source_path),
+                )
+            connection.execute(
+                "UPDATE activities SET normalizer_version = ? WHERE id = ?",
+                (NORMALIZER_VERSION, activity_id),
+            )
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -160,7 +203,11 @@ def _metric_values(metric: ActivityMetric) -> tuple[float | None, str | None]:
     return float(metric.value), None
 
 
-def _activity_from_rows(row: sqlite3.Row, metric_rows: list[sqlite3.Row]) -> NormalizedActivity:
+def _activity_from_rows(
+    row: sqlite3.Row,
+    metric_rows: list[sqlite3.Row],
+    strength_set_rows: list[sqlite3.Row],
+) -> NormalizedActivity:
     metrics = tuple(
         ActivityMetric(
             key=item["metric_key"],
@@ -169,6 +216,26 @@ def _activity_from_rows(row: sqlite3.Row, metric_rows: list[sqlite3.Row]) -> Nor
             source_path=item["source_path"],
         )
         for item in metric_rows
+    )
+    strength_sets = tuple(
+        StrengthSet(
+            sequence=item["sequence"],
+            source_message_index=item["source_message_index"],
+            source_exercise_category=item["source_exercise_category"],
+            source_exercise_name=item["source_exercise_name"],
+            source_exercise_key=item["source_exercise_key"],
+            display_exercise_name=item["display_exercise_name"],
+            source_exercise_probability=item["source_exercise_probability"],
+            set_type=item["set_type"],
+            reps=item["reps"],
+            source_weight=item["source_weight"],
+            source_weight_unit=item["source_weight_unit"],
+            normalized_weight_kg=item["normalized_weight_kg"],
+            duration_seconds=item["duration_seconds"],
+            started_at=item["started_at"],
+            workout_step_index=item["workout_step_index"],
+        )
+        for item in strength_set_rows
     )
     return NormalizedActivity(
         source_activity_id=row["source_activity_id"],
@@ -186,7 +253,67 @@ def _activity_from_rows(row: sqlite3.Row, metric_rows: list[sqlite3.Row]) -> Nor
         max_hr_bpm=row["max_hr_bpm"],
         elevation_gain_meters=row["elevation_gain_meters"],
         metrics=metrics,
+        strength_sets=strength_sets,
         normalizer_version=row["normalizer_version"],
+    )
+
+
+def _insert_strength_sets(
+    connection: sqlite3.Connection,
+    activity_id: int,
+    strength_sets: tuple[StrengthSet, ...],
+    *,
+    ignore_existing: bool = False,
+) -> None:
+    for strength_set in strength_sets:
+        values = _strength_set_values(activity_id, strength_set)
+        statement = """
+            INSERT INTO strength_sets (
+                activity_id, sequence, source_message_index, source_exercise_category,
+                source_exercise_name, source_exercise_key, display_exercise_name,
+                source_exercise_probability, set_type, reps, source_weight,
+                source_weight_unit, normalized_weight_kg, duration_seconds, started_at,
+                workout_step_index
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        if ignore_existing:
+            statement += " ON CONFLICT(activity_id, sequence) DO NOTHING"
+        cursor = connection.execute(statement, values)
+        if ignore_existing and cursor.rowcount == 0:
+            stored = connection.execute(
+                """
+                SELECT activity_id, sequence, source_message_index, source_exercise_category,
+                       source_exercise_name, source_exercise_key, display_exercise_name,
+                       source_exercise_probability, set_type, reps, source_weight,
+                       source_weight_unit, normalized_weight_kg, duration_seconds, started_at,
+                       workout_step_index
+                FROM strength_sets
+                WHERE activity_id = ? AND sequence = ?
+                """,
+                (activity_id, strength_set.sequence),
+            ).fetchone()
+            if stored is None or tuple(stored) != values:
+                raise RuntimeError("stored strength set does not match the local RAW normalization")
+
+
+def _strength_set_values(activity_id: int, strength_set: StrengthSet) -> tuple[object, ...]:
+    return (
+        activity_id,
+        strength_set.sequence,
+        strength_set.source_message_index,
+        strength_set.source_exercise_category,
+        strength_set.source_exercise_name,
+        strength_set.source_exercise_key,
+        strength_set.display_exercise_name,
+        strength_set.source_exercise_probability,
+        strength_set.set_type,
+        strength_set.reps,
+        strength_set.source_weight,
+        strength_set.source_weight_unit,
+        strength_set.normalized_weight_kg,
+        strength_set.duration_seconds,
+        strength_set.started_at,
+        strength_set.workout_step_index,
     )
 
 

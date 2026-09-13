@@ -1,0 +1,58 @@
+{
+  "activityId": 222,
+  "exerciseSets": [
+    {
+      "duration": 35.5,
+      "exercises": [
+        {
+          "category": "BENCH_PRESS",
+          "name": "BARBELL_BENCH_PRESS",
+          "probability": 98.5
+        }
+      ],
+      "messageIndex": 0,
+      "repetitionCount": 10,
+      "setType": "ACTIVE",
+      "startTime": "2026-01-03T06:10:00.0",
+      "weight": 60000.0,
+      "wktStepIndex": 1
+    },
+    {
+      "duration": 60.0,
+      "messageIndex": 1,
+      "setType": "REST",
+      "startTime": "2026-01-03T06:10:35.5"
+    },
+    {
+      "exercises": [
+        {
+          "category": "BENCH_PRESS",
+          "name": "BARBELL_BENCH_PRESS",
+          "probability": 97.0
+        }
+      ],
+      "messageIndex": 2,
+      "repetitionCount": 8,
+      "setType": "ACTIVE",
+      "weight": 65000.0
+    },
+    {
+      "exercises": [
+        {
+          "category": "ROW",
+          "name": "SEATED_CABLE_ROW",
+          "probability": 91.25
+        }
+      ],
+      "messageIndex": 3,
+      "repetitionCount": 12,
+      "setType": "ACTIVE",
+      "weight": 50000.0
+    },
+    {
+      "messageIndex": 4,
+      "repetitionCount": 99,
+      "weight": 99999.0
+    }
+  ]
+}

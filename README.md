@@ -1,7 +1,8 @@
 # muscle50
 
 Windows 로컬 환경에서 개인 운동 데이터를 관리하는 도구입니다. 현재 MVP는 Garmin Connect의
-가장 최근 activity 한 건을 RAW 파일과 normalized SQLite 데이터로 보존합니다.
+가장 최근 activity 한 건을 RAW 파일과 normalized SQLite 데이터로 보존합니다. 웨이트
+activity는 Garmin exercise set의 종목·중량·반복·휴식 구간도 함께 정규화합니다.
 
 ## 요구 환경
 
@@ -43,6 +44,12 @@ muscle50 garmin latest
 
 동일한 최신 activity를 다시 실행하면 Garmin activity ID의 database unique constraint를
 기준으로 중복 저장하지 않고 기존 normalized 데이터를 요약합니다.
+
+웨이트 activity는 종목별 운동 세트를 표시하고 마지막에 운동 세트/반복 합계를 보여 줍니다.
+`REST` 행은 `strength_sets`에 그대로 저장하지만 운동 합계에서는 제외합니다. Garmin이 제공하지
+않은 중량, 반복, 시간 값은 추정하지 않고 `NULL`로 유지합니다. 기존 DB는 시작할 때 migration 2가
+`strength_sets` 테이블을 추가하며, 이미 보존된 웨이트 RAW가 있으면 원격 상세 API를 다시 호출하지
+않고 해당 파일에서 세트를 백필합니다.
 
 ## 개발 검증
 

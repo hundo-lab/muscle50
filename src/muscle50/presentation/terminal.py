@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from muscle50.application.sync_latest_garmin import SyncResult
-from muscle50.domain.activity import ActivityMetric, ActivityType
+from muscle50.domain.activity import ActivityMetric, ActivityType, StrengthSet
 from muscle50.domain.derivation import derive_summary
 
 _TYPE_LABELS = {
@@ -47,8 +47,11 @@ def render_sync_result(result: SyncResult) -> str:
         _metric_line(lines, metrics, "lap_count", "랩", "")
         _metric_line(lines, metrics, "average_swolf", "평균 SWOLF", "")
     elif activity.canonical_type is ActivityType.STRENGTH:
-        _metric_line(lines, metrics, "set_count", "세트", "")
-        _metric_line(lines, metrics, "rep_count", "반복", "")
+        if activity.strength_sets:
+            _strength_set_lines(lines, activity.strength_sets)
+        else:
+            _metric_line(lines, metrics, "set_count", "세트", "")
+            _metric_line(lines, metrics, "rep_count", "반복", "")
 
     lines.extend(f"경고: {warning}" for warning in result.warnings)
     return "\n".join(lines)
@@ -74,3 +77,39 @@ def _duration(seconds: float) -> str:
     hours, remainder = divmod(total, 3600)
     minutes, secs = divmod(remainder, 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _strength_set_lines(lines: list[str], strength_sets: tuple[StrengthSet, ...]) -> None:
+    active_sets = [item for item in strength_sets if item.set_type == "ACTIVE"]
+    rest_sets = [item for item in strength_sets if item.set_type == "REST"]
+    by_exercise: dict[str, list[StrengthSet]] = {}
+    for strength_set in active_sets:
+        name = strength_set.display_exercise_name or "Unknown Exercise"
+        by_exercise.setdefault(name, []).append(strength_set)
+
+    for name, exercise_sets in by_exercise.items():
+        lines.append("")
+        lines.append(name)
+        lines.extend(f"  {_strength_set_value(item)}" for item in exercise_sets)
+
+    lines.append("")
+    if all(item.reps is not None for item in active_sets):
+        total_reps = sum(item.reps for item in active_sets if item.reps is not None)
+        lines.append(f"총 {len(active_sets)}세트 / {total_reps}회")
+    else:
+        lines.append(f"총 {len(active_sets)}세트 / 반복수 미제공")
+    if rest_sets:
+        lines.append(f"휴식 구간: {len(rest_sets)}개 (운동 세트/반복 합계 제외)")
+
+
+def _strength_set_value(strength_set: StrengthSet) -> str:
+    if strength_set.normalized_weight_kg is not None:
+        weight = f"{strength_set.normalized_weight_kg:g} kg"
+    elif strength_set.source_weight is not None:
+        unit = f" {strength_set.source_weight_unit}" if strength_set.source_weight_unit else " (단위 미제공)"
+        weight = f"{strength_set.source_weight:g}{unit}"
+    else:
+        weight = "중량 미제공"
+
+    reps = str(strength_set.reps) if strength_set.reps is not None else "반복수 미제공"
+    return f"{weight} × {reps}"
