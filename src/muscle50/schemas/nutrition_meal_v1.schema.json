@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://muscle50.local/schemas/nutrition-meal-v1.schema.json",
+  "title": "muscle50 Nutrition Meal v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "meal_id", "eaten_at", "meal_type", "original_text",
+    "parser_version", "model_version", "notes", "items"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "meal_id": {"type": "string", "minLength": 1},
+    "eaten_at": {"type": "string", "format": "date-time"},
+    "meal_type": {"enum": ["breakfast", "lunch", "dinner", "snack", "other"]},
+    "original_text": {"type": "string", "minLength": 1},
+    "parser_version": {"type": ["string", "null"]},
+    "model_version": {"type": ["string", "null"]},
+    "notes": {"type": ["string", "null"]},
+    "items": {"type": "array", "items": {"$ref": "#/$defs/meal_item"}}
+  },
+  "$defs": {
+    "nullable_decimal": {
+      "type": ["string", "null"],
+      "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]+)?$"
+    },
+    "nullable_confidence": {
+      "type": ["string", "null"],
+      "pattern": "^(?:0(?:\\.[0-9]+)?|1(?:\\.0+)?)$"
+    },
+    "nutrition_value": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["calories_kcal", "protein_g", "carbohydrate_g", "fat_g"],
+      "properties": {
+        "calories_kcal": {"$ref": "#/$defs/nullable_decimal"},
+        "protein_g": {"$ref": "#/$defs/nullable_decimal"},
+        "carbohydrate_g": {"$ref": "#/$defs/nullable_decimal"},
+        "fat_g": {"$ref": "#/$defs/nullable_decimal"}
+      }
+    },
+    "nutrition_range": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["minimum", "maximum"],
+      "properties": {
+        "minimum": {"$ref": "#/$defs/nutrition_value"},
+        "maximum": {"$ref": "#/$defs/nutrition_value"}
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_type", "source_reference", "confidence", "accuracy",
+        "parser_version", "model_version", "created_at"
+      ],
+      "properties": {
+        "source_type": {
+          "enum": [
+            "nutrition_label", "user_provided", "known_product", "food_database",
+            "visual_estimate", "language_estimate"
+          ]
+        },
+        "source_reference": {"type": "string", "minLength": 1},
+        "confidence": {"$ref": "#/$defs/nullable_confidence"},
+        "accuracy": {"enum": ["exact", "estimated"]},
+        "parser_version": {"type": ["string", "null"]},
+        "model_version": {"type": ["string", "null"]},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "nutrition_fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fact_id", "values", "basis_quantity", "basis_unit", "provenance",
+        "value_range", "supersedes_fact_id"
+      ],
+      "properties": {
+        "fact_id": {"type": "string", "minLength": 1},
+        "values": {"$ref": "#/$defs/nutrition_value"},
+        "basis_quantity": {
+          "type": "string",
+          "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.(?:[0-9]*[1-9][0-9]*))$"
+        },
+        "basis_unit": {"$ref": "#/$defs/quantity_unit"},
+        "provenance": {"$ref": "#/$defs/provenance"},
+        "value_range": {"$ref": "#/$defs/nutrition_range"},
+        "supersedes_fact_id": {"type": ["string", "null"]}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"provenance": {"properties": {"accuracy": {"const": "exact"}}}}
+          },
+          "then": {"properties": {"value_range": {"type": "null"}}}
+        },
+        {
+          "if": {
+            "properties": {
+              "provenance": {
+                "properties": {
+                  "source_type": {"enum": ["visual_estimate", "language_estimate"]}
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {"provenance": {"properties": {"accuracy": {"const": "estimated"}}}}
+          }
+        }
+      ]
+    },
+    "quantity_unit": {
+      "enum": ["g", "ml", "count", "pack", "piece", "animal", "serving"]
+    },
+    "meal_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "meal_id", "sequence", "food_name", "food_profile_id", "quantity", "quantity_unit",
+        "serving_description", "nutrition_facts"
+      ],
+      "properties": {
+        "meal_id": {"type": "string", "minLength": 1},
+        "sequence": {"type": "integer", "minimum": 1},
+        "food_name": {"type": "string", "minLength": 1},
+        "food_profile_id": {"type": ["string", "null"]},
+        "quantity": {"$ref": "#/$defs/nullable_decimal"},
+        "quantity_unit": {"anyOf": [{"$ref": "#/$defs/quantity_unit"}, {"type": "null"}]},
+        "serving_description": {"type": ["string", "null"]},
+        "nutrition_facts": {"type": "array", "items": {"$ref": "#/$defs/nutrition_fact"}}
+      },
+      "oneOf": [
+        {
+          "properties": {"quantity": {"type": "null"}, "quantity_unit": {"type": "null"}}
+        },
+        {
+          "properties": {
+            "quantity": {"type": "string"},
+            "quantity_unit": {"$ref": "#/$defs/quantity_unit"}
+          }
+        }
+      ]
+    }
+  }
+}
