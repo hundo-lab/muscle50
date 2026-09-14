@@ -1,0 +1,41 @@
+{
+  "schema": "muscle50.synthetic.inbody.v1",
+  "source_profile_key": "synthetic-primary",
+  "source_measurement_id": "synthetic-20260914-071500",
+  "fields": {
+    "measured_at": {
+      "value": "2026-09-14T07:15:00+09:00",
+      "unit": null,
+      "path": "$.result.measuredAt"
+    },
+    "weight": {"value": 70.4, "unit": "kg", "path": "$.result.weight"},
+    "skeletal_muscle_mass": {
+      "value": 31.4,
+      "unit": "kg",
+      "path": "$.result.skeletalMuscleMass"
+    },
+    "body_fat_mass": {"value": 14.0, "unit": "kg", "path": "$.result.bodyFatMass"},
+    "body_fat_percent": {
+      "value": 19.9,
+      "unit": "%",
+      "path": "$.result.percentBodyFat"
+    },
+    "bmi": {"value": 23.0, "unit": "kg/m²", "path": "$.result.bmi"},
+    "waist_hip_ratio": {
+      "value": 0.83,
+      "unit": "ratio",
+      "path": "$.result.waistHipRatio"
+    },
+    "visceral_fat_level": {
+      "value": 6,
+      "unit": "level",
+      "path": "$.result.visceralFatLevel"
+    },
+    "basal_metabolic_rate": {
+      "value": 1594,
+      "unit": "kcal/day",
+      "path": "$.result.bmr"
+    }
+  },
+  "segments": []
+}

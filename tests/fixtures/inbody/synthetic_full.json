@@ -1,0 +1,34 @@
+{
+  "schema": "muscle50.synthetic.inbody.v1",
+  "source_profile_key": "synthetic-primary",
+  "source_measurement_id": "synthetic-20260913-070000",
+  "fields": {
+    "measured_at": {"value": "2026-09-13T07:00:00+09:00", "unit": null, "path": "$.result.measuredAt"},
+    "weight": {"value": 154.324, "unit": "lb", "path": "$.result.weight"},
+    "skeletal_muscle_mass": {"value": 31.2, "unit": "kg", "path": "$.result.skeletalMuscleMass"},
+    "body_fat_mass": {"value": 14.1, "unit": "kg", "path": "$.result.bodyFatMass"},
+    "body_fat_percent": {"value": 20.1, "unit": "%", "path": "$.result.percentBodyFat"},
+    "bmi": {"value": 22.9, "unit": "kg/m2", "path": "$.result.bmi"},
+    "waist_hip_ratio": {"value": 0.84, "unit": "ratio", "path": "$.result.waistHipRatio"},
+    "visceral_fat_level": {"value": 6, "unit": "level", "path": "$.result.visceralFatLevel"},
+    "basal_metabolic_rate": {"value": 6652, "unit": "kJ/day", "path": "$.result.bmr"},
+    "total_body_water": {"value": 39.8, "unit": "L", "path": "$.result.totalBodyWater"},
+    "protein": {"value": 10.8, "unit": "kg", "path": "$.result.protein"},
+    "minerals": {"value": 3.71, "unit": "kg", "path": "$.result.minerals"},
+    "ecw_ratio": {"value": 0.371, "unit": "ratio", "path": "$.result.ecwRatio"},
+    "inbody_score": {"value": 78, "unit": "score", "path": "$.result.score"},
+    "device_model": {"value": "Synthetic InBody 570", "unit": null, "path": "$.device.model"}
+  },
+  "segments": [
+    {
+      "region": "left_arm",
+      "metric": "lean_mass",
+      "field": {"value": 2.81, "unit": "kg", "path": "$.result.segmentalLean.leftArm"}
+    },
+    {
+      "region": "right_arm",
+      "metric": "lean_mass",
+      "field": {"value": 2.87, "unit": "kg", "path": "$.result.segmentalLean.rightArm"}
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "schema": "muscle50.synthetic.inbody.v1",
+  "source_profile_key": "synthetic-primary",
+  "source_measurement_id": null,
+  "fields": {
+    "measured_at": {"value": "2026-09-12T06:45:12", "unit": null, "path": "$.measurement.localTime"},
+    "weight": {"value": 70.0, "unit": "kg", "path": "$.measurement.weight"},
+    "body_fat_percent": {"value": 20.1, "unit": "percent", "path": "$.measurement.pbf"}
+  },
+  "segments": []
+}
