@@ -296,6 +296,37 @@ def test_append_nutrition_fact_supersession_wins_selection_and_keeps_history(tmp
     assert {fact.fact_id for fact in reloaded.items[0].nutrition_facts} == {"fact-1", "fact-2"}
 
 
+def test_append_nutrition_fact_rejects_supersession_with_different_basis_unit(tmp_path: Path) -> None:
+    repository = _meal_repo(tmp_path)
+    repository.save(_simple_meal(facts=(_fact("fact-1"),)))
+
+    wrong_unit = _fact("fact-2", basis_unit=QuantityUnit.GRAM, supersedes_fact_id="fact-1")
+
+    with pytest.raises(sqlite3.IntegrityError, match="same owner and basis unit"):
+        repository.append_nutrition_fact("meal-1", 1, wrong_unit)
+
+    reloaded = repository.get("meal-1")
+    assert reloaded is not None
+    assert [fact.fact_id for fact in reloaded.items[0].nutrition_facts] == ["fact-1"]
+
+
+def test_append_nutrition_fact_rejects_cross_owner_supersession(tmp_path: Path) -> None:
+    database_path = tmp_path / "nutrition.db"
+    meal_repository = _meal_repo(tmp_path)
+    meal_repository.save(_simple_meal(facts=(_fact("meal-fact"),)))
+    food_repository = SqliteFoodNutritionRepository(database_path)
+    food_repository.migrate()
+    food_repository.save(FoodNutritionProfile(profile_id="profile-other", name="Other Product", facts=()))
+    cross_owner = _fact("profile-fact", supersedes_fact_id="meal-fact")
+
+    with pytest.raises(sqlite3.IntegrityError, match="same owner and basis unit"):
+        food_repository.append_nutrition_fact("profile-other", cross_owner)
+
+    profile = food_repository.get("profile-other")
+    assert profile is not None
+    assert profile.facts == ()
+
+
 def test_nutrition_facts_table_is_append_only(tmp_path: Path) -> None:
     repository = _meal_repo(tmp_path)
     meal = _simple_meal(facts=(_fact(),))

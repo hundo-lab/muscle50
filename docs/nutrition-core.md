@@ -40,7 +40,20 @@ is a feature-local schema, not a numbered migration; it is loaded directly by
 `database.py`. Integration must assign its final migration number after the
 parallel branches are reconciled. Its DDL is idempotent (`CREATE TABLE IF NOT
 EXISTS`, etc.) so it can be re-run safely, but that also means it cannot evolve
-columns on a database that already has the tables — `migrate()` against an
-older `nutrition_meals` succeeds silently and a later write then fails with
+columns on a database that already has the tables. For example, `migrate()`
+against an older `nutrition_meals` succeeds silently and a later write then fails with
 `OperationalError: no such column`; whoever assigns the migration number must
 add explicit `ALTER TABLE`/backfill steps for any column change.
+
+## SQLite scope decision
+
+Keep the SQLite repositories in this branch as feature-local persistence
+adapters. They are useful for proving round-trip behavior, append-only fact
+history, exact Decimal text storage, and repository contract shape without
+touching shared Garmin/activity infrastructure.
+
+Until the parallel feature branches are reconciled, do not wire Nutrition into
+the shared `database.py` bootstrap, public CLI, or numbered migration sequence.
+At integration time, promote `nutrition_schema.sql` into the consolidated
+migration plan or replace it with the final migration while keeping the domain,
+ports, serialization, and repository tests as the behavior contract.
