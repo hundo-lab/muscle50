@@ -1,5 +1,9 @@
 # Nutrition Core Handoff
 
+> Historical pre-integration handoff. Nutrition Core was integrated on 2026-09-14;
+> `nutrition_schema.sql` was replaced by the shared `003_nutrition.sql` migration,
+> and both SQLite repositories now use the common numbered migration loader.
+
 ## Current task
 
 Finish the `feature/nutrition-core` worktree in an integration-ready state while

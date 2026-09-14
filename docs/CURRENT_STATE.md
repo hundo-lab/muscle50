@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-09-13
+Last updated: 2026-09-14
 
 ## Project goal
 
@@ -15,6 +15,8 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 - Garmin Activity Sync는 immutable RAW artifact와 normalized SQLite activity를 분리한다.
 - SQLite schema는 package에 포함된 numbered migration을 순서대로 적용한다.
 - Garmin source 값과 corrected/derived 값은 서로 덮어쓰지 않는다.
+- Nutrition Core는 deterministic domain model, JSON interchange schema, 공용 SQLite DB의
+  append-only nutrition fact history를 제공한다.
 
 ## Implemented
 
@@ -23,10 +25,11 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 - 러닝, 수영, 웨이트 등 기본 activity 요약
 - Garmin strength exercise set 정규화, SQLite 저장 및 기존 RAW 기반 local backfill
 - Garmin 수영 activity/lap/length 정규화와 Garmin/corrected 거리 분리
+- Nutrition meal/food profile domain, parser/repository ports, Decimal 기반 계산과 직렬화
+- Nutrition meal/food profile SQLite repository와 supersession-aware append-only fact 저장
 
 ## Not integrated
 
-- `feature/nutrition-core`: 기능 commit은 있으나 worktree에 미커밋 문서가 남아 있음
 - `feature/inbody-connector`: 기능 구현 전체가 미커밋 상태
 - `feature/garmin-recovery`: 기능 구현 전체와 provisional migration 2가 미커밋 상태
 
@@ -34,35 +37,47 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 
 ## Verification
 
-2026-09-13 integration에서 실행:
+2026-09-14 Nutrition integration에서 실행:
 
 ```powershell
 uv sync --extra dev
+uv run pytest tests/test_database.py tests/test_nutrition_repository.py -q
+uv run pytest tests/test_nutrition_repository.py -k "supersession or append_only or cascaded_delete" -q
 uv run pytest -q
 uv run ruff check .
 uv run mypy src
 git diff --check
 ```
 
-결과: 55 tests passed, Ruff 통과, mypy 통과, diff-check 통과.
+결과: 116 tests passed, trigger subset 6 tests passed, Ruff 통과, mypy 통과,
+diff-check 통과. 별도 migration smoke check에서도 새 DB의 001 → 002 → 003 순차 적용,
+기존 001+002 DB의 version 3 추가, 전체 migration 반복 적용 idempotency를 확인했다.
 
 ## SQLite migrations
 
 1. `001_initial.sql` — Garmin activity/RAW/correction 기본 schema
 2. `002_strength_sets.sql` — normalized Garmin strength sets
+3. `003_nutrition.sql` — Nutrition meal, food profile, append-only fact schema와 triggers
 
-두 migration을 새 임시 DB에 두 번 적용하는 smoke check에서 version `(1, 2)`와 예상
-테이블을 확인했다.
+`SqliteMealRepository`와 `SqliteFoodNutritionRepository`의 `migrate()`는 공용 numbered
+migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거되어 schema source는
+`003_nutrition.sql` 하나다.
 
 ## Known issues
 
 - Garmin Connect 연동은 비공식 API이므로 인증 및 응답 shape 변경 위험이 있다.
 - 실제 Garmin 계정/개인 데이터 기반 smoke test는 자동 검증에 포함하지 않는다.
-- 아직 통합되지 않은 feature들의 provisional schema/migration 번호를 이후 재조정해야 한다.
+- Nutrition은 아직 public CLI command에 연결되지 않았다.
+- 기존 provisional nutrition schema로 직접 만든 외부 DB가 있다면 정식 migration marker가
+  없으므로 별도 호환성 검토가 필요하다.
+- 아직 통합되지 않은 InBody/Recovery migration 번호는 최신 global chain 기준으로 다시
+  배정해야 한다.
 
 ## Important decisions
 
 - 미커밋 feature worktree는 integration agent가 대신 commit하거나 추정해 통합하지 않는다.
 - `feature/strength-sets`를 migration 2로 먼저 통합하고, migration이 없는
   `feature/swim-details`를 그다음 통합했다.
+- `feature/nutrition-core`의 provisional schema는 migration 3으로 승격하고 공용 loader에
+  연결했다.
 - 원본 feature branch와 Paseo worktree는 삭제하거나 수정하지 않는다.

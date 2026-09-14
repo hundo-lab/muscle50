@@ -8,7 +8,6 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
-from importlib.resources import files
 from pathlib import Path
 
 from muscle50.domain.nutrition import (
@@ -26,6 +25,7 @@ from muscle50.domain.nutrition import (
     QuantityUnit,
 )
 from muscle50.infrastructure.decimal_text import decimal_from_text, decimal_to_text
+from muscle50.infrastructure.sqlite.database import ActivityRepository
 
 _FACT_INSERT_SQL = """
 INSERT INTO nutrition_facts (
@@ -59,8 +59,7 @@ class SqliteMealRepository:
         self._database_path = database_path
 
     def migrate(self) -> None:
-        with _connect(self._database_path) as connection:
-            connection.executescript(_load_schema_sql())
+        ActivityRepository(self._database_path).migrate()
 
     def save(self, meal: Meal) -> None:
         with _connect(self._database_path) as connection:
@@ -175,8 +174,7 @@ class SqliteFoodNutritionRepository:
         self._database_path = database_path
 
     def migrate(self) -> None:
-        with _connect(self._database_path) as connection:
-            connection.executescript(_load_schema_sql())
+        ActivityRepository(self._database_path).migrate()
 
     def save(self, profile: FoodNutritionProfile) -> None:
         with _connect(self._database_path) as connection:
@@ -241,10 +239,6 @@ class SqliteFoodNutritionRepository:
         if profile is None:
             raise RuntimeError(f"food profile {profile_id!r} disappeared after appending a nutrition fact")
         return profile
-
-
-def _load_schema_sql() -> str:
-    return files("muscle50.infrastructure.sqlite").joinpath("nutrition_schema.sql").read_text(encoding="utf-8")
 
 
 def _load_meal(connection: sqlite3.Connection, meal_id: str) -> Meal | None:

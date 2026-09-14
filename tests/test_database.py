@@ -14,7 +14,16 @@ EXPECTED_TABLES = {
     "activity_metrics",
     "activity_corrections",
     "strength_sets",
+    "nutrition_meals",
+    "nutrition_meal_items",
+    "nutrition_food_profiles",
+    "nutrition_food_profile_aliases",
+    "nutrition_facts",
 }
+
+MIGRATIONS_DIR = (
+    Path(__file__).parents[1] / "src" / "muscle50" / "infrastructure" / "sqlite" / "migrations"
+)
 
 
 def test_migration_recovers_when_only_version_table_and_marker_remain(tmp_path: Path) -> None:
@@ -34,7 +43,7 @@ def test_migration_recovers_when_only_version_table_and_marker_remain(tmp_path: 
         }
         versions = connection.execute("SELECT version FROM schema_migrations").fetchall()
     assert tables == EXPECTED_TABLES
-    assert versions == [(1,), (2,)]
+    assert versions == [(1,), (2,), (3,)]
 
 
 def test_migration_completes_partial_ddl_without_version_marker(tmp_path: Path) -> None:
@@ -69,7 +78,7 @@ def test_migration_completes_partial_ddl_without_version_marker(tmp_path: Path) 
         }
         versions = connection.execute("SELECT version FROM schema_migrations").fetchall()
     assert tables == EXPECTED_TABLES
-    assert versions == [(1,), (2,)]
+    assert versions == [(1,), (2,), (3,)]
 
 
 def test_first_migration_is_safe_under_concurrent_startup(tmp_path: Path) -> None:
@@ -80,14 +89,12 @@ def test_first_migration_is_safe_under_concurrent_startup(tmp_path: Path) -> Non
 
     with sqlite3.connect(database_path) as connection:
         versions = connection.execute("SELECT version FROM schema_migrations").fetchall()
-    assert versions == [(1,), (2,)]
+    assert versions == [(1,), (2,), (3,)]
 
 
 def test_strength_sets_migration_upgrades_existing_database(tmp_path: Path) -> None:
     database_path = tmp_path / "existing.sqlite3"
-    initial_migration = (
-        Path(__file__).parents[1] / "src" / "muscle50" / "infrastructure" / "sqlite" / "migrations" / "001_initial.sql"
-    )
+    initial_migration = MIGRATIONS_DIR / "001_initial.sql"
     with sqlite3.connect(database_path) as connection:
         connection.executescript(initial_migration.read_text(encoding="utf-8"))
 
@@ -108,4 +115,56 @@ def test_strength_sets_migration_upgrades_existing_database(tmp_path: Path) -> N
         "normalized_weight_kg",
         "duration_seconds",
     } <= columns
-    assert versions == [(1,), (2,)]
+    assert versions == [(1,), (2,), (3,)]
+
+
+def test_nutrition_migration_upgrades_existing_001_002_database(tmp_path: Path) -> None:
+    database_path = tmp_path / "existing-001-002.sqlite3"
+    with sqlite3.connect(database_path) as connection:
+        for migration_name in ("001_initial.sql", "002_strength_sets.sql"):
+            connection.executescript((MIGRATIONS_DIR / migration_name).read_text(encoding="utf-8"))
+        existing_versions = connection.execute(
+            "SELECT version, applied_at_utc FROM schema_migrations ORDER BY version"
+        ).fetchall()
+
+    ActivityRepository(database_path).migrate()
+
+    with sqlite3.connect(database_path) as connection:
+        versions = connection.execute(
+            "SELECT version, applied_at_utc FROM schema_migrations ORDER BY version"
+        ).fetchall()
+        nutrition_tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'nutrition_%'"
+            )
+        }
+    assert versions[:2] == existing_versions
+    assert [row[0] for row in versions] == [1, 2, 3]
+    assert nutrition_tables == {
+        "nutrition_meals",
+        "nutrition_meal_items",
+        "nutrition_food_profiles",
+        "nutrition_food_profile_aliases",
+        "nutrition_facts",
+    }
+
+
+def test_numbered_migrations_can_be_reapplied_without_duplicate_versions(tmp_path: Path) -> None:
+    database_path = tmp_path / "repeated.sqlite3"
+    repository = ActivityRepository(database_path)
+
+    repository.migrate()
+    with sqlite3.connect(database_path) as connection:
+        first_versions = connection.execute(
+            "SELECT version, applied_at_utc FROM schema_migrations ORDER BY version"
+        ).fetchall()
+
+    repository.migrate()
+
+    with sqlite3.connect(database_path) as connection:
+        repeated_versions = connection.execute(
+            "SELECT version, applied_at_utc FROM schema_migrations ORDER BY version"
+        ).fetchall()
+    assert repeated_versions == first_versions
+    assert [row[0] for row in repeated_versions] == [1, 2, 3]

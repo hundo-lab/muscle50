@@ -34,26 +34,16 @@ example, `1 pack = 120 g`) needs a future conversion value object with its own
 provenance before per-gram data can be applied to packs.
 
 `nutrition_meal_v1.schema.json` is the versioned interchange schema. Decimal values
-are strings to avoid binary floating-point drift. `src/muscle50/infrastructure/sqlite/nutrition_schema.sql`
-is a feature-local schema, not a numbered migration; it is loaded directly by
-`SqliteMealRepository`/`SqliteFoodNutritionRepository.migrate()`, not by
-`database.py`. Integration must assign its final migration number after the
-parallel branches are reconciled. Its DDL is idempotent (`CREATE TABLE IF NOT
-EXISTS`, etc.) so it can be re-run safely, but that also means it cannot evolve
-columns on a database that already has the tables. For example, `migrate()`
-against an older `nutrition_meals` succeeds silently and a later write then fails with
-`OperationalError: no such column`; whoever assigns the migration number must
-add explicit `ALTER TABLE`/backfill steps for any column change.
+are strings to avoid binary floating-point drift. SQLite persistence is installed by
+the shared numbered migration loader using `003_nutrition.sql`; both nutrition
+repositories delegate their `migrate()` calls to that loader. Its DDL is idempotent
+(`CREATE TABLE IF NOT EXISTS`, etc.) so interrupted or repeated startup can safely
+complete the schema without adding duplicate migration markers.
 
-## SQLite scope decision
+## SQLite integration
 
-Keep the SQLite repositories in this branch as feature-local persistence
-adapters. They are useful for proving round-trip behavior, append-only fact
-history, exact Decimal text storage, and repository contract shape without
-touching shared Garmin/activity infrastructure.
-
-Until the parallel feature branches are reconciled, do not wire Nutrition into
-the shared `database.py` bootstrap, public CLI, or numbered migration sequence.
-At integration time, promote `nutrition_schema.sql` into the consolidated
-migration plan or replace it with the final migration while keeping the domain,
-ports, serialization, and repository tests as the behavior contract.
+The SQLite repositories share the same database and migration chain as Garmin
+activity persistence. Nutrition has no public CLI command yet; application code can
+construct either repository with the configured database path and call `migrate()`
+before use. The append-only fact history, exact Decimal text storage, and repository
+contracts remain independently tested.

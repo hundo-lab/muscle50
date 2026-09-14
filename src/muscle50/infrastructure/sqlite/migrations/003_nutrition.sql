@@ -1,7 +1,4 @@
--- Feature-local Nutrition Core schema.
--- Loaded directly by SqliteMealRepository/SqliteFoodNutritionRepository.migrate(), not by
--- database.py's ActivityRepository. This is intentionally not a numbered migration;
--- assign its final migration number only after rebasing all parallel feature branches.
+-- Nutrition Core persistence schema.
 
 BEGIN IMMEDIATE;
 
@@ -137,5 +134,8 @@ END;
 -- Canonical Decimal text, positivity, confidence bounds, and point-within-range
 -- validation remain repository/domain responsibilities. SQLite REAL casts would
 -- lose precision and therefore must not be used to pretend to enforce them here.
+
+INSERT OR IGNORE INTO schema_migrations(version, applied_at_utc)
+VALUES (3, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
 
 COMMIT;
