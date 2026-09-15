@@ -1,77 +1,78 @@
 # Session Handoff
 
-Last updated: 2026-09-14
+Last updated: 2026-09-15
 
 ## Current task
 
-clean 상태의 `feature/nutrition-core`를 최신 `main` 기반 별도 integration worktree에서
-통합하고 provisional Nutrition schema를 global numbered migration chain에 편입하는 작업이다.
+최신 local `main` 기반 `feature/swim-integration`에서 기존 Garmin swim normalizer를
+production sync, SQLite persistence, repository query, terminal summary에 연결하는 작업이다.
 
 ## Completed
 
-- 최신 `main` `a856705` 기반 `integration/nutrition-core-20260914` worktree를 생성했다.
-- clean 상태의 `feature/nutrition-core` `9d3f0ef`를 merge commit `a0fbe74`로 통합했다.
-- `nutrition_schema.sql`을 정식 `003_nutrition.sql`로 승격하고 version 3 marker를 추가했다.
-- 두 Nutrition repository의 `migrate()`가 기존 공용 numbered migration loader를 사용하도록
-  연결했다.
-- provisional `nutrition_schema.sql`을 제거해 SQLite schema source 중복을 없앴다.
-- 새 DB, 기존 001+002 DB, 반복 migration 적용을 pytest와 별도 smoke check로 검증했다.
-- Nutrition repository, supersession/append-only trigger, 전체 pytest, Ruff, mypy를 검증했다.
-- 원본 feature branch/worktree와 InBody/Recovery migration은 수정하지 않았다.
-- remote push는 수행하지 않았다.
+- 작업 branch를 local `main` `0824c16`으로 fast-forward한 뒤 구현했다.
+- `source_type_from()` 결과가 `lap_swimming`인 activity에만 기존
+  `normalize_garmin_swim()`을 호출한다.
+- `NormalizedActivity.swim_detail`을 통해 activity와 normalized swim hierarchy를 함께
+  저장하고 조회한다.
+- `004_swim_details.sql`에 `swim_activities`, `swim_laps`, `swim_lengths`를 추가했다.
+- activity → lap → length foreign key와 sequence uniqueness로 hierarchy와 idempotency를
+  보장한다.
+- 기존 pool swim activity에 normalized rows가 없으면 로컬 `summary.json`,
+  `activity.json`, optional `splits.json`만 사용해 backfill한다. Garmin API는 재호출하지 않는다.
+- `muscle50 garmin latest` 결과에 normalized swim distance, lap/length 수, 평균 100m pace를
+  표시한다.
+- missing splits/optional values, empty laps/lengths, invalid duration, malformed hierarchy,
+  non-pool activity와 Strength/일반 activity 회귀를 테스트했다.
+- 실제 Garmin 계정 API는 호출하지 않았고 push/merge도 수행하지 않았다.
 
-## Files changed by integration follow-up
+## Files changed
 
-- `src/muscle50/infrastructure/sqlite/migrations/003_nutrition.sql`
-- `src/muscle50/infrastructure/sqlite/nutrition_repository.py`
+- `src/muscle50/application/sync_latest_garmin.py`
+- `src/muscle50/domain/activity.py`
+- `src/muscle50/domain/swim_normalization.py`
+- `src/muscle50/domain/swimming.py`
+- `src/muscle50/infrastructure/raw_store.py`
+- `src/muscle50/infrastructure/sqlite/database.py`
+- `src/muscle50/infrastructure/sqlite/migrations/004_swim_details.sql`
+- `src/muscle50/presentation/terminal.py`
 - `tests/test_database.py`
-- `docs/nutrition-core.md`
-- `docs/nutrition-core-handoff.md`
+- `tests/test_swim_normalization.py`
+- `tests/test_sync_latest.py`
 - `docs/CURRENT_STATE.md`
 - `docs/HANDOFF.md`
-- 제거: `src/muscle50/infrastructure/sqlite/nutrition_schema.sql`
-
-Nutrition feature 자체의 신규 domain/application/infrastructure/schema/test 파일은 merge
-commit `a0fbe74`에 포함된다.
 
 ## Verification performed
 
 ```text
-uv sync --extra dev                                  passed
-uv run pytest tests/test_database.py
-  tests/test_nutrition_repository.py -q              26 passed
-uv run pytest tests/test_nutrition_repository.py
-  -k "supersession or append_only or cascaded_delete" -q
-                                                     6 passed, 14 deselected
-uv run pytest -q                                     116 passed
-uv run ruff check .                                  passed
-uv run mypy src                                      passed (25 source files)
-git diff --check                                     passed
-numbered migration smoke check                       passed, versions 1, 2, 3
+uv sync --extra dev                                                   passed
+uv run pytest tests/test_swim_normalization.py tests/test_database.py
+  tests/test_sync_latest.py -q                                       37 passed
+uv run pytest -q                                                     126 passed
+uv run ruff check .                                                  passed
+uv run mypy src tests                                                passed (38 files)
+git diff --check                                                     passed
 ```
 
-Migration smoke check는 다음을 확인했다.
-
-- 새 빈 DB에 `001_initial.sql` → `002_strength_sets.sql` → `003_nutrition.sql` 순서로 적용
-- 기존 001+002 DB에 003만 추가하고 기존 version marker timestamp 보존
-- 공용 loader를 두 번 실행해도 version marker 중복/변경 없음
-- Nutrition trigger 3개가 정확히 생성됨
+migration test는 fresh DB, 기존 001~003 DB upgrade, repeated invocation, concurrent first
+startup을 포함한다.
 
 ## Remaining work
 
-- Nutrition 입력/use-case용 public CLI는 별도 product task로 남아 있다.
-- InBody와 Garmin Recovery는 각 원본 worktree가 clean commit 상태가 된 뒤 최신 migration
-  chain 다음 번호로 별도 통합해야 한다.
+- 별도의 명시적 단계에서 실제 Garmin pool swim 계정으로 live smoke를 수행한다.
+- 실제 payload에서 device/API별 stroke, SWOLF, HR, rest/idle, missing length 변형을 확인한다.
+- swimming progression analytics가 필요해지면 activity 기간 조회와 swim aggregate read/query
+  layer를 추가한다.
 
 ## Known issues / risks
 
-- 실제 Garmin 계정 smoke test는 수행하지 않았다.
-- feature-local provisional schema를 과거에 직접 적용한 외부 DB는 repository에 알려진 사용
-  기록이 없으며, 그런 DB가 존재한다면 migration 3 marker 도입 전 별도 검토가 필요하다.
-- Nutrition JSON Schema fixture는 pytest의 직접 파일 lookup으로 확인되지만, 이번 session에서
-  별도 wheel artifact inspection은 수행하지 않았다.
+- Garmin Connect는 비공식 API이므로 splits response shape 변경 가능성이 있다.
+- integration은 Garmin의 현재 pool type key인 `lap_swimming`만 허용한다. open-water swim은
+  의도적으로 normalized lap/length persistence에 들어가지 않는다.
+- `database.py`, `activity.py`, sync use-case, terminal renderer, migration test는 shared files라
+  최신 main과 병행 변경이 생기면 충돌 가능성이 있다.
+- 아직 통합되지 않은 InBody/Recovery migration은 global chain 4 이후 번호로 재배정해야 한다.
 
 ## Recommended next action
 
-검증된 integration tip을 `main`에 fast-forward한 뒤, clean status와 최종 migration 순서를
-다시 확인한다. push는 명시적 요청 전까지 수행하지 않는다.
+최종 quality gate를 확인하고 logical commit으로 정리한다. 그 뒤 live Garmin smoke는 별도
+명시적 승인 하에서 수행한다. main merge와 remote push는 하지 않는다.

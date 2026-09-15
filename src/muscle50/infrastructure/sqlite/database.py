@@ -18,6 +18,7 @@ from muscle50.domain.activity import (
     StrengthSet,
 )
 from muscle50.domain.normalization import strength_set_metrics
+from muscle50.domain.swimming import GarminSource, NormalizedSwimActivity, SwimDistance, SwimLap, SwimLength
 from muscle50.infrastructure.raw_store import RawArtifact
 
 
@@ -53,7 +54,8 @@ class ActivityRepository:
                 "SELECT * FROM strength_sets WHERE activity_id = ? ORDER BY sequence",
                 (row["id"],),
             ).fetchall()
-        return _activity_from_rows(row, metric_rows, strength_set_rows)
+            swim_detail = _swim_detail_from_connection(connection, int(row["id"]))
+        return _activity_from_rows(row, metric_rows, strength_set_rows, swim_detail)
 
     def save(self, activity: NormalizedActivity, artifacts: tuple[RawArtifact, ...]) -> tuple[NormalizedActivity, bool]:
         if not artifacts:
@@ -141,6 +143,8 @@ class ActivityRepository:
                         (activity_pk, metric.key, numeric, text, metric.unit, metric.source_path),
                     )
                 _insert_strength_sets(connection, activity_pk, activity.strength_sets)
+                if activity.swim_detail is not None:
+                    _insert_swim_detail(connection, activity_pk, activity.swim_detail)
         except sqlite3.IntegrityError:
             existing = self.find(activity.source_activity_id)
             if existing is not None:
@@ -179,6 +183,28 @@ class ActivityRepository:
                 (NORMALIZER_VERSION, activity_id),
             )
 
+    def save_swim_detail(self, source_activity_id: str, swim_detail: NormalizedSwimActivity) -> None:
+        """Idempotently add normalized pool-swimming details to a stored activity."""
+        if swim_detail.source_activity_id != source_activity_id:
+            raise ValueError("swim detail activity ID does not match the stored activity")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT id, canonical_type, source_type_key
+                FROM activities
+                WHERE provider = 'garmin' AND source_activity_id = ?
+                """,
+                (source_activity_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"activity is not stored: {source_activity_id}")
+            if row["canonical_type"] != ActivityType.SWIMMING.value or row["source_type_key"] != "lap_swimming":
+                raise ValueError("swim details can only be stored for Garmin pool-swimming activities")
+            if swim_detail.source_type_key != row["source_type_key"]:
+                raise ValueError("swim detail type does not match the stored activity")
+            _insert_swim_detail(connection, int(row["id"]), swim_detail, ignore_existing=True)
+
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         self._database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -207,6 +233,7 @@ def _activity_from_rows(
     row: sqlite3.Row,
     metric_rows: list[sqlite3.Row],
     strength_set_rows: list[sqlite3.Row],
+    swim_detail: NormalizedSwimActivity | None,
 ) -> NormalizedActivity:
     metrics = tuple(
         ActivityMetric(
@@ -254,8 +281,213 @@ def _activity_from_rows(
         elevation_gain_meters=row["elevation_gain_meters"],
         metrics=metrics,
         strength_sets=strength_sets,
+        swim_detail=swim_detail,
         normalizer_version=row["normalizer_version"],
     )
+
+
+def _swim_detail_from_connection(
+    connection: sqlite3.Connection,
+    activity_id: int,
+) -> NormalizedSwimActivity | None:
+    swim_row = connection.execute(
+        "SELECT * FROM swim_activities WHERE activity_id = ?",
+        (activity_id,),
+    ).fetchone()
+    if swim_row is None:
+        return None
+
+    lap_rows = connection.execute(
+        "SELECT * FROM swim_laps WHERE activity_id = ? ORDER BY sequence",
+        (activity_id,),
+    ).fetchall()
+    laps: list[SwimLap] = []
+    for lap_row in lap_rows:
+        length_rows = connection.execute(
+            "SELECT * FROM swim_lengths WHERE swim_lap_id = ? ORDER BY sequence_in_lap",
+            (lap_row["id"],),
+        ).fetchall()
+        lengths = tuple(_swim_length_from_row(item) for item in length_rows)
+        laps.append(_swim_lap_from_row(lap_row, lengths))
+
+    return NormalizedSwimActivity(
+        source_activity_id=connection.execute(
+            "SELECT source_activity_id FROM activities WHERE id = ?",
+            (activity_id,),
+        ).fetchone()[0],
+        source_type_key=swim_row["source_type_key"],
+        pool_length_meters=swim_row["pool_length_meters"],
+        source_pool_length=swim_row["source_pool_length"],
+        source_pool_length_unit=swim_row["source_pool_length_unit"],
+        source_active_length_count=swim_row["source_active_length_count"],
+        splits_available=bool(swim_row["splits_available"]),
+        laps=tuple(laps),
+        source=GarminSource(
+            path=swim_row["garmin_source_path"],
+            fields_json=swim_row["garmin_source_json"],
+        ),
+        normalizer_version=swim_row["normalizer_version"],
+    )
+
+
+def _swim_lap_from_row(row: sqlite3.Row, lengths: tuple[SwimLength, ...]) -> SwimLap:
+    return SwimLap(
+        sequence=row["sequence"],
+        source_lap_index=row["source_lap_index"],
+        source_message_index=row["source_message_index"],
+        start_time_utc=row["start_time_utc"],
+        intensity_type=row["intensity_type"],
+        stroke_type=row["stroke_type"],
+        distance=SwimDistance(row["garmin_distance_meters"], row["corrected_distance_meters"]),
+        duration_seconds=row["duration_seconds"],
+        moving_seconds=row["moving_seconds"],
+        elapsed_seconds=row["elapsed_seconds"],
+        rest_duration_seconds=row["garmin_rest_duration_seconds"],
+        average_speed_mps=row["average_speed_mps"],
+        active_length_count=row["active_length_count"],
+        total_length_count=row["total_length_count"],
+        stroke_count=row["stroke_count"],
+        swolf=row["swolf"],
+        average_hr_bpm=row["average_hr_bpm"],
+        max_hr_bpm=row["max_hr_bpm"],
+        lengths=lengths,
+        source=GarminSource(path=row["garmin_source_path"], fields_json=row["garmin_source_json"]),
+    )
+
+
+def _swim_length_from_row(row: sqlite3.Row) -> SwimLength:
+    return SwimLength(
+        sequence=row["sequence"],
+        sequence_in_lap=row["sequence_in_lap"],
+        source_message_index=row["source_message_index"],
+        start_time_utc=row["start_time_utc"],
+        length_type=row["length_type"],
+        stroke_type=row["stroke_type"],
+        distance=SwimDistance(row["garmin_distance_meters"], row["corrected_distance_meters"]),
+        duration_seconds=row["duration_seconds"],
+        moving_seconds=row["moving_seconds"],
+        elapsed_seconds=row["elapsed_seconds"],
+        rest_duration_seconds=row["garmin_rest_duration_seconds"],
+        average_speed_mps=row["average_speed_mps"],
+        stroke_count=row["stroke_count"],
+        swolf=row["swolf"],
+        average_hr_bpm=row["average_hr_bpm"],
+        max_hr_bpm=row["max_hr_bpm"],
+        source=GarminSource(path=row["garmin_source_path"], fields_json=row["garmin_source_json"]),
+    )
+
+
+def _insert_swim_detail(
+    connection: sqlite3.Connection,
+    activity_id: int,
+    swim_detail: NormalizedSwimActivity,
+    *,
+    ignore_existing: bool = False,
+) -> None:
+    statement = """
+        INSERT INTO swim_activities (
+            activity_id, source_type_key, pool_length_meters, source_pool_length,
+            source_pool_length_unit, source_active_length_count, splits_available,
+            garmin_source_path, garmin_source_json, normalizer_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+    if ignore_existing:
+        statement += " ON CONFLICT(activity_id) DO NOTHING"
+    cursor = connection.execute(
+        statement,
+        (
+            activity_id,
+            swim_detail.source_type_key,
+            swim_detail.pool_length_meters,
+            swim_detail.source_pool_length,
+            swim_detail.source_pool_length_unit,
+            swim_detail.source_active_length_count,
+            int(swim_detail.splits_available),
+            swim_detail.source.path,
+            swim_detail.source.fields_json,
+            swim_detail.normalizer_version,
+        ),
+    )
+    if ignore_existing and cursor.rowcount == 0:
+        stored = _swim_detail_from_connection(connection, activity_id)
+        if stored != swim_detail:
+            raise RuntimeError("stored swim detail does not match the local RAW normalization")
+        return
+
+    for lap in swim_detail.laps:
+        lap_cursor = connection.execute(
+            """
+            INSERT INTO swim_laps (
+                activity_id, sequence, source_lap_index, source_message_index,
+                start_time_utc, intensity_type, stroke_type, garmin_distance_meters,
+                corrected_distance_meters, duration_seconds, moving_seconds,
+                elapsed_seconds, garmin_rest_duration_seconds, average_speed_mps,
+                active_length_count, total_length_count, stroke_count, swolf,
+                average_hr_bpm, max_hr_bpm, garmin_source_path, garmin_source_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                activity_id,
+                lap.sequence,
+                lap.source_lap_index,
+                lap.source_message_index,
+                lap.start_time_utc,
+                lap.intensity_type,
+                lap.stroke_type,
+                lap.distance.garmin_meters,
+                lap.distance.corrected_meters,
+                lap.duration_seconds,
+                lap.moving_seconds,
+                lap.elapsed_seconds,
+                lap.rest_duration_seconds,
+                lap.average_speed_mps,
+                lap.active_length_count,
+                lap.total_length_count,
+                lap.stroke_count,
+                lap.swolf,
+                lap.average_hr_bpm,
+                lap.max_hr_bpm,
+                lap.source.path,
+                lap.source.fields_json,
+            ),
+        )
+        if lap_cursor.lastrowid is None:
+            raise RuntimeError("SQLite did not return a swim lap ID")
+        for length in lap.lengths:
+            connection.execute(
+                """
+                INSERT INTO swim_lengths (
+                    swim_lap_id, sequence, sequence_in_lap, source_message_index,
+                    start_time_utc, length_type, stroke_type, garmin_distance_meters,
+                    corrected_distance_meters, duration_seconds, moving_seconds,
+                    elapsed_seconds, garmin_rest_duration_seconds, average_speed_mps,
+                    stroke_count, swolf, average_hr_bpm, max_hr_bpm,
+                    garmin_source_path, garmin_source_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    lap_cursor.lastrowid,
+                    length.sequence,
+                    length.sequence_in_lap,
+                    length.source_message_index,
+                    length.start_time_utc,
+                    length.length_type,
+                    length.stroke_type,
+                    length.distance.garmin_meters,
+                    length.distance.corrected_meters,
+                    length.duration_seconds,
+                    length.moving_seconds,
+                    length.elapsed_seconds,
+                    length.rest_duration_seconds,
+                    length.average_speed_mps,
+                    length.stroke_count,
+                    length.swolf,
+                    length.average_hr_bpm,
+                    length.max_hr_bpm,
+                    length.source.path,
+                    length.source.fields_json,
+                ),
+            )
 
 
 def _insert_strength_sets(

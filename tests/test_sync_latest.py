@@ -8,8 +8,11 @@ from typing import Any
 
 import pytest
 
+import muscle50.application.sync_latest_garmin as sync_module
 from muscle50.application.sync_latest_garmin import SyncLatestGarminActivity
 from muscle50.config import AppPaths
+from muscle50.domain.swim_normalization import SwimNormalizationError, normalize_garmin_swim
+from muscle50.domain.swimming import NormalizedSwimActivity
 from muscle50.infrastructure.garmin.client import GarminRawActivity
 from muscle50.infrastructure.raw_store import RawStore
 from muscle50.infrastructure.sqlite.database import ActivityRepository
@@ -37,14 +40,26 @@ def _synthetic_strength_sets() -> dict[str, Any]:
     return data
 
 
+def _synthetic_pool_swim() -> dict[str, Any]:
+    path = Path(__file__).parent / "fixtures" / "garmin_pool_swim.json"
+    data: object = json.loads(path.read_text(encoding="utf-8"))
+    assert isinstance(data, dict)
+    return data
+
+
 class FakeConnector:
     def __init__(
         self,
         summary: Mapping[str, Any],
         *,
+        activity: Mapping[str, Any] | None = None,
+        splits: Mapping[str, Any] | None = None,
+        include_splits: bool = True,
         exercise_sets: Mapping[str, Any] | None = None,
     ):
         self.summary = summary
+        self.activity = activity if activity is not None else summary
+        self.splits = (splits if splits is not None else {"lapDTOs": []}) if include_splits else None
         self.exercise_sets = exercise_sets
         self.latest_calls = 0
         self.raw_calls = 0
@@ -58,9 +73,9 @@ class FakeConnector:
         assert activity_id == str(self.summary["activityId"])
         return GarminRawActivity(
             summary={},
-            activity=dict(self.summary),
+            activity=dict(self.activity),
             details={"activityId": int(activity_id), "metricDescriptors": []},
-            splits={"lapDTOs": []},
+            splits=self.splits,
             exercise_sets=self.exercise_sets,
             original_archive=b"synthetic-original-archive",
             warnings=(),
@@ -135,6 +150,163 @@ def test_duplicate_sync_does_not_refetch_or_duplicate(paths: AppPaths) -> None:
         assert connection.execute("SELECT COUNT(*) FROM activities").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM raw_artifacts").fetchone()[0] == 5
     assert "이미 저장된 activity (변경 없음)" in render_sync_result(second)
+
+
+def test_pool_swim_sync_normalizes_persists_and_renders_detail(
+    paths: AppPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _synthetic_pool_swim()
+    calls: list[str] = []
+
+    def tracking_normalizer(
+        summary: Mapping[str, Any],
+        activity: Mapping[str, Any],
+        splits: Mapping[str, Any] | None,
+    ) -> NormalizedSwimActivity:
+        calls.append(str(summary["activityId"]))
+        return normalize_garmin_swim(summary, activity, splits)
+
+    monkeypatch.setattr(sync_module, "normalize_garmin_swim", tracking_normalizer)
+    connector = FakeConnector(
+        payload["summary"],
+        activity=payload["activity"],
+        splits=payload["splits"],
+    )
+    use_case = _use_case(paths, connector)
+
+    first = use_case.execute()
+    second = use_case.execute()
+
+    assert calls == ["900001"]
+    assert first.created is True
+    assert second.created is False
+    assert connector.raw_calls == 1
+    activity_dir = paths.raw_dir / "900001"
+    assert (activity_dir / "summary.json").is_file()
+    assert (activity_dir / "activity.json").is_file()
+    assert (activity_dir / "details.json").is_file()
+    assert (activity_dir / "splits.json").is_file()
+    assert first.activity.swim_detail is not None
+    assert second.activity.swim_detail == first.activity.swim_detail
+    assert [lap.source_lap_index for lap in first.activity.swim_detail.laps] == [7, 11, 15]
+    assert [
+        length.source_message_index
+        for lap in first.activity.swim_detail.laps
+        for length in lap.lengths
+    ] == [101, 102, 103, 104, 105]
+
+    with sqlite3.connect(paths.database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM swim_activities").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM swim_laps").fetchone()[0] == 3
+        assert connection.execute("SELECT COUNT(*) FROM swim_lengths").fetchone()[0] == 5
+        assert connection.execute(
+            """
+            SELECT COUNT(DISTINCT swim_laps.activity_id)
+            FROM swim_lengths
+            JOIN swim_laps ON swim_laps.id = swim_lengths.swim_lap_id
+            JOIN activities ON activities.id = swim_laps.activity_id
+            WHERE activities.source_activity_id = '900001'
+            """
+        ).fetchone()[0] == 1
+        idle = connection.execute(
+            """
+            SELECT swim_lengths.sequence_in_lap, swim_lengths.length_type,
+                   swim_lengths.stroke_type, swim_lengths.garmin_distance_meters,
+                   swim_lengths.swolf, swim_lengths.average_hr_bpm,
+                   swim_laps.sequence
+            FROM swim_lengths
+            JOIN swim_laps ON swim_laps.id = swim_lengths.swim_lap_id
+            WHERE swim_lengths.source_message_index = 103
+            """
+        ).fetchone()
+        assert idle == (2, "idle", None, None, None, None, 0)
+
+    output = render_sync_result(second)
+    assert "Swim" in output
+    assert "Distance: 150 m" in output
+    assert "Laps: 3" in output
+    assert "Lengths: 5" in output
+    assert "Average pace: 2:04 /100m" in output
+
+
+@pytest.mark.parametrize(
+    "source_type_key",
+    ["running", "strength_training", "open_water_swimming"],
+)
+def test_non_pool_activity_does_not_call_swim_normalizer(
+    paths: AppPaths,
+    monkeypatch: pytest.MonkeyPatch,
+    source_type_key: str,
+) -> None:
+    monkeypatch.setattr(
+        sync_module,
+        "normalize_garmin_swim",
+        lambda *_args: pytest.fail("swim normalizer must not be called"),
+    )
+    summary = {
+        "activityId": {"running": 710, "strength_training": 711, "open_water_swimming": 712}[source_type_key],
+        "activityType": {"typeKey": source_type_key},
+    }
+
+    result = _use_case(paths, FakeConnector(summary)).execute()
+
+    assert result.activity.swim_detail is None
+    with sqlite3.connect(paths.database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM swim_activities").fetchone()[0] == 0
+
+
+def test_pool_swim_with_missing_splits_is_saved_without_inventing_laps(paths: AppPaths) -> None:
+    summary = {
+        "activityId": 713,
+        "activityType": {"typeKey": "lap_swimming"},
+        "distance": 500,
+    }
+
+    result = _use_case(paths, FakeConnector(summary, include_splits=False)).execute()
+
+    assert result.activity.swim_detail is not None
+    assert result.activity.swim_detail.splits_available is False
+    assert result.activity.swim_detail.laps == ()
+    with sqlite3.connect(paths.database_path) as connection:
+        assert connection.execute("SELECT splits_available FROM swim_activities").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM swim_laps").fetchone()[0] == 0
+
+
+def test_malformed_pool_swim_hierarchy_is_a_normalization_error(paths: AppPaths) -> None:
+    summary = {"activityId": 714, "activityType": {"typeKey": "lap_swimming"}}
+    connector = FakeConnector(summary, splits={"activityId": 714, "lapDTOs": {"invalid": True}})
+
+    with pytest.raises(SwimNormalizationError, match="splits.lapDTOs must be an array"):
+        _use_case(paths, connector).execute()
+
+    assert (paths.raw_dir / "714" / "splits.json").is_file()
+    with sqlite3.connect(paths.database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM activities").fetchone()[0] == 0
+
+
+def test_existing_pool_swim_backfills_detail_from_local_raw(paths: AppPaths) -> None:
+    payload = _synthetic_pool_swim()
+    connector = FakeConnector(
+        payload["summary"],
+        activity=payload["activity"],
+        splits=payload["splits"],
+    )
+    use_case = _use_case(paths, connector)
+    use_case.execute()
+    with sqlite3.connect(paths.database_path) as connection:
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("DELETE FROM swim_activities")
+
+    result = _use_case(paths, connector).execute()
+
+    assert result.created is False
+    assert result.activity.swim_detail is not None
+    assert len(result.activity.swim_detail.laps) == 3
+    assert connector.raw_calls == 1
+    with sqlite3.connect(paths.database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM swim_laps").fetchone()[0] == 3
+        assert connection.execute("SELECT COUNT(*) FROM swim_lengths").fetchone()[0] == 5
 
 
 @pytest.mark.parametrize(

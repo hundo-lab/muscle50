@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from muscle50.domain.swimming import NormalizedSwimActivity
+
 type MetricValue = float | int | str
 NORMALIZER_VERSION = 2
 
@@ -63,4 +65,5 @@ class NormalizedActivity:
     elevation_gain_meters: float | None
     metrics: tuple[ActivityMetric, ...]
     strength_sets: tuple[StrengthSet, ...] = ()
+    swim_detail: NormalizedSwimActivity | None = None
     normalizer_version: int = NORMALIZER_VERSION

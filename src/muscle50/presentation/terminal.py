@@ -5,6 +5,7 @@ from __future__ import annotations
 from muscle50.application.sync_latest_garmin import SyncResult
 from muscle50.domain.activity import ActivityMetric, ActivityType, StrengthSet
 from muscle50.domain.derivation import derive_summary
+from muscle50.domain.swimming import NormalizedSwimActivity, derive_lap_metrics
 
 _TYPE_LABELS = {
     ActivityType.RUNNING: "러닝",
@@ -46,6 +47,8 @@ def render_sync_result(result: SyncResult) -> str:
         _metric_line(lines, metrics, "pool_length", "풀 길이")
         _metric_line(lines, metrics, "lap_count", "랩", "")
         _metric_line(lines, metrics, "average_swolf", "평균 SWOLF", "")
+        if activity.swim_detail is not None:
+            _swim_detail_lines(lines, activity.swim_detail, activity.distance_meters)
     elif activity.canonical_type is ActivityType.STRENGTH:
         if activity.strength_sets:
             _strength_set_lines(lines, activity.strength_sets)
@@ -77,6 +80,42 @@ def _duration(seconds: float) -> str:
     hours, remainder = divmod(total, 3600)
     minutes, secs = divmod(remainder, 60)
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _swim_detail_lines(
+    lines: list[str],
+    swim: NormalizedSwimActivity,
+    activity_distance_meters: float | None,
+) -> None:
+    lap_metrics = [(lap, derive_lap_metrics(lap)) for lap in swim.laps]
+    distances = [
+        metric.effective_distance_meters
+        for _lap, metric in lap_metrics
+        if metric.effective_distance_meters is not None and metric.effective_distance_meters > 0
+    ]
+    distance = sum(distances) if distances else activity_distance_meters
+    length_count = sum(len(lap.lengths) for lap in swim.laps)
+
+    lines.extend(("", "Swim"))
+    if distance is not None:
+        lines.append(f"Distance: {distance:g} m")
+    lines.append(f"Laps: {len(swim.laps)}")
+    lines.append(f"Lengths: {length_count}")
+
+    timed_distance = 0.0
+    timed_duration = 0.0
+    for lap, metric in lap_metrics:
+        if (
+            metric.effective_distance_meters is not None
+            and metric.effective_distance_meters > 0
+            and lap.duration_seconds is not None
+            and lap.duration_seconds > 0
+        ):
+            timed_distance += metric.effective_distance_meters
+            timed_duration += lap.duration_seconds
+    if timed_distance > 0:
+        pace = timed_duration * 100 / timed_distance
+        lines.append(f"Average pace: {int(pace // 60)}:{int(pace % 60):02d} /100m")
 
 
 def _strength_set_lines(lines: list[str], strength_sets: tuple[StrengthSet, ...]) -> None:

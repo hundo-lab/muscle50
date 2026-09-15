@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from muscle50.domain.activity import ActivityType
-from muscle50.domain.normalization import activity_id_from, canonical_type, source_type_from
+from muscle50.domain.normalization import NormalizationError, activity_id_from, canonical_type, source_type_from
 from muscle50.domain.swimming import (
     GarminSource,
     NormalizedSwimActivity,
@@ -18,7 +18,7 @@ from muscle50.domain.swimming import (
 )
 
 
-class SwimNormalizationError(ValueError):
+class SwimNormalizationError(NormalizationError):
     """Raised when a Garmin swim payload cannot be normalized without data loss."""
 
 

@@ -98,22 +98,49 @@ class RawStore:
 
     def load_exercise_sets(self, activity_id: str) -> Mapping[str, Any] | None:
         """Read an already-preserved strength payload without contacting Garmin."""
-        if not activity_id.isdigit() or int(activity_id) <= 0:
-            raise RawStoreError("올바르지 않은 Garmin activity ID입니다.")
+        _validate_activity_id(activity_id)
         path = self._root / activity_id / "exercise_sets.json"
         if not path.exists():
             return None
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise RawStoreError("기존 exercise_sets RAW 파일을 읽을 수 없습니다.") from exc
-        if not isinstance(payload, Mapping):
-            raise RawStoreError("기존 exercise_sets RAW 파일 형식이 올바르지 않습니다.")
-        return payload
+        return _load_json_mapping(path, "exercise_sets")
+
+    def load_swim_payloads(
+        self,
+        activity_id: str,
+    ) -> tuple[Mapping[str, Any], Mapping[str, Any], Mapping[str, Any] | None] | None:
+        """Read preserved pool-swimming inputs for a local normalization backfill."""
+        _validate_activity_id(activity_id)
+        directory = self._root / activity_id
+        summary_path = directory / "summary.json"
+        activity_path = directory / "activity.json"
+        if not summary_path.exists() or not activity_path.exists():
+            return None
+        splits_path = directory / "splits.json"
+        splits = _load_json_mapping(splits_path, "splits") if splits_path.exists() else None
+        return (
+            _load_json_mapping(summary_path, "summary"),
+            _load_json_mapping(activity_path, "activity"),
+            splits,
+        )
 
 
 def _json_bytes(value: Mapping[str, Any]) -> bytes:
     return (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _validate_activity_id(activity_id: str) -> None:
+    if not activity_id.isdigit() or int(activity_id) <= 0:
+        raise RawStoreError("올바르지 않은 Garmin activity ID입니다.")
+
+
+def _load_json_mapping(path: Path, label: str) -> Mapping[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RawStoreError(f"기존 {label} RAW 파일을 읽을 수 없습니다.") from exc
+    if not isinstance(payload, Mapping):
+        raise RawStoreError(f"기존 {label} RAW 파일 형식이 올바르지 않습니다.")
+    return payload
 
 
 def _write_immutable(destination: Path, content: bytes, tmp_dir: Path) -> None:

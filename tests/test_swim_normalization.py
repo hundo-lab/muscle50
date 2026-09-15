@@ -146,6 +146,20 @@ def test_missing_optional_values_are_not_invented() -> None:
     assert derive_length_metrics(length).pace_seconds_per_100_meters is None
 
 
+@pytest.mark.parametrize("duration", [0, -1])
+def test_zero_or_negative_duration_does_not_produce_a_derived_pace(duration: int) -> None:
+    summary = {"activityId": 20, "activityTypeKey": "lap_swimming"}
+    splits = {
+        "activityId": 20,
+        "lapDTOs": [{"distance": 25, "duration": duration, "lengthDTOs": []}],
+    }
+
+    swim = normalize_garmin_swim(summary, {}, splits)
+
+    assert swim.laps[0].duration_seconds == duration
+    assert derive_lap_metrics(swim.laps[0]).pace_seconds_per_100_meters is None
+
+
 def test_missing_optional_splits_is_distinct_from_an_empty_split_response() -> None:
     summary = {"activityId": 3, "activityTypeKey": "lap_swimming"}
 

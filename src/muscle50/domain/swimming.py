@@ -139,11 +139,16 @@ def _derive_metrics(
 
     pace = None
     if distance.corrected_meters is not None and effective_distance is not None and effective_distance > 0:
-        if duration_seconds is not None:
+        if duration_seconds is not None and duration_seconds > 0:
             pace = duration_seconds * 100.0 / effective_distance
     elif average_speed_mps is not None and average_speed_mps > 0:
         pace = 100.0 / average_speed_mps
-    elif effective_distance is not None and effective_distance > 0 and duration_seconds is not None:
+    elif (
+        effective_distance is not None
+        and effective_distance > 0
+        and duration_seconds is not None
+        and duration_seconds > 0
+    ):
         pace = duration_seconds * 100.0 / effective_distance
 
     return DerivedSwimMetrics(
