@@ -14,7 +14,9 @@ from muscle50.domain.swimming import derive_lap_metrics, derive_length_metrics
 @pytest.fixture
 def pool_swim() -> dict[str, Any]:
     fixture_path = Path(__file__).parent / "fixtures" / "garmin_pool_swim.json"
-    return json.loads(fixture_path.read_text(encoding="utf-8"))
+    data: object = json.loads(fixture_path.read_text(encoding="utf-8"))
+    assert isinstance(data, dict)
+    return data
 
 
 def test_normalizes_activity_lap_length_hierarchy_without_using_source_indices_as_sequence(

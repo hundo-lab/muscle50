@@ -37,7 +37,9 @@ def test_invalid_activity_id_is_rejected(value: object) -> None:
 
 def _synthetic_strength_sets() -> dict[str, object]:
     path = Path(__file__).parent / "fixtures" / "synthetic_strength_sets.json"
-    return json.loads(path.read_text(encoding="utf-8"))
+    data: object = json.loads(path.read_text(encoding="utf-8"))
+    assert isinstance(data, dict)
+    return data
 
 
 def test_strength_sets_preserve_source_fields_and_normalize_weight() -> None:

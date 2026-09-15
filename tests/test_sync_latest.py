@@ -32,7 +32,9 @@ RUN_SUMMARY: dict[str, Any] = {
 
 def _synthetic_strength_sets() -> dict[str, Any]:
     path = Path(__file__).parent / "fixtures" / "synthetic_strength_sets.json"
-    return json.loads(path.read_text(encoding="utf-8"))
+    data: object = json.loads(path.read_text(encoding="utf-8"))
+    assert isinstance(data, dict)
+    return data
 
 
 class FakeConnector:
