@@ -1,78 +1,91 @@
 # Session Handoff
 
-Last updated: 2026-09-15
+Last updated: 2026-09-17
 
 ## Current task
 
-최신 local `main` 기반 `feature/swim-integration`에서 기존 Garmin swim normalizer를
-production sync, SQLite persistence, repository query, terminal summary에 연결하는 작업이다.
+최신 local `main` `7dad294` 기반 `feature/garmin-recovery-integration`에서 기존
+`feature/garmin-recovery` 구현을 현재 Activity/Strength/Swim/Nutrition 구조에 맞춰
+production integration하는 작업이다.
 
 ## Completed
 
-- 작업 branch를 local `main` `0824c16`으로 fast-forward한 뒤 구현했다.
-- `source_type_from()` 결과가 `lap_swimming`인 activity에만 기존
-  `normalize_garmin_swim()`을 호출한다.
-- `NormalizedActivity.swim_detail`을 통해 activity와 normalized swim hierarchy를 함께
-  저장하고 조회한다.
-- `004_swim_details.sql`에 `swim_activities`, `swim_laps`, `swim_lengths`를 추가했다.
-- activity → lap → length foreign key와 sequence uniqueness로 hierarchy와 idempotency를
-  보장한다.
-- 기존 pool swim activity에 normalized rows가 없으면 로컬 `summary.json`,
-  `activity.json`, optional `splits.json`만 사용해 backfill한다. Garmin API는 재호출하지 않는다.
-- `muscle50 garmin latest` 결과에 normalized swim distance, lap/length 수, 평균 100m pace를
-  표시한다.
-- missing splits/optional values, empty laps/lengths, invalid duration, malformed hierarchy,
-  non-pool activity와 Strength/일반 activity 회귀를 테스트했다.
-- 실제 Garmin 계정 API는 호출하지 않았고 push/merge도 수행하지 않았다.
+- `muscle50 garmin recovery YYYY-MM-DD` production flow를 연결했다.
+- 잘못된 날짜는 Garmin 인증/네트워크 전에 거부한다.
+- sleep, HRV, resting HR, Body Battery, stress, training readiness/recovery time,
+  training status, sleep respiration을 기존 feature 범위 그대로 정규화한다.
+- endpoint별 `None`, `{}`, `[]` no-data를 정상 RAW로 보존하고 missing field를 `None`으로
+  정규화한다. 개별 endpoint 오류/malformed payload는 warning으로 격리한다.
+- 인증 오류는 즉시 실패하고, 전 endpoint 실패도 빈 성공으로 저장하지 않는다.
+- recovery RAW를 `raw/garmin/recovery/<date>/<capture-id>/`의 content-addressed immutable
+  snapshot으로 보존한다. 동일 payload+diagnostic은 재사용하고 변경 응답은 새 capture로 남긴다.
+- 날짜별 normalized row는 latest accepted capture 기준으로 upsert하며 과거 RAW capture는
+  삭제하지 않는다.
+- `DailyRecoveryRepository.find()`와 `find_source_capture()`로 날짜별 최신 값과 provenance를
+  조회한다.
+- provisional `002_daily_recovery.sql` 대신 global chain의
+  `005_daily_recovery.sql`을 추가했고 공용 sorted migration loader를 재사용한다.
+- 기존 Activity RAW local backfill, Strength, Swim, Nutrition schema/repository 동작을 유지했다.
+- 실제 Garmin API는 호출하지 않았고 synthetic/fake payload만 사용했다.
 
 ## Files changed
 
-- `src/muscle50/application/sync_latest_garmin.py`
-- `src/muscle50/domain/activity.py`
-- `src/muscle50/domain/swim_normalization.py`
-- `src/muscle50/domain/swimming.py`
-- `src/muscle50/infrastructure/raw_store.py`
-- `src/muscle50/infrastructure/sqlite/database.py`
-- `src/muscle50/infrastructure/sqlite/migrations/004_swim_details.sql`
-- `src/muscle50/presentation/terminal.py`
-- `tests/test_database.py`
-- `tests/test_swim_normalization.py`
-- `tests/test_sync_latest.py`
+- `README.md`
 - `docs/CURRENT_STATE.md`
 - `docs/HANDOFF.md`
+- `docs/garmin-recovery-endpoint-discovery.md`
+- `src/muscle50/application/sync_garmin_recovery.py`
+- `src/muscle50/cli.py`
+- `src/muscle50/config.py`
+- `src/muscle50/domain/recovery.py`
+- `src/muscle50/domain/recovery_normalization.py`
+- `src/muscle50/infrastructure/garmin/client.py`
+- `src/muscle50/infrastructure/raw_store.py`
+- `src/muscle50/infrastructure/sqlite/database.py`
+- `src/muscle50/infrastructure/sqlite/migrations/005_daily_recovery.sql`
+- `src/muscle50/presentation/terminal.py`
+- `tests/test_cli.py`
+- `tests/test_config.py`
+- `tests/test_database.py`
+- `tests/test_garmin_recovery_connector.py`
+- `tests/test_recovery_normalization.py`
+- `tests/test_sync_recovery.py`
 
 ## Verification performed
 
 ```text
 uv sync --extra dev                                                   passed
-uv run pytest tests/test_swim_normalization.py tests/test_database.py
-  tests/test_sync_latest.py -q                                       37 passed
-uv run pytest -q                                                     126 passed
+uv run pytest tests/test_recovery_normalization.py
+  tests/test_garmin_recovery_connector.py tests/test_sync_recovery.py
+  tests/test_database.py tests/test_cli.py tests/test_config.py -q    37 passed
+uv run pytest -q                                                     151 passed
 uv run ruff check .                                                  passed
-uv run mypy src tests                                                passed (38 files)
+uv run mypy src tests                                                passed (44 files)
+uv run pytest tests/test_database.py::test_recovery_migration_upgrades_existing_001_through_004_database
+  tests/test_database.py::test_numbered_migrations_can_be_reapplied_without_duplicate_versions -q
+                                                                        2 passed
 git diff --check                                                     passed
 ```
 
-migration test는 fresh DB, 기존 001~003 DB upgrade, repeated invocation, concurrent first
-startup을 포함한다.
+Migration coverage includes fresh DB, existing 001–004 DB upgrade to version 5,
+repeated invocation, concurrent first startup, and preservation of Strength/Swim/Nutrition tables.
 
 ## Remaining work
 
-- 별도의 명시적 단계에서 실제 Garmin pool swim 계정으로 live smoke를 수행한다.
-- 실제 payload에서 device/API별 stroke, SWOLF, HR, rest/idle, missing length 변형을 확인한다.
-- swimming progression analytics가 필요해지면 activity 기간 조회와 swim aggregate read/query
-  layer를 추가한다.
+- 별도의 명시적 승인 하에서 실제 Garmin 계정 live smoke를 수행한다.
+- training readiness/status shape, recovery time semantics, no-data responses,
+  account/device별 endpoint availability와 timezone/calendar attribution을 확인한다.
+- 7-day/28-day analytics, generic replay framework, scheduler/dashboard는 이번 범위 밖이다.
 
 ## Known issues / risks
 
-- Garmin Connect는 비공식 API이므로 splits response shape 변경 가능성이 있다.
-- integration은 Garmin의 현재 pool type key인 `lap_swimming`만 허용한다. open-water swim은
-  의도적으로 normalized lap/length persistence에 들어가지 않는다.
-- `database.py`, `activity.py`, sync use-case, terminal renderer, migration test는 shared files라
-  최신 main과 병행 변경이 생기면 충돌 가능성이 있다.
-- 아직 통합되지 않은 InBody/Recovery migration은 global chain 4 이후 번호로 재배정해야 한다.
+- Garmin Connect는 비공식 API이므로 endpoint와 response shape가 바뀔 수 있다.
+- Training status에서 여러 device의 서로 다른 값이 발견되면 임의 선택하지 않고 `None`으로 둔다.
+- Recovery capture identity에는 payload뿐 아니라 endpoint diagnostic도 포함된다.
+- Recovery는 shared `client.py`, `raw_store.py`, `database.py`, `cli.py`, `terminal.py`를 수정하므로
+  main에 이후 병행 변경이 생기면 merge 전 재검증이 필요하다.
 
 ## Recommended next action
 
-최종 quality gate를 확인하고 logical commit으로 정리한다. 그 뒤 live Garmin smoke는 별도
-명시적 승인 하에서 수행한다. main merge와 remote push는 하지 않는다.
+logical integration commit과 최종 Git 상태를 검토한다. Live Garmin smoke는 별도 승인 후 진행하고,
+현재 작업에서는 main merge와 remote push를 하지 않는다.

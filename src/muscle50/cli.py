@@ -6,6 +6,7 @@ import argparse
 import sys
 from collections.abc import Sequence
 
+from muscle50.application.sync_garmin_recovery import SyncGarminRecovery
 from muscle50.application.sync_latest_garmin import (
     ActivitySyncError,
     NoActivitiesError,
@@ -13,18 +14,21 @@ from muscle50.application.sync_latest_garmin import (
 )
 from muscle50.config import AppPaths, ConfigurationError
 from muscle50.domain.normalization import NormalizationError
+from muscle50.domain.recovery_normalization import RecoveryNormalizationError, validate_calendar_date
 from muscle50.infrastructure.garmin.client import GarminConnectorError, PythonGarminConnector
-from muscle50.infrastructure.raw_store import RawStore, RawStoreError
-from muscle50.infrastructure.sqlite.database import ActivityRepository
-from muscle50.presentation.terminal import render_sync_result
+from muscle50.infrastructure.raw_store import RawStore, RawStoreError, RecoveryRawStore
+from muscle50.infrastructure.sqlite.database import ActivityRepository, DailyRecoveryRepository
+from muscle50.presentation.terminal import render_recovery_sync_result, render_sync_result
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="muscle50")
     commands = parser.add_subparsers(dest="command", required=True)
-    garmin = commands.add_parser("garmin", help="Garmin Connect activity commands")
+    garmin = commands.add_parser("garmin", help="Garmin Connect commands")
     garmin_commands = garmin.add_subparsers(dest="garmin_command", required=True)
     garmin_commands.add_parser("latest", help="Sync the latest Garmin activity")
+    recovery = garmin_commands.add_parser("recovery", help="Sync Garmin recovery data for one date")
+    recovery.add_argument("date", help="Garmin calendar date in YYYY-MM-DD format")
     return parser
 
 
@@ -32,6 +36,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "garmin" and args.garmin_command == "latest":
         return _garmin_latest()
+    if args.command == "garmin" and args.garmin_command == "recovery":
+        return _garmin_recovery(args.date)
     return 2
 
 
@@ -56,6 +62,34 @@ def _garmin_latest() -> int:
         NoActivitiesError,
         NormalizationError,
         RawStoreError,
+    ) as exc:
+        print(f"오류: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\n취소되었습니다.", file=sys.stderr)
+        return 130
+
+
+def _garmin_recovery(calendar_date: str) -> int:
+    try:
+        calendar_date = validate_calendar_date(calendar_date)
+        paths = AppPaths.from_environment()
+        paths.ensure_directories()
+        repository = DailyRecoveryRepository(paths.database_path)
+        repository.migrate()
+        connector = PythonGarminConnector.authenticate(paths.auth_dir)
+        use_case = SyncGarminRecovery(
+            connector,
+            repository,
+            RecoveryRawStore(paths.recovery_raw_dir, paths.root, paths.tmp_dir),
+        )
+        print(render_recovery_sync_result(use_case.execute(calendar_date)))
+        return 0
+    except (
+        ConfigurationError,
+        GarminConnectorError,
+        RawStoreError,
+        RecoveryNormalizationError,
     ) as exc:
         print(f"오류: {exc}", file=sys.stderr)
         return 1

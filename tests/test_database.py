@@ -22,7 +22,11 @@ EXPECTED_TABLES = {
     "nutrition_food_profiles",
     "nutrition_food_profile_aliases",
     "nutrition_facts",
+    "recovery_raw_captures",
+    "recovery_raw_artifacts",
+    "daily_recovery",
 }
+EXPECTED_VERSIONS = [(1,), (2,), (3,), (4,), (5,)]
 
 MIGRATIONS_DIR = (
     Path(__file__).parents[1] / "src" / "muscle50" / "infrastructure" / "sqlite" / "migrations"
@@ -46,7 +50,7 @@ def test_migration_recovers_when_only_version_table_and_marker_remain(tmp_path: 
         }
         versions = connection.execute("SELECT version FROM schema_migrations").fetchall()
     assert tables == EXPECTED_TABLES
-    assert versions == [(1,), (2,), (3,), (4,)]
+    assert versions == EXPECTED_VERSIONS
 
 
 def test_migration_completes_partial_ddl_without_version_marker(tmp_path: Path) -> None:
@@ -81,7 +85,7 @@ def test_migration_completes_partial_ddl_without_version_marker(tmp_path: Path) 
         }
         versions = connection.execute("SELECT version FROM schema_migrations").fetchall()
     assert tables == EXPECTED_TABLES
-    assert versions == [(1,), (2,), (3,), (4,)]
+    assert versions == EXPECTED_VERSIONS
 
 
 def test_first_migration_is_safe_under_concurrent_startup(tmp_path: Path) -> None:
@@ -92,7 +96,7 @@ def test_first_migration_is_safe_under_concurrent_startup(tmp_path: Path) -> Non
 
     with sqlite3.connect(database_path) as connection:
         versions = connection.execute("SELECT version FROM schema_migrations").fetchall()
-    assert versions == [(1,), (2,), (3,), (4,)]
+    assert versions == EXPECTED_VERSIONS
 
 
 def test_strength_sets_migration_upgrades_existing_database(tmp_path: Path) -> None:
@@ -118,7 +122,7 @@ def test_strength_sets_migration_upgrades_existing_database(tmp_path: Path) -> N
         "normalized_weight_kg",
         "duration_seconds",
     } <= columns
-    assert versions == [(1,), (2,), (3,), (4,)]
+    assert versions == EXPECTED_VERSIONS
 
 
 def test_nutrition_migration_upgrades_existing_001_002_database(tmp_path: Path) -> None:
@@ -143,7 +147,7 @@ def test_nutrition_migration_upgrades_existing_001_002_database(tmp_path: Path) 
             )
         }
     assert versions[:2] == existing_versions
-    assert [row[0] for row in versions] == [1, 2, 3, 4]
+    assert [row[0] for row in versions] == [1, 2, 3, 4, 5]
     assert nutrition_tables == {
         "nutrition_meals",
         "nutrition_meal_items",
@@ -177,10 +181,54 @@ def test_swim_migration_upgrades_existing_001_through_003_database(tmp_path: Pat
         lap_foreign_keys = connection.execute("PRAGMA foreign_key_list(swim_laps)").fetchall()
         length_foreign_keys = connection.execute("PRAGMA foreign_key_list(swim_lengths)").fetchall()
     assert versions[:3] == existing_versions
-    assert [row[0] for row in versions] == [1, 2, 3, 4]
+    assert [row[0] for row in versions] == [1, 2, 3, 4, 5]
     assert swim_tables == {"swim_activities", "swim_laps", "swim_lengths"}
     assert any(row[2] == "swim_activities" for row in lap_foreign_keys)
     assert any(row[2] == "swim_laps" for row in length_foreign_keys)
+
+
+def test_recovery_migration_upgrades_existing_001_through_004_database(tmp_path: Path) -> None:
+    database_path = tmp_path / "existing-001-004.sqlite3"
+    migration_names = (
+        "001_initial.sql",
+        "002_strength_sets.sql",
+        "003_nutrition.sql",
+        "004_swim_details.sql",
+    )
+    with sqlite3.connect(database_path) as connection:
+        for migration_name in migration_names:
+            connection.executescript((MIGRATIONS_DIR / migration_name).read_text(encoding="utf-8"))
+        existing_versions = connection.execute(
+            "SELECT version, applied_at_utc FROM schema_migrations ORDER BY version"
+        ).fetchall()
+
+    ActivityRepository(database_path).migrate()
+
+    with sqlite3.connect(database_path) as connection:
+        versions = connection.execute(
+            "SELECT version, applied_at_utc FROM schema_migrations ORDER BY version"
+        ).fetchall()
+        recovery_tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%recovery%'"
+            )
+        }
+        daily_columns = {row[1] for row in connection.execute("PRAGMA table_info(daily_recovery)")}
+        recovery_foreign_keys = connection.execute("PRAGMA foreign_key_list(daily_recovery)").fetchall()
+
+    assert versions[:4] == existing_versions
+    assert [row[0] for row in versions] == [1, 2, 3, 4, 5]
+    assert recovery_tables == {"recovery_raw_captures", "recovery_raw_artifacts", "daily_recovery"}
+    assert {
+        "calendar_date",
+        "sleep_seconds",
+        "hrv_last_night_avg_ms",
+        "training_readiness_score",
+        "primary_raw_capture_id",
+        "updated_at_utc",
+    } <= daily_columns
+    assert any(row[2] == "recovery_raw_captures" for row in recovery_foreign_keys)
 
 
 def test_numbered_migrations_can_be_reapplied_without_duplicate_versions(tmp_path: Path) -> None:
@@ -200,4 +248,4 @@ def test_numbered_migrations_can_be_reapplied_without_duplicate_versions(tmp_pat
             "SELECT version, applied_at_utc FROM schema_migrations ORDER BY version"
         ).fetchall()
     assert repeated_versions == first_versions
-    assert [row[0] for row in repeated_versions] == [1, 2, 3, 4]
+    assert [row[0] for row in repeated_versions] == [1, 2, 3, 4, 5]

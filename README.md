@@ -1,8 +1,9 @@
 # muscle50
 
-Windows 로컬 환경에서 개인 운동 데이터를 관리하는 도구입니다. 현재 MVP는 Garmin Connect의
-가장 최근 activity 한 건을 RAW 파일과 normalized SQLite 데이터로 보존합니다. 웨이트
-activity는 Garmin exercise set의 종목·중량·반복·휴식 구간도 함께 정규화합니다.
+Windows 로컬 환경에서 개인 운동 데이터를 관리하는 도구입니다. Garmin Connect의 가장 최근
+activity와 날짜별 recovery/daily-health 응답을 RAW 파일과 normalized SQLite 데이터로
+보존합니다. 웨이트 activity는 Garmin exercise set의 종목·중량·반복·휴식 구간도 함께
+정규화합니다.
 
 ## 요구 환경
 
@@ -36,7 +37,8 @@ muscle50 garmin latest
 %LOCALAPPDATA%\muscle50\
 ├─ auth\garmin\                 # Garmin token
 ├─ raw\garmin\activities\      # immutable JSON 및 가능한 경우 original.zip
-└─ db\muscle50.sqlite3          # normalized activity와 correction overlay
+├─ raw\garmin\recovery\        # 날짜별 immutable recovery snapshot history
+└─ db\muscle50.sqlite3          # normalized activity/recovery, nutrition, correction
 ```
 
 `MUSCLE50_HOME` 환경 변수로 데이터 위치를 바꿀 수 있지만 Git worktree 내부 경로는 안전을
@@ -51,12 +53,27 @@ muscle50 garmin latest
 `strength_sets` 테이블을 추가하며, 이미 보존된 웨이트 RAW가 있으면 원격 상세 API를 다시 호출하지
 않고 해당 파일에서 세트를 백필합니다.
 
+## Garmin recovery 동기화
+
+Garmin 계정의 달력 날짜를 명시해 수면, HRV, 안정시 심박, Body Battery, 스트레스, 훈련
+준비도/회복 시간, 훈련 상태, 호흡 데이터를 동기화합니다.
+
+```powershell
+muscle50 garmin recovery 2026-09-15
+```
+
+각 endpoint의 성공 응답은 내용 기반 immutable snapshot으로 보존됩니다. 일부 metric이 없거나
+endpoint 하나가 실패해도 가능한 데이터는 저장하고 경고를 표시합니다. 동일 응답은 같은 RAW
+capture를 재사용하고, 응답이 바뀌면 과거 snapshot을 유지한 채 해당 날짜의 normalized 행만
+최신 accepted capture 기준으로 갱신합니다. 잘못된 날짜는 로그인이나 네트워크 호출 전에
+거부합니다.
+
 ## 개발 검증
 
 ```powershell
-pytest
-ruff check .
-mypy src
+uv run pytest -q
+uv run ruff check .
+uv run mypy src tests
 ```
 
 테스트 데이터는 실제 계정에서 수집하지 않은 합성 fixture만 사용합니다.

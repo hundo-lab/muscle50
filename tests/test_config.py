@@ -15,6 +15,7 @@ def test_default_data_root_uses_local_app_data(monkeypatch: pytest.MonkeyPatch, 
 
     assert paths.root == (tmp_path / "muscle50").resolve()
     assert paths.database_path.parent == paths.root / "db"
+    assert paths.recovery_raw_dir == paths.root / "raw" / "garmin" / "recovery"
 
 
 def test_missing_local_app_data_is_not_replaced_with_repo_path(

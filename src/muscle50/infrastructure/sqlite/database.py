@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from importlib.resources import files
 from pathlib import Path
+from typing import Any
 
 from muscle50.domain.activity import (
     NORMALIZER_VERSION,
@@ -18,8 +19,9 @@ from muscle50.domain.activity import (
     StrengthSet,
 )
 from muscle50.domain.normalization import strength_set_metrics
+from muscle50.domain.recovery import DailyRecovery
 from muscle50.domain.swimming import GarminSource, NormalizedSwimActivity, SwimDistance, SwimLap, SwimLength
-from muscle50.infrastructure.raw_store import RawArtifact
+from muscle50.infrastructure.raw_store import RawArtifact, RecoveryCapture
 
 
 class ActivityRepository:
@@ -204,6 +206,156 @@ class ActivityRepository:
             if swim_detail.source_type_key != row["source_type_key"]:
                 raise ValueError("swim detail type does not match the stored activity")
             _insert_swim_detail(connection, int(row["id"]), swim_detail, ignore_existing=True)
+
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        self._database_path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(self._database_path, timeout=5, isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA busy_timeout = 5000")
+        _enable_wal(connection)
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+
+class DailyRecoveryRepository:
+    def __init__(self, database_path: Path):
+        self._database_path = database_path
+
+    def migrate(self) -> None:
+        ActivityRepository(self._database_path).migrate()
+
+    def find(self, calendar_date: str) -> DailyRecovery | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM daily_recovery WHERE provider = 'garmin' AND calendar_date = ?",
+                (calendar_date,),
+            ).fetchone()
+        return _recovery_from_row(row) if row is not None else None
+
+    def find_source_capture(self, calendar_date: str) -> RecoveryCapture | None:
+        with self._connect() as connection:
+            capture_row = connection.execute(
+                """
+                SELECT capture.*
+                FROM daily_recovery AS recovery
+                JOIN recovery_raw_captures AS capture
+                  ON capture.id = recovery.primary_raw_capture_id
+                WHERE recovery.provider = 'garmin' AND recovery.calendar_date = ?
+                """,
+                (calendar_date,),
+            ).fetchone()
+            if capture_row is None:
+                return None
+            artifact_rows = connection.execute(
+                "SELECT * FROM recovery_raw_artifacts WHERE capture_id = ? ORDER BY artifact_kind",
+                (capture_row["id"],),
+            ).fetchall()
+        return RecoveryCapture(
+            capture_id=capture_row["id"],
+            requested_date=capture_row["requested_date"],
+            manifest_relative_path=capture_row["manifest_relative_path"],
+            artifacts=tuple(
+                RawArtifact(
+                    kind=row["artifact_kind"],
+                    relative_path=row["relative_path"],
+                    content_type=row["content_type"],
+                    sha256=row["sha256"],
+                    byte_size=row["byte_size"],
+                )
+                for row in artifact_rows
+            ),
+        )
+
+    def save(
+        self,
+        recovery: DailyRecovery,
+        capture: RecoveryCapture,
+    ) -> tuple[DailyRecovery, bool, bool]:
+        if not capture.artifacts:
+            raise ValueError("at least one recovery RAW artifact is required")
+        if recovery.calendar_date != capture.requested_date:
+            raise ValueError("recovery date does not match RAW capture date")
+        now = _now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._register_capture(connection, capture, now)
+            existing = connection.execute(
+                "SELECT * FROM daily_recovery WHERE provider = 'garmin' AND calendar_date = ?",
+                (recovery.calendar_date,),
+            ).fetchone()
+            if existing is not None and existing["primary_raw_capture_id"] == capture.capture_id:
+                stored_recovery = _recovery_from_row(existing)
+                if stored_recovery == recovery:
+                    return stored_recovery, False, False
+
+            parameters = _recovery_parameters(recovery, capture.capture_id, now)
+            if existing is None:
+                connection.execute(_RECOVERY_INSERT_SQL, parameters)
+                return recovery, True, False
+            connection.execute(_RECOVERY_UPDATE_SQL, parameters)
+            return recovery, False, True
+
+    @staticmethod
+    def _register_capture(connection: sqlite3.Connection, capture: RecoveryCapture, now: str) -> None:
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO recovery_raw_captures (
+                id, provider, requested_date, manifest_relative_path, captured_at_utc
+            ) VALUES (?, 'garmin', ?, ?, ?)
+            """,
+            (capture.capture_id, capture.requested_date, capture.manifest_relative_path, now),
+        )
+        stored_capture = connection.execute(
+            "SELECT * FROM recovery_raw_captures WHERE id = ?",
+            (capture.capture_id,),
+        ).fetchone()
+        if stored_capture is None or any(
+            (
+                stored_capture["provider"] != "garmin",
+                stored_capture["requested_date"] != capture.requested_date,
+                stored_capture["manifest_relative_path"] != capture.manifest_relative_path,
+            )
+        ):
+            raise RuntimeError("stored recovery capture metadata does not match the files")
+
+        for artifact in capture.artifacts:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO recovery_raw_artifacts (
+                    capture_id, artifact_kind, relative_path, content_type, sha256, byte_size
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    capture.capture_id,
+                    artifact.kind,
+                    artifact.relative_path,
+                    artifact.content_type,
+                    artifact.sha256,
+                    artifact.byte_size,
+                ),
+            )
+            stored_artifact = connection.execute(
+                "SELECT * FROM recovery_raw_artifacts WHERE relative_path = ?",
+                (artifact.relative_path,),
+            ).fetchone()
+            if stored_artifact is None or any(
+                (
+                    stored_artifact["capture_id"] != capture.capture_id,
+                    stored_artifact["artifact_kind"] != artifact.kind,
+                    stored_artifact["content_type"] != artifact.content_type,
+                    stored_artifact["sha256"] != artifact.sha256,
+                    stored_artifact["byte_size"] != artifact.byte_size,
+                )
+            ):
+                raise RuntimeError("stored recovery RAW artifact metadata does not match the file")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -564,3 +716,125 @@ def _enable_wal(connection: sqlite3.Connection) -> None:
             if "locked" not in str(exc).lower() or attempt == 4:
                 raise
             time.sleep(0.05 * (attempt + 1))
+
+
+def _recovery_from_row(row: sqlite3.Row) -> DailyRecovery:
+    return DailyRecovery(
+        calendar_date=row["calendar_date"],
+        sleep_seconds=row["sleep_seconds"],
+        deep_sleep_seconds=row["deep_sleep_seconds"],
+        light_sleep_seconds=row["light_sleep_seconds"],
+        rem_sleep_seconds=row["rem_sleep_seconds"],
+        awake_sleep_seconds=row["awake_sleep_seconds"],
+        sleep_start_gmt_ms=row["sleep_start_gmt_ms"],
+        sleep_end_gmt_ms=row["sleep_end_gmt_ms"],
+        sleep_score=row["sleep_score"],
+        sleep_avg_hrv_ms=row["sleep_avg_hrv_ms"],
+        hrv_last_night_avg_ms=row["hrv_last_night_avg_ms"],
+        hrv_weekly_avg_ms=row["hrv_weekly_avg_ms"],
+        hrv_status=row["hrv_status"],
+        resting_heart_rate_bpm=row["resting_heart_rate_bpm"],
+        body_battery_high=row["body_battery_high"],
+        body_battery_low=row["body_battery_low"],
+        stress_average=row["stress_average"],
+        training_readiness_score=row["training_readiness_score"],
+        training_readiness_level=row["training_readiness_level"],
+        recovery_time_minutes=row["recovery_time_minutes"],
+        recovery_time_change_phrase=row["recovery_time_change_phrase"],
+        training_status_key=row["training_status_key"],
+        respiration_avg_brpm=row["respiration_avg_brpm"],
+        normalizer_version=row["normalizer_version"],
+    )
+
+
+def _recovery_parameters(recovery: DailyRecovery, capture_id: str, now: str) -> dict[str, Any]:
+    parameters = {
+        name: getattr(recovery, name)
+        for name in (
+            "calendar_date",
+            "sleep_seconds",
+            "deep_sleep_seconds",
+            "light_sleep_seconds",
+            "rem_sleep_seconds",
+            "awake_sleep_seconds",
+            "sleep_start_gmt_ms",
+            "sleep_end_gmt_ms",
+            "sleep_score",
+            "sleep_avg_hrv_ms",
+            "hrv_last_night_avg_ms",
+            "hrv_weekly_avg_ms",
+            "hrv_status",
+            "resting_heart_rate_bpm",
+            "body_battery_high",
+            "body_battery_low",
+            "stress_average",
+            "training_readiness_score",
+            "training_readiness_level",
+            "recovery_time_minutes",
+            "recovery_time_change_phrase",
+            "training_status_key",
+            "respiration_avg_brpm",
+            "normalizer_version",
+        )
+    }
+    parameters.update(capture_id=capture_id, now=now)
+    return parameters
+
+
+_RECOVERY_COLUMNS = """
+    calendar_date, sleep_seconds, deep_sleep_seconds, light_sleep_seconds,
+    rem_sleep_seconds, awake_sleep_seconds, sleep_start_gmt_ms, sleep_end_gmt_ms,
+    sleep_score, sleep_avg_hrv_ms, hrv_last_night_avg_ms, hrv_weekly_avg_ms,
+    hrv_status, resting_heart_rate_bpm, body_battery_high, body_battery_low,
+    stress_average, training_readiness_score, training_readiness_level,
+    recovery_time_minutes, recovery_time_change_phrase, training_status_key,
+    respiration_avg_brpm, normalizer_version
+"""
+
+_RECOVERY_VALUE_PARAMETERS = """
+    :calendar_date, :sleep_seconds, :deep_sleep_seconds, :light_sleep_seconds,
+    :rem_sleep_seconds, :awake_sleep_seconds, :sleep_start_gmt_ms, :sleep_end_gmt_ms,
+    :sleep_score, :sleep_avg_hrv_ms, :hrv_last_night_avg_ms, :hrv_weekly_avg_ms,
+    :hrv_status, :resting_heart_rate_bpm, :body_battery_high, :body_battery_low,
+    :stress_average, :training_readiness_score, :training_readiness_level,
+    :recovery_time_minutes, :recovery_time_change_phrase, :training_status_key,
+    :respiration_avg_brpm, :normalizer_version
+"""
+
+_RECOVERY_INSERT_SQL = f"""
+    INSERT INTO daily_recovery (
+        provider, {_RECOVERY_COLUMNS}, primary_raw_capture_id, imported_at_utc, updated_at_utc
+    ) VALUES (
+        'garmin', {_RECOVERY_VALUE_PARAMETERS}, :capture_id, :now, :now
+    )
+"""
+
+_RECOVERY_UPDATE_SQL = """
+    UPDATE daily_recovery SET
+        sleep_seconds = :sleep_seconds,
+        deep_sleep_seconds = :deep_sleep_seconds,
+        light_sleep_seconds = :light_sleep_seconds,
+        rem_sleep_seconds = :rem_sleep_seconds,
+        awake_sleep_seconds = :awake_sleep_seconds,
+        sleep_start_gmt_ms = :sleep_start_gmt_ms,
+        sleep_end_gmt_ms = :sleep_end_gmt_ms,
+        sleep_score = :sleep_score,
+        sleep_avg_hrv_ms = :sleep_avg_hrv_ms,
+        hrv_last_night_avg_ms = :hrv_last_night_avg_ms,
+        hrv_weekly_avg_ms = :hrv_weekly_avg_ms,
+        hrv_status = :hrv_status,
+        resting_heart_rate_bpm = :resting_heart_rate_bpm,
+        body_battery_high = :body_battery_high,
+        body_battery_low = :body_battery_low,
+        stress_average = :stress_average,
+        training_readiness_score = :training_readiness_score,
+        training_readiness_level = :training_readiness_level,
+        recovery_time_minutes = :recovery_time_minutes,
+        recovery_time_change_phrase = :recovery_time_change_phrase,
+        training_status_key = :training_status_key,
+        respiration_avg_brpm = :respiration_avg_brpm,
+        primary_raw_capture_id = :capture_id,
+        normalizer_version = :normalizer_version,
+        updated_at_utc = :now
+    WHERE provider = 'garmin' AND calendar_date = :calendar_date
+"""

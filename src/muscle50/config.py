@@ -20,6 +20,10 @@ class AppPaths:
     database_path: Path
     tmp_dir: Path
 
+    @property
+    def recovery_raw_dir(self) -> Path:
+        return self.root / "raw" / "garmin" / "recovery"
+
     @classmethod
     def from_environment(cls) -> AppPaths:
         override = os.environ.get("MUSCLE50_HOME")
@@ -46,6 +50,7 @@ class AppPaths:
             self.root,
             self.auth_dir,
             self.raw_dir,
+            self.recovery_raw_dir,
             self.database_path.parent,
             self.tmp_dir,
         ):

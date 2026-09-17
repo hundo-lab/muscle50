@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from muscle50.application.sync_garmin_recovery import RecoverySyncResult
 from muscle50.application.sync_latest_garmin import SyncResult
 from muscle50.domain.activity import ActivityMetric, ActivityType, StrengthSet
 from muscle50.domain.derivation import derive_summary
@@ -58,6 +59,45 @@ def render_sync_result(result: SyncResult) -> str:
 
     lines.extend(f"경고: {warning}" for warning in result.warnings)
     return "\n".join(lines)
+
+
+def render_recovery_sync_result(result: RecoverySyncResult) -> str:
+    recovery = result.recovery
+    if result.created:
+        state = "새 recovery 저장 완료"
+    elif result.updated:
+        state = "recovery 갱신 완료"
+    else:
+        state = "이미 저장된 recovery (변경 없음)"
+    lines = [state, "", f"Recovery — {recovery.calendar_date}"]
+    lines.append(
+        f"Sleep: {_duration(recovery.sleep_seconds) if recovery.sleep_seconds is not None else 'unavailable'}"
+    )
+    lines.append(f"Sleep Score: {_number(recovery.sleep_score)}")
+    lines.append(f"HRV: {_number(recovery.hrv_last_night_avg_ms, ' ms')}")
+    lines.append(f"Resting HR: {_number(recovery.resting_heart_rate_bpm, ' bpm')}")
+    if recovery.body_battery_high is None and recovery.body_battery_low is None:
+        lines.append("Body Battery: unavailable")
+    else:
+        lines.append(
+            f"Body Battery: high {_number(recovery.body_battery_high)} / low {_number(recovery.body_battery_low)}"
+        )
+    lines.append(f"Stress: {_number(recovery.stress_average)}")
+    readiness_suffix = f" ({recovery.training_readiness_level})" if recovery.training_readiness_level else ""
+    readiness = _number(recovery.training_readiness_score)
+    lines.append(f"Training Readiness: {readiness}{readiness_suffix if readiness != 'unavailable' else ''}")
+    lines.append(f"Recovery Time: {_number(recovery.recovery_time_minutes, ' min')}")
+    lines.append(f"Training Status: {recovery.training_status_key or 'unavailable'}")
+    lines.append(f"Respiration: {_number(recovery.respiration_avg_brpm, ' brpm')}")
+    lines.extend(f"경고: {warning}" for warning in result.warnings)
+    return "\n".join(lines)
+
+
+def _number(value: float | int | None, suffix: str = "") -> str:
+    if value is None:
+        return "unavailable"
+    rendered = f"{value:g}" if isinstance(value, float) else str(value)
+    return f"{rendered}{suffix}"
 
 
 def _metric_line(

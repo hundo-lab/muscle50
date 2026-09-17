@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from getpass import getpass
 from pathlib import Path
@@ -24,10 +24,21 @@ class GarminRawActivity:
     warnings: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class GarminRawRecovery:
+    requested_date: str
+    payloads: Mapping[str, Any]
+    warnings: tuple[str, ...]
+
+
 class GarminConnector(Protocol):
     def latest_summary(self) -> Mapping[str, Any] | None: ...
 
     def fetch_raw_activity(self, activity_id: str, source_type_key: str) -> GarminRawActivity: ...
+
+
+class GarminRecoveryConnector(Protocol):
+    def fetch_raw_recovery(self, calendar_date: str) -> GarminRawRecovery: ...
 
 
 class PythonGarminConnector:
@@ -128,6 +139,53 @@ class PythonGarminConnector:
             warnings=tuple(warnings),
         )
 
+    def fetch_raw_recovery(self, calendar_date: str) -> GarminRawRecovery:
+        warnings: list[str] = []
+        payloads: dict[str, Any] = {}
+        calls: tuple[tuple[str, str, Callable[[], Any], Callable[[Any], Any]], ...] = (
+            ("sleep", "sleep", lambda: self._api.get_sleep_data(calendar_date), _mapping_or_none),
+            ("daily_stats", "daily stats", lambda: self._api.get_stats(calendar_date), _mapping_or_none),
+            ("hrv", "HRV", lambda: self._api.get_hrv_data(calendar_date), _mapping_or_none),
+            (
+                "resting_heart_rate",
+                "resting heart rate",
+                lambda: self._api.get_rhr_daily(calendar_date, calendar_date),
+                _mapping_list_or_none,
+            ),
+            (
+                "body_battery",
+                "Body Battery",
+                lambda: self._api.get_body_battery(calendar_date, calendar_date),
+                _mapping_list_or_none,
+            ),
+            ("stress", "stress", lambda: self._api.get_all_day_stress(calendar_date), _mapping_or_none),
+            (
+                "training_readiness",
+                "training readiness",
+                lambda: self._api.get_training_readiness(calendar_date),
+                _mapping_or_mapping_list_or_none,
+            ),
+            (
+                "training_status",
+                "training status",
+                lambda: self._api.get_training_status(calendar_date),
+                _mapping_or_none,
+            ),
+            (
+                "respiration",
+                "respiration",
+                lambda: self._api.get_respiration_data(calendar_date),
+                _mapping_or_none,
+            ),
+        )
+        for key, label, call, validator in calls:
+            fetched = self._optional_recovery_call(call, label, validator, warnings)
+            if fetched is not _MISSING:
+                payloads[key] = fetched
+        if not payloads:
+            raise GarminConnectorError("Garmin recovery 원본을 하나도 가져오지 못했습니다.")
+        return GarminRawRecovery(calendar_date, payloads, tuple(warnings))
+
     def _download_original(self, activity_id: str, warnings: list[str]) -> bytes | None:
         try:
             from garminconnect import Garmin
@@ -146,8 +204,54 @@ class PythonGarminConnector:
             warnings.append(f"{label} 원본을 가져오지 못했습니다.")
             return None
 
+    @staticmethod
+    def _optional_recovery_call(
+        call: Callable[[], Any],
+        label: str,
+        validator: Callable[[Any], Any],
+        warnings: list[str],
+    ) -> Any:
+        try:
+            return validator(call())
+        except Exception as exc:
+            if _is_authentication_error(exc):
+                raise GarminConnectorError("Garmin recovery 인증에 실패했습니다.") from exc
+            warnings.append(f"{label} 원본을 가져오지 못했습니다.")
+            return _MISSING
+
 
 def _mapping_or_error(value: Any) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise GarminConnectorError("Garmin activity 응답 형식이 올바르지 않습니다.")
     return value
+
+
+def _mapping_or_none(value: Any) -> Mapping[str, Any] | None:
+    return None if value is None else _mapping_or_error(value)
+
+
+def _mapping_list_or_none(value: Any) -> list[Mapping[str, Any]] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise GarminConnectorError("Garmin recovery 응답 형식이 올바르지 않습니다.")
+    if not all(isinstance(item, Mapping) for item in value):
+        raise GarminConnectorError("Garmin recovery 응답 형식이 올바르지 않습니다.")
+    return list(value)
+
+
+def _mapping_or_mapping_list_or_none(value: Any) -> Mapping[str, Any] | list[Mapping[str, Any]] | None:
+    if value is None or isinstance(value, Mapping):
+        return value
+    return _mapping_list_or_none(value)
+
+
+def _is_authentication_error(exc: Exception) -> bool:
+    try:
+        from garminconnect import GarminConnectAuthenticationError
+    except ImportError:  # pragma: no cover - packaging protects this path
+        return False
+    return isinstance(exc, GarminConnectAuthenticationError)
+
+
+_MISSING = object()
