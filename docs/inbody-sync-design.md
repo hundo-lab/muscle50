@@ -17,7 +17,7 @@ InBodyMeasurementSource
     extract_measurement(raw_detail)
 
 Potential adapters
-    SamsungHealthInBodySource       (gated on Galaxy + Samsung approval)
+    SamsungHealthInBodySource       (implemented for companion JSON; Galaxy SMM gate passed)
     HealthConnectInBodySource       (partial only; not implemented)
     InBodyExportSource              (gated on documented format)
     LookinBodyWebSource             (facility-controlled)
@@ -100,5 +100,7 @@ the measurement SQLite schema.
 
 The application-level `SyncInBody` contract can back `muscle50 inbody sync`, but no production source currently
 passes the discovery gate. Shared CLI/config/bootstrap and shared migration numbering are deliberately untouched.
-After the Galaxy gate and latest-main integration, wiring should report source, discovered/existing/added counts,
-and full versus partial rows without exposing implementation credentials or health values.
+The Galaxy SMM gate and latest-main update are complete on this feature branch. Shared CLI/migration wiring
+still waits for an actual exported JSON -> Windows RAW/normalize/SQLite smoke and duplicate re-import check.
+The feature-local developer smoke entry point reports source, discovered/existing/added/changed counts and
+field presence without exposing health values by default.

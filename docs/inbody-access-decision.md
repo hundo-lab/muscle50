@@ -2,11 +2,11 @@
 
 ## Decision
 
-현재 full automatic production source는 **unavailable**로 판정한다. 가장 유망한 경로는
-`Professional InBody -> InBody App -> Samsung Health -> user-authorized Android companion -> muscle50`이지만,
-마지막 판단에 필요한 "InBody App이 Professional 결과를 Samsung Health Body Composition에 실제로
-WRITE하는가"는 공개 공식 문서만으로 확정되지 않았다. Galaxy smoke test에서 InBody-origin record와
-SMM(kg)을 확인하기 전에는 Android production adapter나 대규모 Android 프로젝트를 추가하지 않는다.
+`Professional InBody -> InBody App -> Samsung Health -> Samsung Health Data SDK` 경로는 사용자의
+실제 Galaxy에서 live 검증되었고, 읽은 Body Composition record에 SMM이 존재함도 확인됐다. 따라서
+Samsung Health Data SDK companion을 **live-validated primary source**로 선택한다. 다만 source
+application/UID 안정성과 나머지 metric, Android JSON -> Windows RAW/normalization/SQLite 재수집 및
+duplicate 동작은 아직 live 검증 전이므로 production integration complete로 판정하지 않는다.
 
 Home-use OAuth는 Professional 결과 경로로 사용하지 않는다. InBody는 공식 개발자 페이지에서
 Professional 장비의 Web API와 home-use 데이터용 OAuth API를 구분한다. private mobile endpoint,
@@ -27,7 +27,7 @@ Source: [InBody Korea FAQ](https://inbody.co.kr/faq/?lst_category=%EC%9D%B8%EB%B
 
 | Access path | Auto | Personal | SMM | Weight | PBF/BFM | Historical | Supported |
 |---|---|---|---|---|---|---|---|
-| InBody App -> Samsung Health | REQUIRES LIVE VERIFICATION | REQUIRES LIVE VERIFICATION | REQUIRES LIVE VERIFICATION | REQUIRES LIVE VERIFICATION | REQUIRES LIVE VERIFICATION | UNKNOWN | REQUIRES LIVE VERIFICATION |
+| InBody App -> Samsung Health Data SDK | CONFIRMED | CONFIRMED | CONFIRMED | REQUIRES LIVE VERIFICATION | REQUIRES LIVE VERIFICATION | UNKNOWN | CONFIRMED |
 | InBody App -> Health Connect | UNKNOWN | UNKNOWN | NOT SUPPORTED | REQUIRES LIVE VERIFICATION | REQUIRES LIVE VERIFICATION | UNKNOWN | UNKNOWN |
 | InBody App machine-readable export | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN |
 | Samsung Health personal-data download | NOT SUPPORTED | CONFIRMED | REQUIRES LIVE VERIFICATION | REQUIRES LIVE VERIFICATION | REQUIRES LIVE VERIFICATION | REQUIRES LIVE VERIFICATION | CONFIRMED |
@@ -40,9 +40,9 @@ Source: [InBody Korea FAQ](https://inbody.co.kr/faq/?lst_category=%EC%9D%B8%EB%B
 
 Notes:
 
-- Samsung Health integration itself and its listed fields are acknowledged by official InBody material, but
-  direction, historical backfill, and inclusion of Professional App results remain unconfirmed. The target
-  path's `Supported` cell therefore stays `REQUIRES LIVE VERIFICATION`.
+- 사용자의 Professional 결과가 Samsung Health Body Composition에 나타나고 SDK에서 SMM을 읽는 경로는
+  live 확인됐다. 표의 weight/PBF/BFM과 historical은 아직 presence를 기록하지 않아 확인 상태를 올리지
+  않았다. 이 확인은 현재 사용자 환경의 evidence이며 모든 지역/App/device 조합을 보장하지 않는다.
 - Health Connect's platform supports Weight and PBF records; whether the classic InBody App writes them is
   unknown. Its current public body-measurement record set has no SMM or BFM record.
 - The InBody terms permit a user to export/download their own content, but no public App CSV/JSON/Excel
@@ -59,10 +59,9 @@ and BMI. The SDK supports change reads. This is materially better than grouping 
 records because it preserves one body-composition record and its source identity.
 
 InBody's official privacy policy lists Samsung Health integration fields as weight, height, BMR, BFM, FFM,
-SMM, and PBF. It does not document transfer direction or state that Professional records already visible in
-the App are written. The newer 2026 InBody terms explicitly describe a user's pre-approved third-party
-hosting for Home Health data, while facility data sharing is described through facility-controlled InBody
-services. Consequently this path remains `REQUIRES LIVE VERIFICATION`, not confirmed production behavior.
+SMM, and PBF. Public material alone did not prove transfer direction, but the user's Galaxy now confirms a
+Professional result can be read as Body Composition and that SMM is populated. `DataSource.appId`, UID
+stability, other metric presence, backfill, and Windows import remain separate live gates.
 
 A read-only companion requires user consent. A publicly distributed companion also requires Samsung partner
 approval and registration of package name/signing certificate; Samsung developer mode is test-only and must
@@ -126,9 +125,10 @@ Sources:
 
 ## Recommended production source and gate
 
-1. **Conditional primary: Samsung Health Data SDK companion.** Proceed only after a Galaxy smoke test finds
-   an InBody-origin `BodyCompositionType` record for a Professional measurement and confirms weight, SMM kg,
-   and PBF or BFM. Public distribution also waits for Samsung partner/signature registration.
+1. **Live-validated primary: Samsung Health Data SDK companion.** Professional Body Composition read and SMM
+   presence passed on the user's Galaxy. Complete the source-app/metric presence report and actual JSON ->
+   Windows duplicate-safe import before production integration. Public distribution still requires Samsung
+   partner/signature registration.
 2. **Partial candidate: Health Connect.** Weight/PBF can be useful if classic InBody WRITE is observed, but
    missing SMM means it cannot satisfy full InBody sync. Never substitute lean mass.
 3. **Export-assisted candidate:** inspect Samsung personal-data export or an official InBody machine-readable
@@ -136,7 +136,17 @@ Sources:
    available.
 4. **Facility fallback:** request LookinBody/LB120/API/export cooperation from the gym.
 
-## Galaxy smoke test (no values collected)
+## Galaxy smoke status and remaining checks (no values collected)
+
+Confirmed on the user's Galaxy:
+
+- Professional InBody result is present in Samsung Health.
+- The diagnostic companion reads a Body Composition record through the actual Samsung Health Data SDK.
+- `skeletal muscle mass: present`.
+- The project builds with the locally supplied Samsung Health Data SDK AAR.
+
+Still to record as presence metadata only: `dataSource.appId`, UID stability, weight, BFM, PBF, BMI, TBW,
+BMR, and historical/backfill behavior.
 
 1. InBody App에서 target Professional 결과가 보이는지 확인하고 App의 공식 Samsung Health/Health Connect
    integration 설정이 있으면 사용자가 직접 활성화한다.
@@ -192,8 +202,8 @@ fixtures, logs, exceptions, or measurement SQLite. No such network adapter or se
 
 ## Questions that remain for InBody/Samsung
 
-- Does the current Korean classic InBody App write Professional-device results to Samsung Health?
-- Is this controlled by the user, the facility's LookinBody configuration, or both?
+- Is Professional-to-Samsung behavior consistent across regions/App versions, and is it controlled by the
+  user, the facility's LookinBody configuration, or both?
 - Which fields, device models, regions, and App versions are supported, and is history backfilled?
 - What package/data source identifies these records, and how are update/delete events represented?
 - Does the App expose a documented CSV/JSON/Excel personal export and versioned schema?

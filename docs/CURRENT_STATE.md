@@ -47,7 +47,10 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 
 ## Not integrated
 
-- `feature/inbody-connector`: 별도 integration 필요
+- `feature/inbody-connector`: Samsung Health Data SDK Android diagnostic companion과 Python JSON source가
+  feature branch에 구현되어 있으나 shared migration/CLI에는 아직 미통합이다. 사용자 Galaxy에서
+  Professional Body Composition read와 SMM presence, Android actual-AAR build는 통과했다. 실제 exported
+  JSON도 Windows RAW/normalization/SQLite에 저장됐고 동일 파일 재수집은 0건 추가로 idempotent했다.
 
 ## Verification
 
@@ -143,6 +146,9 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
   `page_limit_reached`로 표시하고 조용히 잘라내지 않는다.
 - Refresh에서 Strength `exercise_sets` 또는 pool-swim `splits` endpoint가 실패하면 snapshot과
   warning은 보존하지만 불완전한 payload로 canonical child를 지우지 않고 refresh를 거부한다.
+- Samsung Health live export에서 `dataSource.appId=com.inbody2014.inbody`, weight/BMI 2/2,
+  SMM/BFM/PBF/BMR/FFM 1/2, TBW 0/2가 확인됐다. 독립적인 재-export 간 UID/appId 안정성과
+  historical/backfill behavior는 아직 미확인이다.
 
 ## Important decisions
 

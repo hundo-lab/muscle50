@@ -110,3 +110,22 @@ uv run mypy src tests
 ```
 
 테스트 데이터는 실제 계정에서 수집하지 않은 합성 fixture만 사용합니다.
+
+## Samsung Health InBody 개발 smoke
+
+`feature/inbody-connector`에서는 Galaxy diagnostic companion이 export한 JSON을 shared CLI에 연결하기
+전에 feature-local 명령으로 검증할 수 있습니다. 실제 export는 Git worktree가 아니라 다음처럼 local
+application data 아래에 둡니다.
+
+```text
+%LOCALAPPDATA%\muscle50\imports\inbody\samsung-health\latest.json
+```
+
+```powershell
+uv run python -m muscle50.infrastructure.inbody.samsung_health_smoke `
+  "$env:LOCALAPPDATA\muscle50\imports\inbody\samsung-health\latest.json"
+```
+
+기본 출력은 UID/timestamp/metric의 존재 여부와 inserted/existing/changed 상태만 표시하며 실제 건강
+수치는 출력하지 않습니다. 이 개발 명령은 별도 smoke SQLite를 사용하고 아직 `muscle50 inbody sync`
+production CLI나 numbered migration을 변경하지 않습니다.

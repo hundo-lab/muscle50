@@ -22,6 +22,8 @@ from muscle50.infrastructure.inbody.raw_store import InBodyRawArtifact, InBodyRa
 class InBodySyncItem:
     measurement: NormalizedBodyComposition
     created: bool
+    raw_changed: bool
+    raw_artifact: InBodyRawArtifact
     missing_minimum_fields: tuple[str, ...]
 
     @property
@@ -37,6 +39,10 @@ class SyncInBodyResult:
     existing_count: int
     list_snapshot: InBodyRawArtifact
     items: tuple[InBodySyncItem, ...]
+
+    @property
+    def changed_count(self) -> int:
+        return sum(item.raw_changed for item in self.items)
 
 
 class SyncInBody:
@@ -96,6 +102,8 @@ class SyncInBody:
                 InBodySyncItem(
                     saved.measurement,
                     saved.created,
+                    not saved.created and saved.raw_artifact_added,
+                    artifact,
                     _missing_minimum_fields(saved.measurement),
                 )
             )

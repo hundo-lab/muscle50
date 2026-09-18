@@ -53,7 +53,7 @@ class SqliteBodyCompositionRepository:
                 identity = measurement.source_identity
                 measurement_id = self._find_measurement_id(connection, identity)
                 if measurement_id is not None:
-                    connection.execute(
+                    link = connection.execute(
                         """
                         INSERT OR IGNORE INTO body_composition_raw_artifact_links (
                             measurement_id, raw_artifact_id, linked_at_utc
@@ -62,14 +62,14 @@ class SqliteBodyCompositionRepository:
                         (measurement_id, artifact_id, timestamp),
                     )
                     loaded = _load_measurement(connection, measurement_id)
-                    return BodyCompositionSaveResult(loaded, False)
+                    return BodyCompositionSaveResult(loaded, False, link.rowcount == 1)
                 _insert_measurement(connection, measurement, artifact_id, timestamp)
         except sqlite3.IntegrityError:
             existing = self.find(measurement.source_identity)
             if existing is not None:
-                return BodyCompositionSaveResult(existing, False)
+                return BodyCompositionSaveResult(existing, False, False)
             raise
-        return BodyCompositionSaveResult(measurement, True)
+        return BodyCompositionSaveResult(measurement, True, True)
 
     def _find_measurement_id(self, connection: sqlite3.Connection, identity: SourceMeasurementIdentity) -> int | None:
         if identity.source_record_id is not None:

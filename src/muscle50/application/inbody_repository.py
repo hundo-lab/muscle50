@@ -18,6 +18,7 @@ from muscle50.infrastructure.inbody.raw_store import InBodyRawArtifact
 class BodyCompositionSaveResult:
     measurement: NormalizedBodyComposition
     created: bool
+    raw_artifact_added: bool
 
 
 class BodyCompositionRepository(Protocol):
@@ -55,8 +56,10 @@ class InMemoryBodyCompositionRepository:
             identity = measurement.source_identity
             existing = self._measurements.get(identity.key)
             storage_key = identity.key
-            self._artifacts.setdefault(storage_key, set()).add(artifact.sha256)
+            artifacts = self._artifacts.setdefault(storage_key, set())
+            raw_artifact_added = artifact.sha256 not in artifacts
+            artifacts.add(artifact.sha256)
             if existing is not None:
-                return BodyCompositionSaveResult(existing, False)
+                return BodyCompositionSaveResult(existing, False, raw_artifact_added)
             self._measurements[identity.key] = measurement
-            return BodyCompositionSaveResult(measurement, True)
+            return BodyCompositionSaveResult(measurement, True, True)

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">InBody Samsung Health Diagnostic</string>
+    <string name="connect_button">Connect to Samsung Health</string>
+    <string name="export_button">Export diagnostic JSON</string>
+    <string name="show_values_toggle">Developer: show actual values on screen</string>
+    <string name="status_idle">Samsung Health connection: not attempted</string>
+</resources>
