@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from muscle50.application.ingest_activity_range import RangeIngestResult
 from muscle50.application.sync_garmin_recovery import RecoverySyncResult
 from muscle50.application.sync_latest_garmin import SyncResult
 from muscle50.domain.activity import ActivityMetric, ActivityType, StrengthSet
@@ -58,6 +59,24 @@ def render_sync_result(result: SyncResult) -> str:
             _metric_line(lines, metrics, "rep_count", "반복", "")
 
     lines.extend(f"경고: {warning}" for warning in result.warnings)
+    return "\n".join(lines)
+
+
+def render_range_result(result: RangeIngestResult) -> str:
+    lines = [
+        f"기간: {result.from_date.isoformat()} ~ {result.to_date.isoformat()}",
+        f"발견: {result.discovered_count}건",
+        f"신규 저장: {result.inserted_count}건",
+        f"이미 저장됨: {result.skipped_count}건",
+        f"실패: {result.failed_count}건",
+    ]
+    if result.undated_count:
+        lines.append(f"시작 시각 확인 불가로 제외: {result.undated_count}건")
+    if result.page_limit_reached:
+        lines.append("경고: 페이지 조회 한도에 도달해 전체 기간을 확인하지 못했을 수 있습니다.")
+    for outcome in result.outcomes:
+        if outcome.status == "failed":
+            lines.append(f"실패: Garmin activity ID {outcome.source_activity_id} ({outcome.source_type_key})")
     return "\n".join(lines)
 
 

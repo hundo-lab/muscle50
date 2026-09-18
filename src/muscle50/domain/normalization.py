@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from muscle50.domain.activity import ActivityMetric, ActivityType, NormalizedActivity, StrengthSet
@@ -53,6 +53,24 @@ def source_type_from(raw: Mapping[str, Any]) -> str:
 
 def canonical_type(source_type_key: str) -> ActivityType:
     return _TYPE_MAP.get(source_type_key, ActivityType.OTHER)
+
+
+def local_date_from(raw: Mapping[str, Any]) -> date | None:
+    """The calendar date an activity started, preferring Garmin's local timestamp.
+
+    Never resolves a named timezone (e.g. via zoneinfo) to compute this date; Garmin's
+    startTimeLocal string is trusted as-is, matching the domain rule that UTC/local/
+    timezone fields are preserved rather than reinterpreted.
+    """
+    text = raw.get("startTimeLocal")
+    if not isinstance(text, str) or not text:
+        text = raw.get("startTimeGMT")
+    if not isinstance(text, str) or not text:
+        return None
+    try:
+        return datetime.fromisoformat(text).date()
+    except ValueError:
+        return None
 
 
 def normalize_activity(

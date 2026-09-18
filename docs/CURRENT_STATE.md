@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-09-17
+Last updated: 2026-09-19
 
 ## Project goal
 
@@ -13,6 +13,9 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 - 개인정보, Garmin token, RAW 파일, SQLite DB는 기본적으로
   `%LOCALAPPDATA%\muscle50`에 저장한다.
 - Garmin Activity Sync는 immutable RAW artifact와 normalized SQLite activity를 분리한다.
+- `IngestGarminActivity`(RAW capture → normalize → persist, Strength/Swim local backfill 포함)가
+  단일 canonical per-activity ingestion path이며, `garmin latest`와 `garmin activities
+  --from/--to`가 동일하게 이 경로를 사용한다.
 - Garmin Recovery Sync는 endpoint별 content-addressed RAW snapshot history와 날짜별 최신
   normalized row를 분리하고, normalized row에서 accepted source capture를 추적한다.
 - SQLite schema는 package에 포함된 numbered migration을 순서대로 적용한다.
@@ -23,6 +26,10 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 ## Implemented
 
 - 최신 Garmin activity 1건 동기화 및 activity ID 기반 idempotency
+- 날짜 범위 Garmin activity 동기화(`garmin activities --from/--to`): newest-first pagination,
+  범위 밖 activity 발견 시 안전한 pagination 중단, 페이지 간 중복 activity 제거,
+  activity별 실패 격리(inserted/skipped/failed count), `garmin latest`와 동일한 canonical
+  per-activity ingestion path 재사용
 - Garmin RAW JSON/original archive 보존과 normalized activity 저장
 - 러닝, 수영, 웨이트 등 기본 activity 요약
 - Garmin strength exercise set 정규화, SQLite 저장 및 기존 RAW 기반 local backfill
@@ -38,6 +45,20 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 - `feature/inbody-connector`: 별도 integration 필요
 
 ## Verification
+
+2026-09-19 garmin-activity-ingestion(날짜 범위 동기화) 작업에서 실행:
+
+```powershell
+uv sync --extra dev
+uv run pytest -q
+uv run ruff check .
+uv run mypy src tests
+git diff --check
+```
+
+결과: 전체 178 tests 통과(기존 151 + 신규 27), Ruff 통과, `mypy src tests` 통과(47 files).
+`garmin latest`, Strength, Swim 기존 회귀 테스트는 변경 없이 모두 통과했다. 실제 Garmin
+API는 호출하지 않았고 synthetic fixture만 사용했다.
 
 2026-09-17 Recovery production integration에서 실행:
 
@@ -79,6 +100,9 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
 - 기존 provisional nutrition schema로 직접 만든 외부 DB가 있다면 정식 migration marker가
   없으므로 별도 호환성 검토가 필요하다.
 - InBody가 통합될 경우 migration 번호는 최신 global chain 5 이후로 다시 배정해야 한다.
+- 날짜 범위 동기화의 pagination은 안전장치로 50페이지(최대 1000개 activity)까지만 조회한다.
+  계정에 최근 activity가 매우 많으면 이 한도에 먼저 도달할 수 있으며, 이 경우 결과에
+  `page_limit_reached`로 표시하고 조용히 잘라내지 않는다.
 
 ## Important decisions
 
@@ -92,3 +116,11 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
   `005_daily_recovery.sql`로 재통합했다.
 - Recovery endpoint는 개별 실패를 warning으로 격리하되 인증 오류와 전 endpoint 실패는 전체
   sync 실패로 처리한다.
+- `SyncLatestGarminActivity.execute()`의 activity별 로직(RAW capture, normalize, Strength/Swim
+  local backfill 포함)을 `IngestGarminActivity`로 추출해 `garmin latest`와 `garmin activities
+  --from/--to`가 같은 코드를 공유하도록 했다. Swim이 필요로 하는 lap/length 계층은 이미
+  모든 activity에서 무조건 가져오는 `splits` RAW로 충분해 새 RAW endpoint나 migration을
+  추가하지 않았다.
+- 날짜 범위 sync/run 결과는 CLI 출력의 inserted/skipped/failed count로 제공한다. 기존 스키마의
+  `sync_runs` 테이블은 여전히 어떤 코드에서도 쓰지 않는 상태로 남겨 두었다 — command/error_code
+  값 체계가 아직 정의되어 있지 않아 이번 범위에서 추측해 만들지 않았다.

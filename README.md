@@ -53,6 +53,19 @@ muscle50 garmin latest
 `strength_sets` 테이블을 추가하며, 이미 보존된 웨이트 RAW가 있으면 원격 상세 API를 다시 호출하지
 않고 해당 파일에서 세트를 백필합니다.
 
+## 기간별 Garmin activity 동기화
+
+```powershell
+muscle50 garmin activities --from 2026-01-01 --to 2026-01-31
+```
+
+`--from`/`--to`는 포함 범위의 local 날짜(YYYY-MM-DD)이며 잘못된 날짜/범위는 로그인이나
+네트워크 호출 전에 거부합니다. `garmin latest`와 동일한 RAW 저장·normalization·persistence
+경로를 activity마다 그대로 재사용하므로 웨이트 세트, 수영 lap/length 정규화도 동일하게
+적용됩니다. 이미 저장된 activity는 다시 가져오지 않고 건너뛰며, 한 activity가 실패해도 나머지
+activity는 계속 처리됩니다. 실행할 때마다 발견/신규 저장/이미 저장됨/실패 건수를 요약해서
+보여줍니다.
+
 ## Garmin recovery 동기화
 
 Garmin 계정의 달력 날짜를 명시해 수면, HRV, 안정시 심박, Body Battery, 스트레스, 훈련

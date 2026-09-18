@@ -34,6 +34,8 @@ class GarminRawRecovery:
 class GarminConnector(Protocol):
     def latest_summary(self) -> Mapping[str, Any] | None: ...
 
+    def list_activities(self, start: int, limit: int) -> Sequence[Mapping[str, Any]]: ...
+
     def fetch_raw_activity(self, activity_id: str, source_type_key: str) -> GarminRawActivity: ...
 
 
@@ -98,19 +100,15 @@ class PythonGarminConnector:
             raise GarminConnectorError("Garmin Connect에 연결할 수 없습니다.") from exc
 
     def latest_summary(self) -> Mapping[str, Any] | None:
+        activities = self.list_activities(0, 1)
+        return activities[0] if activities else None
+
+    def list_activities(self, start: int, limit: int) -> tuple[Mapping[str, Any], ...]:
         try:
-            activities = self._api.get_activities(0, 1)
+            activities = self._api.get_activities(start, limit)
         except Exception as exc:
-            raise GarminConnectorError("Garmin 최신 activity 조회에 실패했습니다.") from exc
-        if not activities:
-            return None
-        if isinstance(activities, list) and isinstance(activities[0], Mapping):
-            return activities[0]
-        if isinstance(activities, Mapping):
-            activity_list = activities.get("activityList")
-            if isinstance(activity_list, list) and activity_list and isinstance(activity_list[0], Mapping):
-                return activity_list[0]
-        raise GarminConnectorError("Garmin 최신 activity 응답 형식이 올바르지 않습니다.")
+            raise GarminConnectorError("Garmin activity 목록 조회에 실패했습니다.") from exc
+        return _activity_list_from(activities)
 
     def fetch_raw_activity(self, activity_id: str, source_type_key: str) -> GarminRawActivity:
         warnings: list[str] = []
@@ -224,6 +222,20 @@ def _mapping_or_error(value: Any) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise GarminConnectorError("Garmin activity 응답 형식이 올바르지 않습니다.")
     return value
+
+
+def _activity_list_from(value: Any) -> tuple[Mapping[str, Any], ...]:
+    if not value:
+        return ()
+    if isinstance(value, list):
+        if all(isinstance(item, Mapping) for item in value):
+            return tuple(value)
+        raise GarminConnectorError("Garmin activity 목록 응답 형식이 올바르지 않습니다.")
+    if isinstance(value, Mapping):
+        activity_list = value.get("activityList")
+        if isinstance(activity_list, list) and all(isinstance(item, Mapping) for item in activity_list):
+            return tuple(activity_list)
+    raise GarminConnectorError("Garmin activity 목록 응답 형식이 올바르지 않습니다.")
 
 
 def _mapping_or_none(value: Any) -> Mapping[str, Any] | None:

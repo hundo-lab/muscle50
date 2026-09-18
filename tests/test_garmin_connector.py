@@ -85,6 +85,24 @@ def test_cardio_activity_does_not_request_strength_sets(monkeypatch: Any) -> Non
     assert all(name != "get_activity_exercise_sets" for name, _ in api.calls)
 
 
+def test_list_activities_pages_through_raw_get_activities(monkeypatch: Any) -> None:
+    api = FakeApi()
+    connector = PythonGarminConnector(api)
+
+    activities = connector.list_activities(20, 20)
+
+    assert api.calls == [("get_activities", (20, 20))]
+    assert activities == ({"activityId": 321, "activityType": {"typeKey": "running"}},)
+
+
+def test_list_activities_returns_empty_tuple_for_no_activities(monkeypatch: Any) -> None:
+    api = FakeApi()
+    monkeypatch.setattr(api, "get_activities", lambda start, limit: [])
+    connector = PythonGarminConnector(api)
+
+    assert connector.list_activities(0, 20) == ()
+
+
 def test_authentication_prompts_without_tokens_and_saves_to_private_path(monkeypatch: Any, tmp_path: Any) -> None:
     observed: dict[str, Any] = {}
 

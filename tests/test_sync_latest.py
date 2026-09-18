@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-import muscle50.application.sync_latest_garmin as sync_module
+import muscle50.application.ingest_activity as ingest_module
 from muscle50.application.sync_latest_garmin import SyncLatestGarminActivity
 from muscle50.config import AppPaths
 from muscle50.domain.swim_normalization import SwimNormalizationError, normalize_garmin_swim
@@ -67,6 +67,9 @@ class FakeConnector:
     def latest_summary(self) -> Mapping[str, Any]:
         self.latest_calls += 1
         return self.summary
+
+    def list_activities(self, start: int, limit: int) -> tuple[Mapping[str, Any], ...]:
+        raise NotImplementedError("this fixture only exercises garmin latest")
 
     def fetch_raw_activity(self, activity_id: str, source_type_key: str) -> GarminRawActivity:
         self.raw_calls += 1
@@ -167,7 +170,7 @@ def test_pool_swim_sync_normalizes_persists_and_renders_detail(
         calls.append(str(summary["activityId"]))
         return normalize_garmin_swim(summary, activity, splits)
 
-    monkeypatch.setattr(sync_module, "normalize_garmin_swim", tracking_normalizer)
+    monkeypatch.setattr(ingest_module, "normalize_garmin_swim", tracking_normalizer)
     connector = FakeConnector(
         payload["summary"],
         activity=payload["activity"],
@@ -240,7 +243,7 @@ def test_non_pool_activity_does_not_call_swim_normalizer(
     source_type_key: str,
 ) -> None:
     monkeypatch.setattr(
-        sync_module,
+        ingest_module,
         "normalize_garmin_swim",
         lambda *_args: pytest.fail("swim normalizer must not be called"),
     )
