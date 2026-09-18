@@ -1,0 +1,41 @@
+{
+  "schema": "muscle50.samsung_health.inbody_diagnostic_export.v1",
+  "schema_version": "1",
+  "source_type": "inbody_samsung_health",
+  "exported_at": "2026-09-18T00:00:00Z",
+  "source_sdk_name": "Samsung Health Data SDK",
+  "source_sdk_version": "1.1.0-test",
+  "profile_key": "synthetic-profile-key",
+  "companion_app_id": "com.muscle50.inbodydiagnostic",
+  "records": [
+    {
+      "source_record_id": "synthetic-samsung-uid",
+      "measured_at": "2026-09-18T08:00:00",
+      "zone_offset": "+09:00",
+      "data_source_app_id": "com.inbody2014.inbody",
+      "data_source_device_id": null,
+      "fields": {
+        "weight": {
+          "value": 70.0,
+          "unit": "kg",
+          "path": "BodyCompositionType.WEIGHT"
+        },
+        "skeletal_muscle_mass": {
+          "value": 31.0,
+          "unit": "kg",
+          "path": "BodyCompositionType.SKELETAL_MUSCLE_MASS"
+        },
+        "body_fat_mass": null,
+        "body_fat_percent": {
+          "value": 20.0,
+          "unit": "%",
+          "path": "BodyCompositionType.BODY_FAT"
+        },
+        "bmi": null,
+        "basal_metabolic_rate": null,
+        "total_body_water": null,
+        "fat_free_mass": null
+      }
+    }
+  ]
+}

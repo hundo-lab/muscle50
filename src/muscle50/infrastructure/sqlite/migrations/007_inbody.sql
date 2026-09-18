@@ -155,9 +155,7 @@ CREATE TABLE IF NOT EXISTS body_composition_metrics (
     UNIQUE (measurement_id, metric_key)
 );
 
--- Feature-local schema draft: integration assigns the shared migration number
--- after rebasing on the latest main. A later migration may add append-only
--- correction/derived tables. RAW and normalized rows are not updated by
--- derivation; derived values must retain algorithm/version metadata.
+INSERT OR IGNORE INTO schema_migrations(version, applied_at_utc)
+VALUES (7, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
 
 COMMIT;

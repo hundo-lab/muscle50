@@ -1,7 +1,7 @@
 # Samsung Health InBody diagnostic payload contract (v1)
 
-Status: versioned diagnostic interchange contract and live-validated Windows ingestion input, not yet a
-shared production CLI contract. The Android side has built successfully against the user's local Samsung
+Status: versioned diagnostic interchange contract and live-validated production CLI input. The Android side
+has built successfully against the user's local Samsung
 Health Data SDK 1.1.0 AAR. A real Galaxy export has passed RAW preservation, normalization, SQLite storage,
 and duplicate re-import on Windows. Items not observed in those live checks remain `UNKNOWN` and must not be
 guessed.
@@ -68,12 +68,9 @@ guessed.
 
 ## `UNKNOWN` — do not guess these
 
-- Whether `DataSource.appId` reflects the original third-party app that wrote a partner-contributed data
-  point (e.g. an InBody package identifier), or always reports Samsung Health's own package
-  (`com.sec.android.app.shealth`) regardless of which partner app supplied the value. The docs state only
-  what Samsung Health's own `appId` is; they do not describe partner attribution. This is exactly the
-  Phase 7 question and must be read from a live `dataSource.appId` value at the Galaxy smoke test, never
-  assumed either way.
+- Whether the live-observed `DataSource.appId` value `com.inbody2014.inbody` remains stable across future
+  InBody App versions, regions, and Samsung Health versions. The current production policy recognizes only
+  this exact live-confirmed value and does not infer InBody origin for any other or missing app ID.
 - Change-token acquisition, ordering guarantees, duplicate handling, and token expiry for
   `readChanges`/`readChangesAsync`. The programming guide shows only a time-range-filtered example; API
   reference detail beyond that was not available from the pages fetched.
@@ -153,9 +150,9 @@ Rules:
   present — the record stays partial rather than backfilled from a different metric.
 - `path` values are exact Samsung Kotlin identifiers (`BodyCompositionType.<FIELD>`) so provenance can be
   audited against the field table above without re-deriving it later.
-- `data_source_app_id` is copied verbatim from `DataSource.appId` and is never used, by itself, to assert
-  that a record originated from InBody (see Phase 7 in `docs/HANDOFF.md`/the review doc). It is provenance,
-  not a classification.
+- `data_source_app_id` is copied verbatim from `DataSource.appId`. The production source selects only the exact
+  live-confirmed value `com.inbody2014.inbody`; another or missing app ID is preserved in the list RAW but is
+  not normalized as InBody. No timestamp/value heuristic is used to override this decision.
 - `source_record_id` (Samsung's `uid`) is required and must be unique per export. Two records sharing a
   `source_record_id` are accepted only if their parsed JSON record structures are equal (a harmless
   re-export/retry duplicate; object key order and equivalent JSON number spellings are irrelevant). Any
@@ -180,18 +177,17 @@ Do not place a live export anywhere in the Git worktree. Copy it to a local appl
 ```
 
 The repository ignores common RAW/database locations, but keeping personal health data entirely outside the
-repository is safer. Run the feature-local developer entry point from the repository root:
+repository is safer. Run the production file-import CLI from the repository root:
 
 ```powershell
-uv run python -m muscle50.infrastructure.inbody.samsung_health_smoke `
+uv run muscle50 inbody sync --file `
   "$env:LOCALAPPDATA\muscle50\imports\inbody\samsung-health\latest.json"
 ```
 
-By default it prints only record counts, UID/timestamp/metric presence, inserted/existing/changed status, and
-artifact/database paths. It stores the smoke database at
-`%LOCALAPPDATA%\muscle50\db\inbody-samsung-health-smoke.sqlite3` and immutable RAW under
-`%LOCALAPPDATA%\muscle50\raw\inbody\samsung_health`. `--show-values` is explicit opt-in and should not be
-used when capturing logs or issue reports.
+By default it prints only record counts and inserted/existing/changed status. It stores normalized data in the
+shared `%LOCALAPPDATA%\muscle50\db\muscle50.sqlite3` database and immutable RAW under
+`%LOCALAPPDATA%\muscle50\raw\inbody\samsung_health`. `--show-values` is explicit opt-in and should not be used
+when capturing logs or issue reports.
 
 ## Not covered by v1
 

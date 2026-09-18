@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
 
 from muscle50.cli import build_parser, main
 from muscle50.infrastructure.garmin.client import PythonGarminConnector
+
+SAMSUNG_FIXTURE = Path(__file__).parent / "fixtures" / "inbody" / "synthetic_samsung_health_export_v1.json"
 
 
 def test_cli_parses_garmin_latest() -> None:
@@ -108,6 +111,15 @@ def test_cli_rejects_unknown_local_refresh_id_before_authentication(
     assert "local Garmin activity not found" in capsys.readouterr().err
 
 
+def test_cli_parses_inbody_sync_file() -> None:
+    args = build_parser().parse_args(["inbody", "sync", "--file", "export.json"])
+
+    assert args.command == "inbody"
+    assert args.inbody_command == "sync"
+    assert args.file == Path("export.json")
+    assert args.show_values is False
+
+
 def test_cli_rejects_invalid_recovery_date_before_authentication(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -133,3 +145,53 @@ def test_cli_reports_safe_configuration_error(
 
     assert exit_code == 1
     assert "LOCALAPPDATA" in capsys.readouterr().err
+
+
+def test_cli_inbody_sync_is_private_idempotent_and_uses_shared_database(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    payload = SAMSUNG_FIXTURE
+    muscle50_home = tmp_path / "muscle50-home"
+    monkeypatch.setenv("MUSCLE50_HOME", str(muscle50_home))
+
+    assert main(["inbody", "sync", "--file", str(payload)]) == 0
+    first = capsys.readouterr()
+    assert "Source: Samsung Health / InBody" in first.out
+    assert "Records discovered: 1" in first.out
+    assert "Inserted: 1" in first.out
+    assert "70.0" not in first.out + first.err
+
+    assert main(["inbody", "sync", "--file", str(payload)]) == 0
+    second = capsys.readouterr()
+    assert "Inserted: 0" in second.out
+    assert "Already existing: 1" in second.out
+    assert "Changed RAW conflicts: 0" in second.out
+
+    database_path = muscle50_home / "db" / "muscle50.sqlite3"
+    with sqlite3.connect(database_path) as connection:
+        measurement_count = connection.execute("SELECT COUNT(*) FROM body_composition_measurements").fetchone()[0]
+        detail_raw_count = connection.execute("SELECT COUNT(*) FROM inbody_raw_artifacts").fetchone()[0]
+        migration_versions = connection.execute(
+            "SELECT version FROM schema_migrations ORDER BY version"
+        ).fetchall()
+    raw_json_count = len(list((muscle50_home / "raw" / "inbody" / "samsung_health").rglob("*.json")))
+
+    assert measurement_count == 1
+    assert detail_raw_count == 1
+    assert raw_json_count == 2
+    assert migration_versions == [(1,), (2,), (3,), (4,), (5,), (6,), (7,)]
+
+
+def test_cli_inbody_show_values_requires_explicit_option(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    payload = SAMSUNG_FIXTURE
+    monkeypatch.setenv("MUSCLE50_HOME", str(tmp_path / "muscle50-home"))
+
+    assert main(["inbody", "sync", "--file", str(payload), "--show-values"]) == 0
+
+    assert "weight_kg=70.0" in capsys.readouterr().out

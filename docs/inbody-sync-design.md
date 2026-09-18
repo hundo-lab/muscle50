@@ -98,9 +98,11 @@ the measurement SQLite schema.
 
 ## CLI integration state
 
-The application-level `SyncInBody` contract can back `muscle50 inbody sync`, but no production source currently
-passes the discovery gate. Shared CLI/config/bootstrap and shared migration numbering are deliberately untouched.
-The Galaxy SMM gate and latest-main update are complete on this feature branch. Shared CLI/migration wiring
-still waits for an actual exported JSON -> Windows RAW/normalize/SQLite smoke and duplicate re-import check.
-The feature-local developer smoke entry point reports source, discovered/existing/added/changed counts and
-field presence without exposing health values by default.
+`SamsungHealthInBodySource` is the production source for versioned Galaxy companion exports. It classifies only
+records whose `dataSource.appId` is exactly `com.inbody2014.inbody`, the value observed in the live Galaxy export;
+other or missing app IDs remain in the immutable list RAW but are not normalized as InBody measurements.
+
+`muscle50 inbody sync --file <export.json>` uses the source-neutral `SyncInBody` application use case, shared
+SQLite database, migration `007_inbody.sql`, and the configured InBody RAW directory. The CLI transport does not
+read Samsung Health directly and can later be replaced or supplemented by an Android push/receiver. Default
+terminal output contains counts and status only; `--show-values` is explicit opt-in.

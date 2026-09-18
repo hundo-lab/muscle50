@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from muscle50.infrastructure.sqlite.body_composition import apply_inbody_schema
+from muscle50.infrastructure.sqlite.database import ActivityRepository
+
+
+def _migrate(database_path: Path) -> None:
+    ActivityRepository(database_path).migrate()
 
 
 def _artifact(connection: sqlite3.Connection) -> None:
@@ -58,9 +62,10 @@ def _source_id(
 def test_source_identity_is_namespaced_and_canonical_fingerprint_is_not_unique(
     tmp_path: Path,
 ) -> None:
-    with sqlite3.connect(tmp_path / "schema.sqlite3") as connection:
+    database_path = tmp_path / "schema.sqlite3"
+    _migrate(database_path)
+    with sqlite3.connect(database_path) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
-        apply_inbody_schema(connection)
         _artifact(connection)
         samsung_id = _measurement(connection)
         export_id = _measurement(connection)
@@ -89,9 +94,10 @@ def test_source_identity_is_namespaced_and_canonical_fingerprint_is_not_unique(
 
 
 def test_source_fingerprint_is_unique_only_inside_source_namespace(tmp_path: Path) -> None:
-    with sqlite3.connect(tmp_path / "schema.sqlite3") as connection:
+    database_path = tmp_path / "schema.sqlite3"
+    _migrate(database_path)
+    with sqlite3.connect(database_path) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
-        apply_inbody_schema(connection)
         _artifact(connection)
         first_id = _measurement(connection)
         second_id = _measurement(connection)
@@ -109,9 +115,10 @@ def test_source_fingerprint_is_unique_only_inside_source_namespace(tmp_path: Pat
 
 
 def test_measurement_cannot_have_two_primary_source_identities(tmp_path: Path) -> None:
-    with sqlite3.connect(tmp_path / "schema.sqlite3") as connection:
+    database_path = tmp_path / "schema.sqlite3"
+    _migrate(database_path)
+    with sqlite3.connect(database_path) as connection:
         connection.execute("PRAGMA foreign_keys = ON")
-        apply_inbody_schema(connection)
         _artifact(connection)
         measurement_id = _measurement(connection)
         _source_id(

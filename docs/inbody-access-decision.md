@@ -5,8 +5,8 @@
 `Professional InBody -> InBody App -> Samsung Health -> Samsung Health Data SDK` 경로는 사용자의
 실제 Galaxy에서 live 검증되었고, 읽은 Body Composition record에 SMM이 존재함도 확인됐다. 따라서
 Samsung Health Data SDK companion을 **live-validated primary source**로 선택한다. 다만 source
-application/UID 안정성과 나머지 metric, Android JSON -> Windows RAW/normalization/SQLite 재수집 및
-duplicate 동작은 아직 live 검증 전이므로 production integration complete로 판정하지 않는다.
+application의 장기 안정성과 UID의 독립적인 재-export 간 안정성, historical/backfill behavior는 계속
+검증한다. Android JSON -> Windows RAW/normalization/SQLite와 동일 파일 duplicate 재수집은 통과했다.
 
 Home-use OAuth는 Professional 결과 경로로 사용하지 않는다. InBody는 공식 개발자 페이지에서
 Professional 장비의 Web API와 home-use 데이터용 OAuth API를 구분한다. private mobile endpoint,
@@ -126,9 +126,9 @@ Sources:
 ## Recommended production source and gate
 
 1. **Live-validated primary: Samsung Health Data SDK companion.** Professional Body Composition read and SMM
-   presence passed on the user's Galaxy. Complete the source-app/metric presence report and actual JSON ->
-   Windows duplicate-safe import before production integration. Public distribution still requires Samsung
-   partner/signature registration.
+   presence, `dataSource.appId=com.inbody2014.inbody`, metric presence report, and actual JSON -> Windows
+   duplicate-safe import passed on the user's Galaxy/Windows environment. Production classification uses that
+   exact app ID only. Public distribution still requires Samsung partner/signature registration.
 2. **Partial candidate: Health Connect.** Weight/PBF can be useful if classic InBody WRITE is observed, but
    missing SMM means it cannot satisfy full InBody sync. Never substitute lean mass.
 3. **Export-assisted candidate:** inspect Samsung personal-data export or an official InBody machine-readable

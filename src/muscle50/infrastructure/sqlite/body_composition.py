@@ -8,7 +8,6 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
-from importlib.resources import files
 from pathlib import Path
 
 from muscle50.application.inbody_repository import (
@@ -23,6 +22,7 @@ from muscle50.domain.body_composition import (
     SourceMeasurementIdentity,
 )
 from muscle50.infrastructure.inbody.raw_store import InBodyRawArtifact
+from muscle50.infrastructure.sqlite.database import ActivityRepository
 
 
 class SqliteBodyCompositionRepository:
@@ -30,8 +30,7 @@ class SqliteBodyCompositionRepository:
         self._database_path = database_path
 
     def migrate(self) -> None:
-        with _connect(self._database_path) as connection:
-            apply_inbody_schema(connection)
+        ActivityRepository(self._database_path).migrate()
 
     def find(self, identity: SourceMeasurementIdentity) -> NormalizedBodyComposition | None:
         with _connect(self._database_path) as connection:
@@ -101,12 +100,6 @@ class SqliteBodyCompositionRepository:
             ),
         ).fetchone()
         return int(row["id"]) if row is not None else None
-
-
-def apply_inbody_schema(connection: sqlite3.Connection) -> None:
-    """Apply the feature-local draft schema without reserving a migration number."""
-    schema = files("muscle50.infrastructure.sqlite").joinpath("inbody_schema.sql").read_text(encoding="utf-8")
-    connection.executescript(schema)
 
 
 @contextmanager

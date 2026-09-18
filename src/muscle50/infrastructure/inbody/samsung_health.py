@@ -34,6 +34,7 @@ from muscle50.domain.body_composition import (
 )
 
 SOURCE_TYPE = "inbody_samsung_health"
+INBODY_SOURCE_APPLICATION_ID = "com.inbody2014.inbody"
 SUPPORTED_SCHEMA_VERSION = "1"
 _ENVELOPE_SCHEMA = "muscle50.samsung_health.inbody_diagnostic_export.v1"
 _RECORD_SCHEMA = "muscle50.samsung_health.inbody_record.v1"
@@ -102,7 +103,11 @@ class SamsungHealthInBodySource:
         if self._document == document.document:
             self._envelope = envelope
         profile_key = envelope["profile_key"]
-        return tuple(_reference(record, profile_key) for record in envelope["records"])
+        return tuple(
+            _reference(record, profile_key)
+            for record in envelope["records"]
+            if _is_inbody_record(record)
+        )
 
     def get_measurement(self, reference: InBodyMeasurementReference) -> RawInBodyDocument:
         # Use the exact snapshot returned by list_measurements. Re-reading a file that can be
@@ -114,6 +119,8 @@ class SamsungHealthInBodySource:
             self._document = document
             self._envelope = envelope
         for record in envelope["records"]:
+            if not _is_inbody_record(record):
+                continue
             if reference.detail_key != _detail_key(record):
                 continue
             payload = {
@@ -223,6 +230,11 @@ def _detail_key(record: Mapping[str, Any]) -> str:
     if isinstance(source_record_id, str) and source_record_id.strip():
         return f"record:{source_record_id.strip()}"
     return "record:missing-uid"
+
+
+def _is_inbody_record(record: Mapping[str, Any]) -> bool:
+    """Classify only the source application confirmed by the live Galaxy export."""
+    return record.get("data_source_app_id") == INBODY_SOURCE_APPLICATION_ID
 
 
 def _reference(record: Mapping[str, Any], profile_key: str) -> InBodyMeasurementReference:

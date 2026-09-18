@@ -45,12 +45,13 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 - Nutrition meal/food profile domain, parser/repository ports, Decimal 기반 계산과 직렬화
 - Nutrition meal/food profile SQLite repository와 supersession-aware append-only fact 저장
 
-## Not integrated
+## Pending merge
 
 - `feature/inbody-connector`: Samsung Health Data SDK Android diagnostic companion과 Python JSON source가
-  feature branch에 구현되어 있으나 shared migration/CLI에는 아직 미통합이다. 사용자 Galaxy에서
+  feature branch에서 shared migration/DB/CLI까지 통합됐다. 사용자 Galaxy에서
   Professional Body Composition read와 SMM presence, Android actual-AAR build는 통과했다. 실제 exported
   JSON도 Windows RAW/normalization/SQLite에 저장됐고 동일 파일 재수집은 0건 추가로 idempotent했다.
+  아직 main에는 merge하지 않았다.
 
 ## Verification
 
@@ -107,6 +108,11 @@ git diff --check
 `mypy src tests` 통과. migration tests에서 새 DB의 001 → 005 순차 적용, 기존 001~004 DB의
 version 5 추가, 전체 migration 반복 적용 idempotency를 확인했다.
 
+2026-09-18 InBody production integration에서 전체 241 tests, Ruff, `mypy src`(43 files), `uv build`,
+`git diff --check`, Android actual-AAR `:app:assembleDebug`가 통과했다. clean temporary home의
+`muscle50 inbody sync --file` 2회 smoke에서 migration 1~6, normalized 1 row, duplicate 0건 추가,
+list/detail RAW 2 files를 확인했다.
+
 ## SQLite migrations
 
 1. `001_initial.sql` — Garmin activity/RAW/correction 기본 schema
@@ -115,10 +121,16 @@ version 5 추가, 전체 migration 반복 적용 idempotency를 확인했다.
 4. `004_swim_details.sql` — normalized pool swim activity/lap/length hierarchy
 5. `005_daily_recovery.sql` — recovery RAW capture history와 날짜별 normalized latest row
 6. `006_activity_refresh.sql` — activity refresh RAW capture history와 canonical accepted-capture pointer
+7. `007_inbody.sql` — InBody RAW provenance, source identity, normalized body composition
 
 `SqliteMealRepository`와 `SqliteFoodNutritionRepository`의 `migrate()`는 공용 numbered
 migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거되어 schema source는
-`003_nutrition.sql` 하나다. Recovery repository도 같은 공용 numbered migration loader를 사용한다.
+`003_nutrition.sql` 하나다. Recovery와 InBody repository도 같은 공용 numbered migration loader를
+사용하며 feature-local `inbody_schema.sql`은 `007_inbody.sql`로 승격되어 제거됐다. InBody는
+원래 `006_inbody.sql`로 준비됐으나, main이 같은 번호로 `006_activity_refresh.sql`을 먼저
+통합해 실제 실행 시 `schema_migrations`의 `INSERT OR IGNORE ... VALUES (6, ...)`가 조용히
+무시되고 InBody DDL만 버전 마커 없이 실행되는 충돌이 있었다. Integration 시점에 `007_inbody.sql`로
+재번호를 매겨 해결했다.
 
 ## Known issues
 

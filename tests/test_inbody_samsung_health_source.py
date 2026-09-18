@@ -25,6 +25,7 @@ from muscle50.infrastructure.inbody.samsung_health import SamsungHealthInBodySou
 from muscle50.infrastructure.inbody.samsung_health_smoke import main as smoke_main
 
 PROFILE_KEY = "5e6f2c9a-0000-0000-0000-000000000000"
+INBODY_APP_ID = "com.inbody2014.inbody"
 
 
 def _record(
@@ -32,7 +33,7 @@ def _record(
     source_record_id: str = "samsung-uid-1",
     measured_at: str = "2026-09-17T08:55:00",
     zone_offset: str | None = "+09:00",
-    data_source_app_id: str | None = "com.sec.android.app.shealth",
+    data_source_app_id: str | None = INBODY_APP_ID,
     weight: float | None = 70.0,
     skeletal_muscle_mass: float | None = 31.2,
     body_fat_mass: float | None = None,
@@ -117,7 +118,7 @@ def test_full_body_composition_record_syncs_as_a_full_measurement(tmp_path: Path
     # SMM identity comes from Samsung's uid directly; there is no fingerprint fallback here.
     assert item.measurement.source_identity.source_fingerprint is None
     assert item.raw_artifact.source_record_id == "samsung-uid-1"
-    assert item.raw_artifact.source_application == "com.sec.android.app.shealth"
+    assert item.raw_artifact.source_application == INBODY_APP_ID
     assert item.raw_artifact.source_schema_version == "1"
 
 
@@ -256,16 +257,38 @@ def test_wrong_source_type_is_rejected(tmp_path: Path) -> None:
         _sync(tmp_path, payload, InMemoryBodyCompositionRepository()).execute()
 
 
-def test_missing_source_application_does_not_fail_the_sync(tmp_path: Path) -> None:
+def test_missing_source_application_is_not_classified_as_inbody(tmp_path: Path) -> None:
     payload = _write(
         tmp_path,
         _envelope([_record(data_source_app_id=None)]),
     )
     result = _sync(tmp_path, payload, InMemoryBodyCompositionRepository()).execute()
 
+    assert result.listed_count == 0
+    assert result.created_count == 0
+    assert result.items == ()
+
+
+def test_other_samsung_source_application_is_not_classified_as_inbody(tmp_path: Path) -> None:
+    payload = _write(
+        tmp_path,
+        _envelope(
+            [
+                _record(source_record_id="inbody-uid"),
+                _record(
+                    source_record_id="other-uid",
+                    data_source_app_id="com.example.other.health.source",
+                ),
+            ]
+        ),
+    )
+
+    result = _sync(tmp_path, payload, InMemoryBodyCompositionRepository()).execute()
+
+    assert result.listed_count == 1
     assert result.created_count == 1
-    assert result.items[0].measurement.weight_kg == 70.0
-    assert result.items[0].raw_artifact.source_application is None
+    assert result.items[0].measurement.source_identity.source_record_id == "inbody-uid"
+    assert result.items[0].raw_artifact.source_application == INBODY_APP_ID
 
 
 def test_unrecognized_unit_is_rejected_as_payload_schema_drift(tmp_path: Path) -> None:
