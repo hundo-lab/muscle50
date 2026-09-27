@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from muscle50.application.sync_latest_inbody import SyncLatestInBodyMeasurement
-from muscle50.domain.body_composition import BodyCompositionMetric, FieldProvenance
+from muscle50.domain.body_composition import BodyCompositionMetric, FieldProvenance, NormalizedBodyComposition
 from muscle50.domain.inbody_normalization import normalize_inbody_measurement
 from muscle50.infrastructure.inbody.raw_store import InBodyRawArtifact, InBodyRawStore
 from muscle50.infrastructure.inbody.synthetic import SyntheticInBodyConnector
@@ -31,7 +31,7 @@ def _artifact(
     )
 
 
-def _normalized_without_id():
+def _normalized_without_id() -> NormalizedBodyComposition:
     connector = SyntheticInBodyConnector.from_fixture(FIXTURES / "synthetic_without_id.json")
     document = connector.latest_document()
     assert document is not None
@@ -44,7 +44,7 @@ def _repository(tmp_path: Path) -> SqliteBodyCompositionRepository:
     return repository
 
 
-def _normalized_full():
+def _normalized_full() -> NormalizedBodyComposition:
     connector = SyntheticInBodyConnector.from_fixture(FIXTURES / "synthetic_full.json")
     document = connector.latest_document()
     assert document is not None

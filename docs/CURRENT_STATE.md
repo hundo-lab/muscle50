@@ -113,6 +113,11 @@ version 5 추가, 전체 migration 반복 적용 idempotency를 확인했다.
 `muscle50 inbody sync --file` 2회 smoke에서 migration 1~6, normalized 1 row, duplicate 0건 추가,
 list/detail RAW 2 files를 확인했다.
 
+2026-09-27 InBody integration 전 quality-gate cleanup에서 테스트 helper 반환형, optional identity
+narrowing, source error annotation만 수정했다. `uv run pytest -q` 241 passed, Ruff 통과,
+`uv run mypy src tests` 통과(66 files), `git diff --check` 통과. current main `85deeff`와의 read-only
+비교에서 main은 migration을 추가하지 않아 `006_inbody.sql` 번호는 여전히 유효하다.
+
 ## SQLite migrations
 
 1. `001_initial.sql` — Garmin activity/RAW/correction 기본 schema

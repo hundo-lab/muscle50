@@ -7,10 +7,10 @@ from pathlib import Path
 import pytest
 
 from muscle50.application.inbody_repository import BodyCompositionRepository, InMemoryBodyCompositionRepository
+from muscle50.application.inbody_source import InBodySourceError
 from muscle50.application.sync_latest_inbody import NoInBodyMeasurementsError, SyncLatestInBodyMeasurement
 from muscle50.domain.body_composition import RawInBodyDocument
 from muscle50.domain.inbody_normalization import normalize_inbody_measurement
-from muscle50.infrastructure.inbody.connector import InBodyConnectorError
 from muscle50.infrastructure.inbody.raw_store import InBodyRawArtifact, InBodyRawStore
 from muscle50.infrastructure.inbody.synthetic import SyntheticInBodyConnector
 from muscle50.infrastructure.sqlite.body_composition import SqliteBodyCompositionRepository
@@ -111,6 +111,7 @@ def test_idless_measurement_is_not_heuristically_merged_with_official_id(
             source_fingerprint=None,
         ),
     )
+    assert with_id.canonical_identity is not None
     changed_payload_same_id = replace(
         with_id,
         canonical_identity=replace(with_id.canonical_identity, fingerprint="b" * 64),
@@ -139,7 +140,7 @@ def test_raw_document_is_preserved_before_extraction_failure(tmp_path: Path) -> 
 
     try:
         use_case.execute()
-    except InBodyConnectorError:
+    except InBodySourceError:
         pass
     else:  # pragma: no cover - documents the required failure
         raise AssertionError("invalid document must fail extraction")

@@ -9,6 +9,7 @@ import pytest
 
 from muscle50.application.inbody_repository import InMemoryBodyCompositionRepository
 from muscle50.application.inbody_source import (
+    InBodySourceError,
     InBodySourcePermissionDeniedError,
     InBodySourcePermissionRevokedError,
     InBodySourceUnavailableError,
@@ -90,7 +91,7 @@ def _sync(
     tmp_path: Path,
     source: SyntheticInBodyMeasurementSource,
     repository: InMemoryBodyCompositionRepository | SqliteBodyCompositionRepository | None = None,
-):
+) -> SyncInBody:
     root = tmp_path / "private-muscle50"
     return SyncInBody(
         source,
@@ -226,7 +227,7 @@ def test_same_measurement_from_two_sources_is_not_automatically_merged(tmp_path:
         InBodySourceUnavailableError(),
     ],
 )
-def test_source_access_failures_are_distinct_and_redacted(tmp_path: Path, error: Exception) -> None:
+def test_source_access_failures_are_distinct_and_redacted(tmp_path: Path, error: InBodySourceError) -> None:
     source = SyntheticInBodyMeasurementSource(
         SyntheticInBodyConnector(None),
         list_error=error,
