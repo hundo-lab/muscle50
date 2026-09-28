@@ -42,11 +42,12 @@ def activity_id_from(raw: Mapping[str, Any]) -> str:
 
 
 def source_type_from(raw: Mapping[str, Any]) -> str:
-    activity_type = raw.get("activityType")
-    if isinstance(activity_type, Mapping):
-        key = activity_type.get("typeKey")
-        if isinstance(key, str) and key.strip():
-            return key.strip().lower()
+    for field in ("activityType", "activityTypeDTO"):
+        activity_type = raw.get(field)
+        if isinstance(activity_type, Mapping):
+            key = activity_type.get("typeKey")
+            if isinstance(key, str) and key.strip():
+                return key.strip().lower()
     key = raw.get("activityTypeKey")
     return key.strip().lower() if isinstance(key, str) and key.strip() else "unknown"
 

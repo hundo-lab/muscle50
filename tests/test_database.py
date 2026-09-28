@@ -25,8 +25,11 @@ EXPECTED_TABLES = {
     "recovery_raw_captures",
     "recovery_raw_artifacts",
     "daily_recovery",
+    "activity_raw_captures",
+    "activity_raw_capture_artifacts",
+    "activity_refresh_state",
 }
-EXPECTED_VERSIONS = [(1,), (2,), (3,), (4,), (5,)]
+EXPECTED_VERSIONS = [(1,), (2,), (3,), (4,), (5,), (6,)]
 
 MIGRATIONS_DIR = (
     Path(__file__).parents[1] / "src" / "muscle50" / "infrastructure" / "sqlite" / "migrations"
@@ -147,7 +150,7 @@ def test_nutrition_migration_upgrades_existing_001_002_database(tmp_path: Path) 
             )
         }
     assert versions[:2] == existing_versions
-    assert [row[0] for row in versions] == [1, 2, 3, 4, 5]
+    assert [row[0] for row in versions] == [1, 2, 3, 4, 5, 6]
     assert nutrition_tables == {
         "nutrition_meals",
         "nutrition_meal_items",
@@ -181,7 +184,7 @@ def test_swim_migration_upgrades_existing_001_through_003_database(tmp_path: Pat
         lap_foreign_keys = connection.execute("PRAGMA foreign_key_list(swim_laps)").fetchall()
         length_foreign_keys = connection.execute("PRAGMA foreign_key_list(swim_lengths)").fetchall()
     assert versions[:3] == existing_versions
-    assert [row[0] for row in versions] == [1, 2, 3, 4, 5]
+    assert [row[0] for row in versions] == [1, 2, 3, 4, 5, 6]
     assert swim_tables == {"swim_activities", "swim_laps", "swim_lengths"}
     assert any(row[2] == "swim_activities" for row in lap_foreign_keys)
     assert any(row[2] == "swim_laps" for row in length_foreign_keys)
@@ -218,7 +221,7 @@ def test_recovery_migration_upgrades_existing_001_through_004_database(tmp_path:
         recovery_foreign_keys = connection.execute("PRAGMA foreign_key_list(daily_recovery)").fetchall()
 
     assert versions[:4] == existing_versions
-    assert [row[0] for row in versions] == [1, 2, 3, 4, 5]
+    assert [row[0] for row in versions] == [1, 2, 3, 4, 5, 6]
     assert recovery_tables == {"recovery_raw_captures", "recovery_raw_artifacts", "daily_recovery"}
     assert {
         "calendar_date",
@@ -248,4 +251,30 @@ def test_numbered_migrations_can_be_reapplied_without_duplicate_versions(tmp_pat
             "SELECT version, applied_at_utc FROM schema_migrations ORDER BY version"
         ).fetchall()
     assert repeated_versions == first_versions
-    assert [row[0] for row in repeated_versions] == [1, 2, 3, 4, 5]
+    assert [row[0] for row in repeated_versions] == [1, 2, 3, 4, 5, 6]
+
+
+def test_activity_refresh_migration_upgrades_existing_001_through_005_database(tmp_path: Path) -> None:
+    database_path = tmp_path / "existing-001-005.sqlite3"
+    with sqlite3.connect(database_path) as connection:
+        for migration_name in (
+            "001_initial.sql",
+            "002_strength_sets.sql",
+            "003_nutrition.sql",
+            "004_swim_details.sql",
+            "005_daily_recovery.sql",
+        ):
+            connection.executescript((MIGRATIONS_DIR / migration_name).read_text(encoding="utf-8"))
+
+    ActivityRepository(database_path).migrate()
+
+    with sqlite3.connect(database_path) as connection:
+        versions = connection.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'activity_%'"
+            )
+        }
+    assert versions == EXPECTED_VERSIONS
+    assert {"activity_raw_captures", "activity_raw_capture_artifacts", "activity_refresh_state"} <= tables

@@ -227,6 +227,22 @@ def test_repeated_range_ingestion_is_idempotent(paths: AppPaths) -> None:
     assert _activity_count(paths) == 3
 
 
+def test_repeated_range_ingestion_does_not_refresh_changed_garmin_data(paths: AppPaths) -> None:
+    summary = _summary(222, "strength_training", "2026-01-10")
+    connector = FakeRangeConnector([summary], exercise_sets_by_id={"222": _synthetic_strength_sets()})
+    use_case = _use_case(paths, connector)
+    use_case.execute(date(2026, 1, 1), date(2026, 1, 31))
+    initial_calls = len(connector.raw_calls)
+    connector._exercise_sets_by_id = {"222": {"activityId": 222, "exerciseSets": []}}
+
+    result = use_case.execute(date(2026, 1, 1), date(2026, 1, 31))
+
+    assert result.skipped_count == 1
+    assert len(connector.raw_calls) == initial_calls
+    with sqlite3.connect(paths.database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM strength_sets").fetchone()[0] == 5
+
+
 def test_mixed_activity_types_are_all_ingested(paths: AppPaths) -> None:
     activities = [
         _summary(1, "running", "2026-01-05"),

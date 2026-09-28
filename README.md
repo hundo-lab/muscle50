@@ -36,7 +36,7 @@ muscle50 garmin latest
 ```text
 %LOCALAPPDATA%\muscle50\
 ├─ auth\garmin\                 # Garmin token
-├─ raw\garmin\activities\      # immutable JSON 및 가능한 경우 original.zip
+├─ raw\garmin\activities\      # initial RAW와 content-addressed refresh snapshots
 ├─ raw\garmin\recovery\        # 날짜별 immutable recovery snapshot history
 └─ db\muscle50.sqlite3          # normalized activity/recovery, nutrition, correction
 ```
@@ -65,6 +65,26 @@ muscle50 garmin activities --from 2026-01-01 --to 2026-01-31
 적용됩니다. 이미 저장된 activity는 다시 가져오지 않고 건너뛰며, 한 activity가 실패해도 나머지
 activity는 계속 처리됩니다. 실행할 때마다 발견/신규 저장/이미 저장됨/실패 건수를 요약해서
 보여줍니다.
+
+## 기존 Garmin activity 명시적 refresh
+
+Garmin Connect에서 종목명, 세트 또는 수영 기록을 수정한 뒤 기존 activity 하나만 다시
+가져오려면 다음 명령을 사용합니다.
+
+```powershell
+muscle50 garmin refresh 24481518495
+```
+
+일반 `latest`/기간 동기화는 기존 activity를 계속 건너뜁니다. `refresh`만 activity/details,
+splits, strength exercise sets 및 original archive를 다시 요청하고, 응답 전체를
+`raw\garmin\activities\<activity-id>\snapshots\<sha256>\` 아래 immutable snapshot으로
+보존합니다. 같은 응답은 같은 snapshot을 재사용하고 변경된 응답은 새 snapshot이 됩니다.
+정규화와 DB 저장이 실패해도 새 RAW는 남고 이전 canonical activity와 Strength/Swim child
+행은 그대로 유지됩니다. 성공하면 canonical activity, metrics, strength sets, swim
+activity/laps/lengths를 하나의 transaction에서 교체합니다.
+
+ACTIVE strength set의 Garmin 분류가 `UNKNOWN`이거나 비어 있으면 structured review warning을
+표시합니다. muscle50는 종목 분류를 추측해 고치지 않습니다.
 
 ## Garmin recovery 동기화
 

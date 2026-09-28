@@ -85,6 +85,31 @@ def test_cardio_activity_does_not_request_strength_sets(monkeypatch: Any) -> Non
     assert all(name != "get_activity_exercise_sets" for name, _ in api.calls)
 
 
+def test_fetch_uses_returned_activity_type_for_strength_optional_endpoint(monkeypatch: Any) -> None:
+    api = FakeApi()
+    connector = PythonGarminConnector(api)
+    monkeypatch.setattr(
+        api,
+        "get_activity",
+        lambda activity_id: {
+            "activityId": int(activity_id),
+            "activityTypeDTO": {"typeKey": "strength_training"},
+        },
+    )
+
+    def exercise_sets(activity_id: str) -> dict[str, Any]:
+        api.calls.append(("get_activity_exercise_sets", (activity_id,)))
+        return {"activityId": int(activity_id), "exerciseSets": []}
+
+    monkeypatch.setattr(api, "get_activity_exercise_sets", exercise_sets, raising=False)
+    monkeypatch.setattr(connector, "_download_original", lambda activity_id, warnings: None)
+
+    raw = connector.fetch_raw_activity("321", "running")
+
+    assert raw.exercise_sets == {"activityId": 321, "exerciseSets": []}
+    assert any(name == "get_activity_exercise_sets" for name, _ in api.calls)
+
+
 def test_list_activities_pages_through_raw_get_activities(monkeypatch: Any) -> None:
     api = FakeApi()
     connector = PythonGarminConnector(api)

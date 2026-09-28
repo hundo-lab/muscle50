@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from muscle50.cli import build_parser, main
@@ -63,6 +65,47 @@ def test_cli_parses_garmin_recovery_date() -> None:
     assert args.command == "garmin"
     assert args.garmin_command == "recovery"
     assert args.date == "2026-09-15"
+
+
+def test_cli_parses_garmin_refresh_activity_id() -> None:
+    args = build_parser().parse_args(["garmin", "refresh", "24481518495"])
+
+    assert args.command == "garmin"
+    assert args.garmin_command == "refresh"
+    assert args.activity_id == "24481518495"
+
+
+def test_cli_rejects_invalid_refresh_id_before_authentication(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        PythonGarminConnector,
+        "authenticate",
+        lambda auth_dir: pytest.fail("authentication must not be attempted"),
+    )
+
+    exit_code = main(["garmin", "refresh", "not-an-id"])
+
+    assert exit_code == 1
+    assert "activityId" in capsys.readouterr().err
+
+
+def test_cli_rejects_unknown_local_refresh_id_before_authentication(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MUSCLE50_HOME", str(tmp_path / "private-muscle50"))
+    monkeypatch.setattr(
+        PythonGarminConnector,
+        "authenticate",
+        lambda auth_dir: pytest.fail("authentication must not be attempted"),
+    )
+
+    exit_code = main(["garmin", "refresh", "24481518495"])
+
+    assert exit_code == 1
+    assert "local Garmin activity not found" in capsys.readouterr().err
 
 
 def test_cli_rejects_invalid_recovery_date_before_authentication(

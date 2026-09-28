@@ -1,22 +1,96 @@
 # Session Handoff
 
-Last updated: 2026-09-19
+Last updated: 2026-09-28
 
 ## Current task
 
-`feature/garmin-activity-ingestion`에서 Garmin activity를 날짜 범위로 수집하는 공통
-ingestion pipeline을 추가하는 작업이다. `garmin latest`가 단일 activity만 처리하던
-기존 구조를 그대로 유지하면서, 여러 activity를 한 번에 수집하는 `garmin activities
---from/--to`가 같은 canonical per-activity 경로를 재사용하도록 했다.
+`feature/strength-sets`에서 기존 Garmin activity를 명시적으로 다시 가져오는
+`muscle50 garmin refresh <activity-id>`를 구현했다. 일반 latest/range ingest의 기존
+activity skip 동작은 유지한다. 실제 Garmin 계정으로 activity 24481518495에 대한 live
+E2E 검증을 완료했다(아래 "Live E2E validation" 참고). Main merge, push는 아직 하지 않았다.
 
-이 feature 브랜치는 원래 `origin/main`(commit `560a5d3`, Strength/Swim/Nutrition/
-Recovery가 아직 없던 시점)에서 분기되어 있었다. 작업을 시작하기 전에 local `main`이
-그 시점보다 14 commit 앞서 있다는 것을 발견해(Strength sets, Swim details, Nutrition
-Core, Garmin Recovery가 이미 통합된 상태), 코드를 작성하기 전에 `feature/garmin-
-activity-ingestion`을 `git merge --ff-only main`으로 local main(`7e2cd53`)까지
-fast-forward한 뒤 다시 감사하고 구현했다. main은 이 과정에서 전혀 수정하지 않았다.
-(fast-forward 전 stale base에서 만든 첫 구현은 `backup/garmin-activity-ingestion-
-stale-audit-20260918` 브랜치에 참고용으로만 보존했다.)
+## Garmin Activity Refresh (2026-09-27)
+
+- `RefreshGarminActivity`가 이미 local DB에 있는 activity만 대상으로 activity/details,
+  splits, conditional strength exercise sets, original archive를 다시 가져온다.
+- RAW는 기존 Recovery와 같은 content-addressed 방식으로
+  `raw/garmin/activities/<id>/snapshots/<capture-id>/`에 보존한다. 초기 flat RAW와 이전
+  refresh snapshot은 수정하지 않는다. 동일한 payload+warnings는 같은 capture를 재사용한다.
+- RAW 파일 저장과 capture metadata 등록은 normalization보다 먼저 별도 commit한다.
+  이후 normalization 또는 canonical persistence가 실패해도 새 RAW evidence는 남는다.
+- Canonical update는 `activities` scalar fields/metrics, `strength_sets`, `swim_activities`
+  (cascade로 laps/lengths 포함), accepted capture pointer를 하나의 `BEGIN IMMEDIATE`
+  transaction에서 교체한다. 실패하면 이전 canonical 상태 전체가 rollback된다.
+- Strength refresh에서 `exercise_sets`, pool swim refresh에서 `splits`가 없으면 불완전한
+  refresh를 거부한다. 다른 sport의 optional split 실패와 original archive 실패는 warning만
+  남기고 처리할 수 있다.
+- `derive_activity_review()`는 ACTIVE set의 UNKNOWN/missing Garmin classification을
+  `unknown_exercise_classification` reason과 set sequence 목록으로 반환한다. DB에 중복
+  저장하지 않으며 종목을 추측하거나 자동 수정하지 않는다.
+- Migration 6은 `activity_raw_captures`, `activity_raw_capture_artifacts`,
+  `activity_refresh_state`를 추가한다. 기존 `activities.primary_raw_artifact_id`는 최초 import
+  증거를 계속 가리키고, 최신 성공 refresh는 refresh state가 가리킨다.
+- 테스트는 Strength UNKNOWN→corrected, child replacement, initial/previous/new RAW 보존,
+  identical refresh, normalization/persistence rollback, required optional endpoint failure,
+  Swim child replacement, normal range ingest의 non-refresh/idempotency를 synthetic data로 검증한다.
+
+## Live E2E validation (2026-09-28)
+
+사용자가 이 Paseo 세션 밖에서 실제 Garmin 계정으로 아래를 수행하고 결과를 보고했다:
+
+- `MUSCLE50_HOME=C:\temp\muscle50-smoke`에서 activity 24481518495의 Garmin Connect 종목
+  분류를 수동으로 수정한 뒤 이 feature worktree에서 다음을 실행했다.
+  ```powershell
+  uv run muscle50 garmin refresh 24481518495
+  ```
+- 출력:
+  ```text
+  Garmin activity refresh complete
+  Garmin activity ID: 24481518495
+  RAW snapshot:
+  raw/garmin/activities/24481518495/snapshots/782859ca841d536670ef696f65e3959d1ed3a74b062e771542c6e2a04a595e75/manifest.json
+  Strength sets replaced: 46
+  Swim laps/lengths replaced: 0/0
+  Review warnings remaining: none
+  ```
+- Canonical DB를 수동으로 확인한 결과, 이전에 `UNKNOWN`이거나 잘못 분류됐던 종목이
+  사용자가 Garmin Connect에서 수정한 대로 정확히 교체됐다: `DUMBBELL_HAMMER_CURL`,
+  `CLOSE_GRIP_EZ_BAR_BICEPS_CURL`, `INCLINE_SMITH_MACHINE_BENCH_PRESS`, `BENCH_PRESS`,
+  `CLOSE_GRIP_BARBELL_BENCH_PRESS`.
+- 이전에 의심스러웠던 `PUSH_UP` 40/50 kg 기록은 Garmin Connect 수정 후 `BENCH_PRESS`가
+  됐다 — 이는 muscle50 정규화 버그가 아니라 Garmin 원본 분류 문제였음을 확인한다.
+- 남은 관찰 사항: sequence 1은 `DUMBBELL_HAMMER_CURL` / 8 reps / 0.0 kg다. 지금은 별도
+  휴리스틱을 추가하지 않는다 — 향후 data-quality/review 규칙 후보로만 기록한다(예:
+  ACTIVE set의 weight가 0인 경우 review warning 후보로 검토).
+- 이 live 실행은 수동 1회 smoke이며 자동 테스트 스위트에는 포함되지 않는다. 자동
+  테스트는 여전히 synthetic fixture만 사용한다.
+
+## Refresh files changed
+
+- `README.md`, `docs/CURRENT_STATE.md`, `docs/HANDOFF.md`
+- `src/muscle50/application/refresh_garmin_activity.py` (신규)
+- `src/muscle50/domain/activity_review.py` (신규)
+- `src/muscle50/infrastructure/sqlite/migrations/006_activity_refresh.sql` (신규)
+- `src/muscle50/infrastructure/raw_store.py`
+- `src/muscle50/infrastructure/sqlite/database.py`
+- `src/muscle50/infrastructure/garmin/client.py`
+- `src/muscle50/cli.py`, `src/muscle50/presentation/terminal.py`
+- `tests/test_refresh_activity.py` (신규)
+- `tests/test_cli.py`, `tests/test_database.py`, `tests/test_garmin_connector.py`,
+  `tests/test_ingest_range.py`
+
+## Refresh verification
+
+```text
+uv run pytest -q                    191 passed
+uv run ruff check .                 passed
+uv run mypy src tests               passed (50 source files)
+git diff --check                    passed
+```
+
+## Previous range-ingestion record
+
+아래의 기존 날짜 범위 ingestion 기록은 이전 통합 작업의 배경이다.
 
 ## Completed
 
@@ -96,8 +170,8 @@ Pagination/range-stop 로직은 실제로 필터를 깨뜨려 관련 테스트 2
 
 ## Remaining work
 
-- 실제 Garmin 계정 live smoke는 별도 승인 후 진행한다(아래 명령 참고). 아직 수행하지
-  않았다.
+- 실제 Garmin 계정 live smoke: 완료(2026-09-28, activity 24481518495, 위 "Live E2E
+  validation" 참고).
 - Strength per-set / Swim per-lap 세부 데이터는 이미 존재하는 스키마와 정규화를 그대로
   재사용했을 뿐이며, 이번 작업에서 새로 만든 것은 없다.
 - `sync_runs` 테이블은 여전히 미사용 상태다. command/error_code 값 체계가 정의되면
@@ -114,12 +188,6 @@ Pagination/range-stop 로직은 실제로 필터를 깨뜨려 관련 테스트 2
 
 ## Recommended next action
 
-로컬 review 후 `feature/garmin-activity-ingestion`을 main에 통합한다. Live Garmin
-smoke는 별도 승인 후 아래 명령으로 진행하고, 이번 작업에서는 main merge와 remote
-push를 하지 않는다.
-
-```powershell
-$env:MUSCLE50_HOME = "C:\temp\muscle50-smoke"   # Git worktree 바깥 경로
-muscle50 garmin activities --from 2026-09-15 --to 2026-09-18
-muscle50 garmin activities --from 2026-09-15 --to 2026-09-18   # 재실행 시 전부 skip 확인
-```
+Live E2E validation(activity 24481518495)이 완료되고 quality gate가 모두 통과해
+Garmin Activity Refresh 변경을 `feature/strength-sets`에 커밋했다. Main merge와 push는
+아직 하지 않았다 — 다음 세션에서 별도 승인 후 진행한다.

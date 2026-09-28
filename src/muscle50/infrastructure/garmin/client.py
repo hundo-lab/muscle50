@@ -119,8 +119,10 @@ class PythonGarminConnector:
             raise GarminConnectorError("Garmin activity 원본 조회에 실패했습니다.") from exc
 
         splits = self._optional_call(lambda: self._api.get_activity_splits(activity_id), "splits", warnings)
+        activity_mapping = _mapping_or_error(activity)
+        fetched_source_type = _source_type_key(activity_mapping) or source_type_key
         exercise_sets = None
-        if source_type_key == "strength_training":
+        if fetched_source_type == "strength_training":
             exercise_sets = self._optional_call(
                 lambda: self._api.get_activity_exercise_sets(activity_id),
                 "exercise sets",
@@ -129,7 +131,7 @@ class PythonGarminConnector:
         original = self._download_original(activity_id, warnings)
         return GarminRawActivity(
             summary={},
-            activity=_mapping_or_error(activity),
+            activity=activity_mapping,
             details=_mapping_or_error(details),
             splits=splits,
             exercise_sets=exercise_sets,
@@ -267,3 +269,14 @@ def _is_authentication_error(exc: Exception) -> bool:
 
 
 _MISSING = object()
+
+
+def _source_type_key(activity: Mapping[str, Any]) -> str | None:
+    for field in ("activityType", "activityTypeDTO"):
+        activity_type = activity.get(field)
+        if isinstance(activity_type, Mapping):
+            value = activity_type.get("typeKey")
+            if isinstance(value, str) and value.strip():
+                return value.strip().lower()
+    value = activity.get("activityTypeKey")
+    return value.strip().lower() if isinstance(value, str) and value.strip() else None

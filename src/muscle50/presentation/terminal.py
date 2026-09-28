@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from muscle50.application.ingest_activity_range import RangeIngestResult
+from muscle50.application.refresh_garmin_activity import ActivityRefreshResult
 from muscle50.application.sync_garmin_recovery import RecoverySyncResult
 from muscle50.application.sync_latest_garmin import SyncResult
 from muscle50.domain.activity import ActivityMetric, ActivityType, StrengthSet
@@ -77,6 +78,23 @@ def render_range_result(result: RangeIngestResult) -> str:
     for outcome in result.outcomes:
         if outcome.status == "failed":
             lines.append(f"실패: Garmin activity ID {outcome.source_activity_id} ({outcome.source_type_key})")
+    return "\n".join(lines)
+
+
+def render_refresh_result(result: ActivityRefreshResult) -> str:
+    lines = [
+        "Garmin activity refresh complete",
+        f"Garmin activity ID: {result.activity.source_activity_id}",
+        f"RAW snapshot: {result.capture.manifest_relative_path}",
+        f"Strength sets replaced: {result.strength_set_count}",
+        f"Swim laps/lengths replaced: {result.swim_lap_count}/{result.swim_length_count}",
+    ]
+    for reason in result.review.reasons:
+        sequences = ", ".join(str(item) for item in reason.set_sequences)
+        lines.append(f"Review warning: {reason.code.value} (sets: {sequences})")
+    if not result.review.required:
+        lines.append("Review warnings remaining: none")
+    lines.extend(f"경고: {warning}" for warning in result.warnings)
     return "\n".join(lines)
 
 

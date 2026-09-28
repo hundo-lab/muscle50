@@ -21,7 +21,7 @@ from muscle50.domain.activity import (
 from muscle50.domain.normalization import strength_set_metrics
 from muscle50.domain.recovery import DailyRecovery
 from muscle50.domain.swimming import GarminSource, NormalizedSwimActivity, SwimDistance, SwimLap, SwimLength
-from muscle50.infrastructure.raw_store import RawArtifact, RecoveryCapture
+from muscle50.infrastructure.raw_store import ActivityCapture, RawArtifact, RecoveryCapture
 
 
 class ActivityRepository:
@@ -153,6 +153,124 @@ class ActivityRepository:
                 return existing, False
             raise
         return activity, True
+
+    def record_refresh_capture(self, capture: ActivityCapture) -> None:
+        """Register fetched RAW in its own transaction before normalization/persistence."""
+        if not capture.artifacts:
+            raise ValueError("at least one activity RAW artifact is required")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            _register_activity_capture(connection, capture, _now())
+
+    def refresh(self, activity: NormalizedActivity, capture: ActivityCapture) -> NormalizedActivity:
+        """Atomically replace an existing activity's canonical normalized representation."""
+        if activity.source_activity_id != capture.source_activity_id:
+            raise ValueError("activity ID does not match RAW capture activity ID")
+        now = _now()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            capture_row = connection.execute(
+                "SELECT id FROM activity_raw_captures WHERE id = ? AND source_activity_id = ?",
+                (capture.capture_id, capture.source_activity_id),
+            ).fetchone()
+            if capture_row is None:
+                raise ValueError("activity RAW capture is not registered")
+            row = connection.execute(
+                "SELECT id FROM activities WHERE provider = 'garmin' AND source_activity_id = ?",
+                (activity.source_activity_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"activity is not stored: {activity.source_activity_id}")
+            activity_id = int(row["id"])
+            connection.execute(
+                """
+                UPDATE activities SET
+                    source_type_key = ?, canonical_type = ?, name = ?, started_at_utc = ?,
+                    started_at_local = ?, timezone_name = ?, elapsed_seconds = ?,
+                    moving_seconds = ?, distance_meters = ?, calories_kcal = ?,
+                    average_hr_bpm = ?, max_hr_bpm = ?, elevation_gain_meters = ?,
+                    normalizer_version = ?
+                WHERE id = ?
+                """,
+                (
+                    activity.source_type_key,
+                    activity.canonical_type.value,
+                    activity.name,
+                    activity.started_at_utc,
+                    activity.started_at_local,
+                    activity.timezone_name,
+                    activity.elapsed_seconds,
+                    activity.moving_seconds,
+                    activity.distance_meters,
+                    activity.calories_kcal,
+                    activity.average_hr_bpm,
+                    activity.max_hr_bpm,
+                    activity.elevation_gain_meters,
+                    activity.normalizer_version,
+                    activity_id,
+                ),
+            )
+            connection.execute("DELETE FROM activity_metrics WHERE activity_id = ?", (activity_id,))
+            connection.execute("DELETE FROM strength_sets WHERE activity_id = ?", (activity_id,))
+            connection.execute("DELETE FROM swim_activities WHERE activity_id = ?", (activity_id,))
+            for metric in activity.metrics:
+                numeric, text = _metric_values(metric)
+                connection.execute(
+                    """
+                    INSERT INTO activity_metrics (
+                        activity_id, metric_key, numeric_value, text_value, unit, source_path
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (activity_id, metric.key, numeric, text, metric.unit, metric.source_path),
+                )
+            _insert_strength_sets(connection, activity_id, activity.strength_sets)
+            if activity.swim_detail is not None:
+                _insert_swim_detail(connection, activity_id, activity.swim_detail)
+            connection.execute(
+                """
+                INSERT INTO activity_refresh_state (activity_id, current_capture_id, refreshed_at_utc)
+                VALUES (?, ?, ?)
+                ON CONFLICT(activity_id) DO UPDATE SET
+                    current_capture_id = excluded.current_capture_id,
+                    refreshed_at_utc = excluded.refreshed_at_utc
+                """,
+                (activity_id, capture.capture_id, now),
+            )
+        return activity
+
+    def find_current_refresh_capture(self, source_activity_id: str) -> ActivityCapture | None:
+        with self._connect() as connection:
+            capture_row = connection.execute(
+                """
+                SELECT capture.*
+                FROM activities AS activity
+                JOIN activity_refresh_state AS state ON state.activity_id = activity.id
+                JOIN activity_raw_captures AS capture ON capture.id = state.current_capture_id
+                WHERE activity.provider = 'garmin' AND activity.source_activity_id = ?
+                """,
+                (source_activity_id,),
+            ).fetchone()
+            if capture_row is None:
+                return None
+            artifact_rows = connection.execute(
+                "SELECT * FROM activity_raw_capture_artifacts WHERE capture_id = ? ORDER BY artifact_kind",
+                (capture_row["id"],),
+            ).fetchall()
+        return ActivityCapture(
+            capture_id=capture_row["id"],
+            source_activity_id=capture_row["source_activity_id"],
+            manifest_relative_path=capture_row["manifest_relative_path"],
+            artifacts=tuple(
+                RawArtifact(
+                    kind=row["artifact_kind"],
+                    relative_path=row["relative_path"],
+                    content_type=row["content_type"],
+                    sha256=row["sha256"],
+                    byte_size=row["byte_size"],
+                )
+                for row in artifact_rows
+            ),
+        )
 
     def save_strength_sets(self, source_activity_id: str, strength_sets: tuple[StrengthSet, ...]) -> None:
         """Idempotently add normalized sets to an activity already stored in the database."""
@@ -379,6 +497,63 @@ def _metric_values(metric: ActivityMetric) -> tuple[float | None, str | None]:
     if isinstance(metric.value, str):
         return None, metric.value
     return float(metric.value), None
+
+
+def _register_activity_capture(
+    connection: sqlite3.Connection,
+    capture: ActivityCapture,
+    now: str,
+) -> None:
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO activity_raw_captures (
+            id, provider, source_activity_id, manifest_relative_path, captured_at_utc
+        ) VALUES (?, 'garmin', ?, ?, ?)
+        """,
+        (capture.capture_id, capture.source_activity_id, capture.manifest_relative_path, now),
+    )
+    stored_capture = connection.execute(
+        "SELECT * FROM activity_raw_captures WHERE id = ?",
+        (capture.capture_id,),
+    ).fetchone()
+    if stored_capture is None or any(
+        (
+            stored_capture["provider"] != "garmin",
+            stored_capture["source_activity_id"] != capture.source_activity_id,
+            stored_capture["manifest_relative_path"] != capture.manifest_relative_path,
+        )
+    ):
+        raise RuntimeError("stored activity capture metadata does not match the files")
+    for artifact in capture.artifacts:
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO activity_raw_capture_artifacts (
+                capture_id, artifact_kind, relative_path, content_type, sha256, byte_size
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                capture.capture_id,
+                artifact.kind,
+                artifact.relative_path,
+                artifact.content_type,
+                artifact.sha256,
+                artifact.byte_size,
+            ),
+        )
+        stored = connection.execute(
+            "SELECT * FROM activity_raw_capture_artifacts WHERE relative_path = ?",
+            (artifact.relative_path,),
+        ).fetchone()
+        if stored is None or any(
+            (
+                stored["capture_id"] != capture.capture_id,
+                stored["artifact_kind"] != artifact.kind,
+                stored["content_type"] != artifact.content_type,
+                stored["sha256"] != artifact.sha256,
+                stored["byte_size"] != artifact.byte_size,
+            )
+        ):
+            raise RuntimeError("stored activity RAW artifact metadata does not match the file")
 
 
 def _activity_from_rows(

@@ -57,6 +57,14 @@ class RecoveryCapture:
     artifacts: tuple[RawArtifact, ...]
 
 
+@dataclass(frozen=True)
+class ActivityCapture:
+    capture_id: str
+    source_activity_id: str
+    manifest_relative_path: str
+    artifacts: tuple[RawArtifact, ...]
+
+
 class RawStore:
     def __init__(self, root: Path, data_root: Path, tmp_dir: Path):
         self._root = root
@@ -116,6 +124,49 @@ class RawStore:
         # The manifest is metadata and can be recreated; raw source files remain immutable.
         _write_atomic_replace(directory / "manifest.json", _json_bytes(manifest), self._tmp_dir)
         return tuple(artifacts)
+
+    def preserve_snapshot(self, activity_id: str, raw: GarminRawActivity) -> ActivityCapture:
+        """Preserve a content-addressed refresh snapshot without changing initial RAW."""
+        _validate_activity_id(activity_id)
+        payloads = _activity_payloads(raw)
+        digest = hashlib.sha256()
+        digest.update(activity_id.encode("utf-8"))
+        for kind, _name, content, _content_type in payloads:
+            digest.update(b"\0" + kind.encode("utf-8") + b"\0" + content)
+        digest.update(b"\0warnings\0" + _json_bytes(list(raw.warnings)))
+        capture_id = digest.hexdigest()
+        directory = self._root / activity_id / "snapshots" / capture_id
+        directory.mkdir(parents=True, exist_ok=True)
+
+        artifacts: list[RawArtifact] = []
+        for kind, name, content, content_type in payloads:
+            destination = directory / name
+            _write_immutable(destination, content, self._tmp_dir)
+            artifacts.append(
+                RawArtifact(
+                    kind=kind,
+                    relative_path=destination.relative_to(self._data_root).as_posix(),
+                    content_type=content_type,
+                    sha256=hashlib.sha256(content).hexdigest(),
+                    byte_size=len(content),
+                )
+            )
+
+        manifest_path = directory / "manifest.json"
+        manifest = {
+            "provider": "garmin",
+            "capture_id": capture_id,
+            "source_activity_id": activity_id,
+            "artifacts": [asdict(item) for item in artifacts],
+            "warnings": list(raw.warnings),
+        }
+        _write_immutable(manifest_path, _json_bytes(manifest), self._tmp_dir)
+        return ActivityCapture(
+            capture_id=capture_id,
+            source_activity_id=activity_id,
+            manifest_relative_path=manifest_path.relative_to(self._data_root).as_posix(),
+            artifacts=tuple(artifacts),
+        )
 
     def load_exercise_sets(self, activity_id: str) -> Mapping[str, Any] | None:
         """Read an already-preserved strength payload without contacting Garmin."""
@@ -205,6 +256,23 @@ class RecoveryRawStore:
 
 def _json_bytes(value: Any) -> bytes:
     return (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _activity_payloads(raw: GarminRawActivity) -> list[tuple[str, str, bytes, str]]:
+    payloads = [
+        ("summary", "summary.json", _json_bytes(raw.summary), "application/json"),
+        ("activity", "activity.json", _json_bytes(raw.activity), "application/json"),
+        ("details", "details.json", _json_bytes(raw.details), "application/json"),
+    ]
+    if raw.splits is not None:
+        payloads.append(("splits", "splits.json", _json_bytes(raw.splits), "application/json"))
+    if raw.exercise_sets is not None:
+        payloads.append(
+            ("exercise_sets", "exercise_sets.json", _json_bytes(raw.exercise_sets), "application/json")
+        )
+    if raw.original_archive is not None:
+        payloads.append(("original_archive", "original.zip", raw.original_archive, "application/zip"))
+    return payloads
 
 
 def _validate_activity_id(activity_id: str) -> None:

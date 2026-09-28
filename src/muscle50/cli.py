@@ -9,15 +9,26 @@ from datetime import date
 
 from muscle50.application.ingest_activity import ActivitySyncError
 from muscle50.application.ingest_activity_range import IngestGarminActivityRange, InvalidDateRangeError
+from muscle50.application.refresh_garmin_activity import (
+    ActivityNotFoundError,
+    ActivityRefreshError,
+    RefreshGarminActivity,
+)
 from muscle50.application.sync_garmin_recovery import SyncGarminRecovery
 from muscle50.application.sync_latest_garmin import NoActivitiesError, SyncLatestGarminActivity
 from muscle50.config import AppPaths, ConfigurationError
-from muscle50.domain.normalization import NormalizationError
+from muscle50.domain.normalization import NormalizationError, activity_id_from
 from muscle50.domain.recovery_normalization import RecoveryNormalizationError, validate_calendar_date
+from muscle50.domain.swim_normalization import SwimNormalizationError
 from muscle50.infrastructure.garmin.client import GarminConnectorError, PythonGarminConnector
 from muscle50.infrastructure.raw_store import RawStore, RawStoreError, RecoveryRawStore
 from muscle50.infrastructure.sqlite.database import ActivityRepository, DailyRecoveryRepository
-from muscle50.presentation.terminal import render_range_result, render_recovery_sync_result, render_sync_result
+from muscle50.presentation.terminal import (
+    render_range_result,
+    render_recovery_sync_result,
+    render_refresh_result,
+    render_sync_result,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,6 +42,8 @@ def build_parser() -> argparse.ArgumentParser:
     activities.add_argument("--to", dest="to_date", required=True, metavar="YYYY-MM-DD")
     recovery = garmin_commands.add_parser("recovery", help="Sync Garmin recovery data for one date")
     recovery.add_argument("date", help="Garmin calendar date in YYYY-MM-DD format")
+    refresh = garmin_commands.add_parser("refresh", help="Refresh one existing Garmin activity")
+    refresh.add_argument("activity_id", help="Garmin activity ID")
     return parser
 
 
@@ -42,6 +55,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _garmin_activities(args.from_date, args.to_date)
     if args.command == "garmin" and args.garmin_command == "recovery":
         return _garmin_recovery(args.date)
+    if args.command == "garmin" and args.garmin_command == "refresh":
+        return _garmin_refresh(args.activity_id)
     return 2
 
 
@@ -66,6 +81,7 @@ def _garmin_latest() -> int:
         NoActivitiesError,
         NormalizationError,
         RawStoreError,
+        SwimNormalizationError,
     ) as exc:
         print(f"오류: {exc}", file=sys.stderr)
         return 1
@@ -138,6 +154,38 @@ def _garmin_recovery(calendar_date: str) -> int:
         return 1
     except KeyboardInterrupt:
         print("\n취소되었습니다.", file=sys.stderr)
+        return 130
+
+
+def _garmin_refresh(source_activity_id: str) -> int:
+    try:
+        source_activity_id = activity_id_from({"activityId": source_activity_id})
+        paths = AppPaths.from_environment()
+        paths.ensure_directories()
+        repository = ActivityRepository(paths.database_path)
+        repository.migrate()
+        if repository.find(source_activity_id) is None:
+            raise ActivityNotFoundError(f"local Garmin activity not found: {source_activity_id}")
+        connector = PythonGarminConnector.authenticate(paths.auth_dir)
+        use_case = RefreshGarminActivity(
+            connector,
+            repository,
+            RawStore(paths.raw_dir, paths.root, paths.tmp_dir),
+        )
+        print(render_refresh_result(use_case.execute(source_activity_id)))
+        return 0
+    except (
+        ActivityRefreshError,
+        ConfigurationError,
+        GarminConnectorError,
+        NormalizationError,
+        RawStoreError,
+        SwimNormalizationError,
+    ) as exc:
+        print(f"오류: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\n취소했습니다.", file=sys.stderr)
         return 130
 
 
