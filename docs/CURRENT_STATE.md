@@ -51,7 +51,9 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   feature branch에서 shared migration/DB/CLI까지 통합됐다. 사용자 Galaxy에서
   Professional Body Composition read와 SMM presence, Android actual-AAR build는 통과했다. 실제 exported
   JSON도 Windows RAW/normalization/SQLite에 저장됐고 동일 파일 재수집은 0건 추가로 idempotent했다.
-  아직 main에는 merge하지 않았다.
+  2026-09-28에 최신 local main(`cba6a08`, activity refresh migration 6 포함)에 rebase하고 migration
+  번호 충돌(둘 다 6을 썼던 것)을 InBody `007_inbody.sql`로 재배정해 해결했다. Fast-forward 가능한
+  상태이지만 아직 main에는 merge하지 않았다.
 
 ## Verification
 
@@ -157,7 +159,6 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
 - Nutrition은 아직 public CLI command에 연결되지 않았다.
 - 기존 provisional nutrition schema로 직접 만든 외부 DB가 있다면 정식 migration marker가
   없으므로 별도 호환성 검토가 필요하다.
-- InBody가 통합될 경우 migration 번호는 최신 global chain 5 이후로 다시 배정해야 한다.
 - 날짜 범위 동기화의 pagination은 안전장치로 50페이지(최대 1000개 activity)까지만 조회한다.
   계정에 최근 activity가 매우 많으면 이 한도에 먼저 도달할 수 있으며, 이 경우 결과에
   `page_limit_reached`로 표시하고 조용히 잘라내지 않는다.

@@ -4,10 +4,43 @@ Last updated: 2026-09-28
 
 ## Current task
 
-`feature/strength-sets`에서 기존 Garmin activity를 명시적으로 다시 가져오는
-`muscle50 garmin refresh <activity-id>`를 구현했다. 일반 latest/range ingest의 기존
-activity skip 동작은 유지한다. 실제 Garmin 계정으로 activity 24481518495에 대한 live
-E2E 검증을 완료했다(아래 "Live E2E validation" 참고). Main merge, push는 아직 하지 않았다.
+`feature/inbody-connector`(HEAD `f205b20`)를 최신 local `main`(`cba6a08`, Garmin activity refresh까지
+반영)에 rebase해 fast-forward 가능한 상태로 준비했다. Main과 feature가 각자 독립적으로 migration 6을
+썼던 충돌(main `006_activity_refresh.sql` vs feature `006_inbody.sql`)을 InBody 쪽을
+`007_inbody.sql`로 재배정해 해결했다. **Main merge는 아직 하지 않았다** — 이번 세션은 통합 준비까지만
+수행한다.
+
+## InBody integration rebase (2026-09-28)
+
+- 이전 세션 대비 local main이 16 commits 전진했다(`85deeff` 날짜 범위 ingestion,
+  `cba6a08` activity refresh 포함). `git branch -vv`로 local main을 직접 확인했다(origin과는
+  별개로 diverge할 수 있다는 이전 경험 때문에 항상 local을 기준으로 삼는다).
+- `git rebase main`으로 4개 feature commit(`8694abc` InBody foundation, `94fd37b` Samsung Health
+  source, `68dee75` Samsung Health sync 통합, `774ca05` typing fix)을 순서대로 재적용했다.
+  merge commit 없이 선형 history를 유지했다.
+- 충돌은 매 커밋마다 `docs/HANDOFF.md`(세션별 로그라 매번 재작성하는 대신 main측 누적 내용을
+  유지하고 이 파일에서 최종 정리), `docs/CURRENT_STATE.md`(durable state라 실제 내용을 비교해
+  두 쪽을 모두 보존하도록 병합 — 특히 feature 쪽의 Galaxy live 검증 결과(`dataSource.appId=
+  com.inbody2014.inbody` 확인)를 놓치지 않게 주의했다), `src/muscle50/cli.py`(양쪽이 각각 독립적인
+  하위 명령을 추가한 것이라 실제 의미 충돌은 아니었고, import/`build_parser()`/`main()` dispatch/
+  함수 목록을 전부 합쳐 하나의 완전한 파일로 재작성했다), `tests/test_cli.py`와
+  `tests/test_database.py`(양쪽이 각자 추가한 테스트 함수를 모두 보존하고, `EXPECTED_TABLES`/
+  `EXPECTED_VERSIONS`와 여러 개별 테스트에 흩어져 있던 하드코딩된 migration 버전 목록
+  `[1,2,3,4,5,6]`을 전부 `[1,2,3,4,5,6,7]`로 업데이트)에서 발생했다. `ours`/`theirs`를 그대로 채택한
+  곳은 로그성 `docs/HANDOFF.md`뿐이고, 나머지는 모두 두 내용을 직접 읽고 의미를 확인한 뒤 손으로
+  재작성했다.
+- Migration 충돌: `src/muscle50/infrastructure/sqlite/migrations/006_inbody.sql`을
+  `007_inbody.sql`로 `git mv`하고 내부 `INSERT OR IGNORE INTO schema_migrations(...) VALUES (6, ...)`
+  를 `VALUES (7, ...)`로 수정했다. `docs/CURRENT_STATE.md`, `docs/inbody-sync-design.md`,
+  `tests/test_cli.py`, `tests/test_database.py`의 관련 참조를 모두 갱신했다. `tests/test_inbody_schema.py`
+  등 shared loader(`ActivityRepository(...).migrate()`)만 쓰는 파일은 하드코딩된 파일명/버전이 없어
+  수정이 필요 없었다.
+- `android/inbody-diagnostic-companion/.gitignore`에 남아 있던 EOF 공백 줄(`git diff --check`가
+  지적)을 제거했다.
+- 재검증: `uv run pytest -q` 281 passed, `uv run ruff check .` 통과, `uv run mypy src tests` 통과
+  (72 source files), `git diff --check` 통과. Migration 순서 001~007이 정확히 적용됨을
+  `ls`와 `EXPECTED_VERSIONS`/`EXPECTED_TABLES` 테스트로 확인했다.
+- Main merge/push는 이번 세션 범위 밖이다(명시적으로 지시받지 않음). Fast-forward는 가능한 상태다.
 
 ## Garmin Activity Refresh (2026-09-27)
 
