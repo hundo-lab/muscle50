@@ -7,8 +7,8 @@ Last updated: 2026-09-29
 Garmin refresh safety gate를 닫았다. `garmin refresh`가 기존 canonical activity metadata를 NULL로
 덮어쓰던 버그를 hotfix하고, 실기기 activity 2건으로 실 DB 회귀 검증을 마쳤다. **판정: SAFE.**
 
-현재 main HEAD는 `4618df8`이고, hotfix는 아직 **커밋되지 않은 work tree 상태**다. 커밋/머지는
-별도 승인 후 진행한다.
+Hotfix는 main에 커밋됐다: `c32cff3` — "fix: make Garmin activity refresh metadata-safe"
+(부모 `4618df8`). 이 handoff 문서 갱신은 그 뒤 별도 docs-only 커밋이다. Push는 하지 않았다.
 
 ## Garmin refresh hotfix (2026-09-29)
 
@@ -273,10 +273,7 @@ Pagination/range-stop 로직은 실제로 필터를 깨뜨려 관련 테스트 2
 
 ## Recommended next action
 
-1. **Work tree 커밋 (승인 필요).** Garmin refresh hotfix와 선행 수정(swim factor, recovery
-   em-dash)이 아직 커밋되지 않았다. 전 게이트 통과 상태이므로 main 커밋만 하면 된다. 현재는
-   버전 관리 밖이라 `git restore` 한 번에 소실될 수 있다 — 가장 시급한 항목이다.
-2. **다음 마일스톤: Analytics Engine.** Data collection layer는 2026-09-28에 VALIDATED,
+1. **다음 마일스톤: Analytics Engine.** Data collection layer는 2026-09-28에 VALIDATED,
    refresh safety gate는 2026-09-29에 SAFE로 닫혔다. InBody/Swim/Recovery/Strength canonical
    데이터가 실기기 기준으로 정상 저장·갱신됨이 확인됐으므로 읽기/집계 계층을 시작할 수 있다.
    현재 read layer가 전혀 없는 영역(예: swimming progression 기간 집계)이 첫 후보다.

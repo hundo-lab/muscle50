@@ -52,14 +52,14 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 ## Pending merge
 
 - 없음. `feature/inbody-connector`는 2026-09-28에 local main으로 fast-forward 병합됐다
-  (현재 main HEAD `4618df8`). Migration 번호 충돌(main `006_activity_refresh.sql` vs feature
+  (병합 시점 main HEAD `4618df8`). Migration 번호 충돌(main `006_activity_refresh.sql` vs feature
   `006_inbody.sql`)은 InBody를 `007_inbody.sql`로 재배정해 해결한 상태로 병합됐다.
 
-## Uncommitted work tree
+## Garmin refresh hotfix
 
-2026-09-29 기준 main(`4618df8`)에는 아직 커밋되지 않은 수정이 work tree에 있다. 전부 아래
-"Garmin refresh hotfix"와 그 선행 수정이며, 전체 게이트(pytest 285 / Ruff / mypy 72 files /
-`git diff --check`)를 통과한 상태다.
+2026-09-29에 main에 커밋됐다: `c32cff3` — "fix: make Garmin activity refresh metadata-safe".
+커밋 직전 전체 게이트(pytest 285 / Ruff / mypy 72 files / `git diff --check`)를 재실행해 통과했다.
+Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포함된 변경:
 
 - `src/muscle50/application/refresh_garmin_activity.py` — refresh metadata 파괴 hotfix
 - `src/muscle50/domain/swim_normalization.py` — `unitOfPoolLength.factor` 처리와
