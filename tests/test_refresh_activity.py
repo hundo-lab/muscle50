@@ -302,3 +302,101 @@ def test_swim_refresh_replaces_laps_and_lengths(paths: AppPaths) -> None:
     with sqlite3.connect(paths.database_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM swim_laps").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM swim_lengths").fetchone()[0] == result.swim_length_count
+
+
+def test_strength_refresh_reads_summary_dto_and_preserves_missing_parent_metadata(paths: AppPaths) -> None:
+    initial = {
+        **_strength_summary(),
+        "startTimeGMT": "2026-09-24 12:13:00",
+        "startTimeLocal": "2026-09-24 21:13:00",
+        "timeZoneId": "Asia/Seoul",
+        "elapsedDuration": 1201,
+        "movingDuration": 900,
+        "distance": 0,
+        "calories": 334,
+        "averageHR": 115,
+        "maxHR": 154,
+        "elevationGain": 12,
+    }
+    connector = MutableConnector(initial, exercise_sets=_unknown_sets())
+    repository = _initial_import(paths, connector)
+    connector.activity = {
+        "activityId": 222,
+        "activityName": "Refreshed Strength",
+        "activityTypeDTO": {"typeKey": "strength_training"},
+        "timeZoneUnitDTO": {"unitKey": "Asia/Seoul"},
+        "summaryDTO": {
+            "startTimeGMT": "2026-09-24T12:13:00.0",
+            "startTimeLocal": "2026-09-24T21:13:00.0",
+            "duration": 1300,
+            "elapsedDuration": 1301,
+            "movingDuration": 950,
+            "calories": 350,
+        },
+    }
+    connector.exercise_sets = _corrected_sets()
+
+    result = RefreshGarminActivity(
+        connector, repository, RawStore(paths.raw_dir, paths.root, paths.tmp_dir)
+    ).execute("222")
+
+    assert result.activity.name == "Refreshed Strength"
+    assert result.activity.elapsed_seconds == 1301
+    assert result.activity.moving_seconds == 950
+    assert result.activity.calories_kcal == 350
+    assert result.activity.distance_meters == 0
+    assert result.activity.average_hr_bpm == 115
+    assert result.activity.max_hr_bpm == 154
+    assert result.activity.elevation_gain_meters == 12
+    assert result.activity.timezone_name == "Asia/Seoul"
+    assert len(result.activity.strength_sets) == 3
+
+
+def test_swim_refresh_preserves_pool_metadata_when_detail_omits_pool_length(paths: AppPaths) -> None:
+    fixture = json.loads((Path(__file__).parent / "fixtures" / "garmin_pool_swim.json").read_text(encoding="utf-8"))
+    connector = MutableConnector({**fixture["summary"], **fixture["activity"]}, splits=fixture["splits"])
+    repository = _initial_import(paths, connector)
+    before = repository.find("900001")
+    assert before is not None and before.swim_detail is not None
+
+    connector.activity = {
+        "activityId": 900001,
+        "activityName": "Pool Swim",
+        "activityTypeDTO": {"typeKey": "lap_swimming"},
+        "summaryDTO": {"duration": 999},
+    }
+    connector.splits = {"activityId": 900001, "lapDTOs": fixture["splits"]["lapDTOs"][:1]}
+    result = RefreshGarminActivity(
+        connector, repository, RawStore(paths.raw_dir, paths.root, paths.tmp_dir)
+    ).execute("900001")
+
+    assert result.activity.swim_detail is not None
+    assert result.activity.swim_detail.pool_length_meters == before.swim_detail.pool_length_meters
+    assert result.activity.swim_detail.source_pool_length == before.swim_detail.source_pool_length
+    assert result.activity.swim_detail.source_pool_length_unit == before.swim_detail.source_pool_length_unit
+    assert result.swim_lap_count == 1
+    assert "summaryDTO" in result.activity.swim_detail.source.fields_json
+
+
+def test_swim_refresh_does_not_rescale_detail_summary_dto_pool_length(paths: AppPaths) -> None:
+    fixture = json.loads((Path(__file__).parent / "fixtures" / "garmin_pool_swim.json").read_text(encoding="utf-8"))
+    connector = MutableConnector({**fixture["summary"], **fixture["activity"]}, splits=fixture["splits"])
+    repository = _initial_import(paths, connector)
+    connector.activity = {
+        "activityId": 900001,
+        "activityName": "Pool Swim",
+        "activityTypeDTO": {"typeKey": "lap_swimming"},
+        "summaryDTO": {
+            "poolLength": 25,
+            "unitOfPoolLength": {"factor": 100, "unitKey": "meter"},
+        },
+    }
+
+    result = RefreshGarminActivity(
+        connector, repository, RawStore(paths.raw_dir, paths.root, paths.tmp_dir)
+    ).execute("900001")
+
+    assert result.activity.swim_detail is not None
+    assert result.activity.swim_detail.pool_length_meters == 25
+    assert result.activity.swim_detail.source_pool_length == 25
+    assert result.activity.swim_detail.source_pool_length_unit == "meter"

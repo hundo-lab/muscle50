@@ -127,6 +127,24 @@ def test_pool_length_conversion_requires_a_known_source_unit(
     assert swim.source_pool_length_unit == unit
 
 
+def test_pool_length_applies_unit_of_pool_length_factor() -> None:
+    # Real Garmin Connect payloads (unlike this suite's other fixtures) report `poolLength`
+    # under `unitOfPoolLength`, scaled by its `factor` -- observed live as poolLength=2500.0,
+    # factor=100.0, unitKey="meter" for an actual 25 m pool.
+    summary = {
+        "activityId": 1,
+        "activityType": {"typeKey": "lap_swimming"},
+        "poolLength": 2500.0,
+        "unitOfPoolLength": {"factor": 100.0, "unitId": 1, "unitKey": "meter"},
+    }
+
+    swim = normalize_garmin_swim(summary, {}, {"activityId": 1, "lapDTOs": []})
+
+    assert swim.pool_length_meters == pytest.approx(25.0)
+    assert swim.source_pool_length == 2500.0
+    assert swim.source_pool_length_unit == "meter"
+
+
 def test_missing_optional_values_are_not_invented() -> None:
     summary = {"activityId": 2, "activityTypeKey": "lap_swimming"}
     splits = {"activityId": 2, "lapDTOs": [{"lengthDTOs": [{"lengthType": "ACTIVE"}]}]}

@@ -26,6 +26,8 @@ def normalize_garmin_swim(
     summary: Mapping[str, Any],
     activity: Mapping[str, Any],
     splits: Mapping[str, Any] | None,
+    *,
+    pool_length_factor_applies: bool = True,
 ) -> NormalizedSwimActivity:
     """Normalize the split hierarchy while preserving every Garmin source object."""
 
@@ -38,7 +40,8 @@ def normalize_garmin_swim(
 
     source_pool_length = _number(source, "poolLength")
     source_pool_unit = _pool_unit(source)
-    pool_length_meters = _distance_in_meters(source_pool_length, source_pool_unit)
+    pool_length_factor = _pool_unit_factor(source) if pool_length_factor_applies else None
+    pool_length_meters = _distance_in_meters(source_pool_length, source_pool_unit, pool_length_factor)
 
     laps: list[SwimLap] = []
     length_sequence = 0
@@ -188,9 +191,22 @@ def _pool_unit(source: Mapping[str, Any]) -> str | None:
     return _text_key(value)
 
 
-def _distance_in_meters(value: float | None, unit: str | None) -> float | None:
+def _pool_unit_factor(source: Mapping[str, Any]) -> float | None:
+    # Garmin's `unitOfPoolLength` reports `poolLength` scaled by this factor (for example
+    # 2500 with factor 100 is a 25 m pool), unlike `poolLengthUnit`, which carries no factor.
+    value = source.get("poolLengthUnit")
+    if value is None:
+        value = source.get("unitOfPoolLength")
+    if isinstance(value, Mapping):
+        return _as_float(value.get("factor"))
+    return None
+
+
+def _distance_in_meters(value: float | None, unit: str | None, factor: float | None = None) -> float | None:
     if value is None:
         return None
+    if factor:
+        value = value / factor
     if unit in {"meter", "meters", "metre", "metres", "m"}:
         return value
     if unit in {"yard", "yards", "yd"}:

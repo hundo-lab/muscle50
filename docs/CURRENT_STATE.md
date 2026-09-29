@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-09-28
+Last updated: 2026-09-29
 
 ## Project goal
 
@@ -20,6 +20,10 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   normalized row를 분리하고, normalized row에서 accepted source capture를 추적한다.
 - Garmin Activity Refresh는 기존 flat initial RAW를 유지하면서 activity별
   `snapshots/<content-sha256>/` history를 추가하고, accepted capture만 canonical row와 연결한다.
+- Garmin list endpoint와 detail endpoint의 payload shape는 다르며 코드가 이를 명시적으로 구분한다.
+  `list_activities`/`latest_summary`는 측정값을 top-level flat key로 주고, `get_activity`는
+  identity/name/type/timezone만 top-level에 두고 측정값을 `summaryDTO`에 중첩한다. Refresh는
+  `_detail_summary()`로 `summaryDTO`를 top-level 위에 병합해 normalize에 넘긴다.
 - SQLite schema는 package에 포함된 numbered migration을 순서대로 적용한다.
 - Garmin source 값과 corrected/derived 값은 서로 덮어쓰지 않는다.
 - Nutrition Core는 deterministic domain model, JSON interchange schema, 공용 SQLite DB의
@@ -47,15 +51,41 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 
 ## Pending merge
 
-- `feature/inbody-connector`: Samsung Health Data SDK Android diagnostic companion과 Python JSON source가
-  feature branch에서 shared migration/DB/CLI까지 통합됐다. 사용자 Galaxy에서
-  Professional Body Composition read와 SMM presence, Android actual-AAR build는 통과했다. 실제 exported
-  JSON도 Windows RAW/normalization/SQLite에 저장됐고 동일 파일 재수집은 0건 추가로 idempotent했다.
-  2026-09-28에 최신 local main(`cba6a08`, activity refresh migration 6 포함)에 rebase하고 migration
-  번호 충돌(둘 다 6을 썼던 것)을 InBody `007_inbody.sql`로 재배정해 해결했다. Fast-forward 가능한
-  상태이지만 아직 main에는 merge하지 않았다.
+- 없음. `feature/inbody-connector`는 2026-09-28에 local main으로 fast-forward 병합됐다
+  (현재 main HEAD `4618df8`). Migration 번호 충돌(main `006_activity_refresh.sql` vs feature
+  `006_inbody.sql`)은 InBody를 `007_inbody.sql`로 재배정해 해결한 상태로 병합됐다.
+
+## Uncommitted work tree
+
+2026-09-29 기준 main(`4618df8`)에는 아직 커밋되지 않은 수정이 work tree에 있다. 전부 아래
+"Garmin refresh hotfix"와 그 선행 수정이며, 전체 게이트(pytest 285 / Ruff / mypy 72 files /
+`git diff --check`)를 통과한 상태다.
+
+- `src/muscle50/application/refresh_garmin_activity.py` — refresh metadata 파괴 hotfix
+- `src/muscle50/domain/swim_normalization.py` — `unitOfPoolLength.factor` 처리와
+  `pool_length_factor_applies` 플래그
+- `src/muscle50/presentation/terminal.py` — recovery 출력의 em-dash 제거(cp949 콘솔 크래시)
+- `tests/test_refresh_activity.py`, `tests/test_swim_normalization.py`, `tests/test_sync_recovery.py`
 
 ## Verification
+
+2026-09-29 Garmin refresh safety gate (실기기 2건, 실 DB): refresh가 기존 canonical activity
+metadata를 파괴하지 않음을 before/after 비교로 확인했다.
+
+- Strength `24481518495`(`MUSCLE50_HOME=C:\temp\muscle50-smoke`): 이전 버그로 NULL이었던
+  `started_at_utc/local`, `elapsed_seconds`, `moving_seconds`, `distance_meters`,
+  `calories_kcal`, `average_hr_bpm`, `max_hr_bpm` 8개 필드가 detail endpoint 값으로 복구됐다
+  (2805.698 / 1359.479 / 0.0 / 334.0 / 115.0 / 154.0). Strength set 46건 유지, 교정된 종목 분류
+  (DUMBBELL_HAMMER_CURL, CLOSE_GRIP_EZ_BAR_BICEPS_CURL, INCLINE_SMITH_MACHINE_BENCH_PRESS,
+  CLOSE_GRIP_BARBELL_BENCH_PRESS) 유지.
+- Swim `24391051389`(production home): parent metadata 11개 필드가 refresh 전후 완전히 동일하게
+  유지됐다. distance 3025.0 m, pool 25.0 m, lap 20건, length 135건 유지. length distance 합계
+  3025.0 m가 parent `distance_meters`와 정확히 일치한다.
+- 두 activity 모두 refresh를 2회 실행해 canonical 값 drift 0을 확인했다(idempotent).
+- 중복 row 0, orphan(strength/swim/lap/length/metric/refresh_state) 0, 기존 RAW 파일 변경·삭제 0
+  (append-only snapshot만 증가), `activities.primary_raw_artifact_id`는 최초 import 증거를 그대로
+  유지, 양쪽 DB `PRAGMA integrity_check` = ok.
+- 검증 후 production 42건, smoke 2건 전체에서 `started_at_local`이 NULL인 activity는 0건이다.
 
 2026-09-28 Garmin activity refresh live E2E validation: 사용자가 이 Paseo 세션 밖에서
 `MUSCLE50_HOME=C:\temp\muscle50-smoke`, 실제 Garmin 계정, activity 24481518495로
@@ -141,6 +171,23 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
 
 ## Known issues
 
+- Refresh는 매 실행마다 새 RAW capture를 append한다. "동일 payload면 같은 capture 재사용"이라는
+  설계 의도는 실제 Garmin 응답에서는 성립하지 않는다 — `get_activity_details`가 의미상 동일한
+  데이터를 호출마다 다른 column 순서로 돌려주고(`metricDescriptors`의 `metricsIndex` 배정이
+  바뀌고 `activityDetailMetrics` 배열이 그에 맞춰 치환됨), `original.zip`은 zip 타임스탬프를
+  포함해 바이트가 매번 달라진다. `activity.json`/`summary.json`/`splits.json`은 동일하다.
+  데이터 손상은 없고 append-only 증가만 발생하므로 저장공간 이슈로만 취급한다.
+- Swim `source_pool_length` provenance 값은 마지막으로 사용한 endpoint에 따라 달라진다.
+  list endpoint ingest는 2500.0(factor 적용 전), detail endpoint refresh는 25.0(이미 적용된 값)을
+  기록한다. 두 값 모두 해당 endpoint의 실제 source 값이며 canonical `pool_length_meters`는
+  어느 경로든 25.0으로 동일하다.
+- `normalization.py`의 `_append_pool_length()`(activity_metrics용)는 `poolLengthUnit`만 보고
+  실제 payload의 `unitOfPoolLength`/`factor`를 읽지 않는다. `swim_normalization.py`와 별개
+  경로이며 이번 hotfix 범위 밖이라 그대로 두었다.
+- Refresh는 `avgSwolf`/`avgStrokeDistance`/`lapCount` 같은 list-endpoint 전용 key 이름을
+  `summaryDTO`에서 찾지 못한다(detail은 `averageSWOLF`/`averageStrokeDistance`를 쓰고
+  `lapCount`가 없다). 기존 metric은 `_preserve_missing_canonical_values()`가 유지하므로
+  삭제되지는 않지만, refresh만으로 새로 채워지지도 않는다.
 - Garmin Connect 연동은 비공식 API이므로 인증 및 응답 shape 변경 위험이 있다.
 - 실제 Garmin 계정/개인 데이터 기반 smoke test는 자동 검증에 포함하지 않는다. 2026-09-28에
   `garmin refresh`에 한해 1회 수동 live smoke(activity 24481518495)를 수행했지만, 이는
@@ -193,3 +240,11 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
   `activity_refresh_state.current_capture_id`로 별도 추적한다.
 - Review 상태는 canonical `strength_sets`에서 동적으로 계산한다. 별도 persisted state는 최신
   canonical과 불일치할 위험만 늘리고 현재 요구에는 구체적 이점이 없어 추가하지 않았다.
+- Endpoint shape 차이는 domain normalizer가 아니라 application 경계(`refresh_garmin_activity.py`)
+  에서 흡수한다. `normalize_activity`/`normalize_garmin_swim`은 "summary는 flat shape"라는 단일
+  규약을 유지하고, refresh가 `_detail_summary()`로 변환해 넘긴다. 단 `poolLength`는 detail에서
+  이미 factor가 적용된 값이라 `pool_length_factor_applies=False`로 명시해 이중 적용을 막는다.
+- `ActivityRepository.refresh()`는 계약대로 전 컬럼 replace를 유지한다. "source 값이 없으면 기존
+  값을 지우지 않는다"는 규칙은 repository가 아니라 `RefreshGarminActivity`에서
+  `_preserve_missing_canonical_values()`로 적용한다 — replace 계약을 바꾸면 다른 호출자에서
+  의도적인 값 삭제까지 막히기 때문이다.

@@ -1,14 +1,66 @@
 # Session Handoff
 
-Last updated: 2026-09-28
+Last updated: 2026-09-29
 
 ## Current task
 
-`feature/inbody-connector`(HEAD `f205b20`)를 최신 local `main`(`cba6a08`, Garmin activity refresh까지
-반영)에 rebase해 fast-forward 가능한 상태로 준비했다. Main과 feature가 각자 독립적으로 migration 6을
-썼던 충돌(main `006_activity_refresh.sql` vs feature `006_inbody.sql`)을 InBody 쪽을
-`007_inbody.sql`로 재배정해 해결했다. **Main merge는 아직 하지 않았다** — 이번 세션은 통합 준비까지만
-수행한다.
+Garmin refresh safety gate를 닫았다. `garmin refresh`가 기존 canonical activity metadata를 NULL로
+덮어쓰던 버그를 hotfix하고, 실기기 activity 2건으로 실 DB 회귀 검증을 마쳤다. **판정: SAFE.**
+
+현재 main HEAD는 `4618df8`이고, hotfix는 아직 **커밋되지 않은 work tree 상태**다. 커밋/머지는
+별도 승인 후 진행한다.
+
+## Garmin refresh hotfix (2026-09-29)
+
+### Root cause
+
+`PythonGarminConnector.fetch_raw_activity()`는 단일 activity 조회라 list endpoint를 호출하지 않고
+`summary={}`를 반환한다. `RefreshGarminActivity`는 그 자리를 `raw.activity`(= `get_activity()`
+detail payload)로 채운 뒤 `normalize_activity(raw.activity, raw.activity, ...)`로 넘겼다.
+
+그런데 detail payload는 list summary와 shape가 다르다. `startTimeGMT`, `startTimeLocal`,
+`duration`, `elapsedDuration`, `movingDuration`, `distance`, `calories`, `averageHR`, `maxHR`가
+top-level에 전혀 없고 전부 `summaryDTO` 안에 중첩돼 있다(실제 RAW로 swim/strength 양쪽 확인).
+따라서 `normalize_activity`의 flat key 조회가 모두 None을 반환했고,
+`ActivityRepository.refresh()`가 계약대로 전 컬럼을 무조건 UPDATE하면서 정상값이 NULL로 덮였다.
+
+`timezone_name`(`timeZoneUnitDTO`)과 `name`(`activityName`)은 detail top-level에 있어 깨지지
+않았다 — 실제 관측된 손상 필드 목록과 정확히 일치한다.
+
+이 버그는 refresh 기능 도입 시점부터 있었고, 2026-09-28 "Live E2E validation"이 성공으로 기록된
+strength `24481518495`도 실제로는 parent row가 NULL이 된 상태였다. 그 검증이 `strength_sets`만
+확인하고 parent row를 보지 않아 놓쳤다.
+
+### Code change
+
+- `_detail_summary()`: `summaryDTO`를 top-level 위에 병합해 flat shape로 만든다. `summaryDTO`가
+  없는 synthetic/legacy payload는 그대로 통과시킨다.
+- `_preserve_missing_canonical_values()`: refresh가 값을 주지 못한 필드만 기존 DB 값을 유지한다
+  (name/timezone 포함 11개 scalar, 기존 activity_metric, swim pool 관련 4개 필드). 새 값이 있으면
+  항상 새 값이 이긴다.
+- `normalize_garmin_swim(..., pool_length_factor_applies=)`: detail의 `summaryDTO.poolLength`는
+  이미 factor가 적용된 값(25.0)이고 list의 `poolLength`는 적용 전 값(2500.0)이라, refresh 경로에서만
+  factor 적용을 끈다. `swim_normalization.py`의 기존 factor 처리 자체는 그대로 둔다.
+- `ActivityRepository.refresh()`의 전 컬럼 replace 계약은 변경하지 않았다.
+
+### Regression tests
+
+`tests/test_refresh_activity.py`에 3건 추가(전체 285 passed).
+
+- `test_strength_refresh_reads_summary_dto_and_preserves_missing_parent_metadata`
+- `test_swim_refresh_preserves_pool_metadata_when_detail_omits_pool_length`
+- `test_swim_refresh_does_not_rescale_detail_summary_dto_pool_length`
+
+### Real-device validation
+
+`docs/CURRENT_STATE.md`의 "Verification" 2026-09-29 절 참고. 두 activity 모두 refresh 2회 실행 후
+parent metadata drift 0, child row 수/내용 유지, 중복·orphan 0, 기존 RAW 불변, integrity ok.
+
+### Known issue (데이터 안전성과 무관)
+
+Refresh는 매번 새 capture를 append한다. `get_activity_details`가 호출마다 column 순서를 바꿔
+돌려주고 `original.zip`이 타임스탬프를 포함하기 때문에 content-addressed dedup이 실제 응답에서는
+절대 걸리지 않는다. 손상은 없고 저장공간만 증가한다.
 
 ## InBody integration rebase (2026-09-28)
 
@@ -221,6 +273,11 @@ Pagination/range-stop 로직은 실제로 필터를 깨뜨려 관련 테스트 2
 
 ## Recommended next action
 
-Live E2E validation(activity 24481518495)이 완료되고 quality gate가 모두 통과해
-Garmin Activity Refresh 변경을 `feature/strength-sets`에 커밋했다. Main merge와 push는
-아직 하지 않았다 — 다음 세션에서 별도 승인 후 진행한다.
+1. **Work tree 커밋 (승인 필요).** Garmin refresh hotfix와 선행 수정(swim factor, recovery
+   em-dash)이 아직 커밋되지 않았다. 전 게이트 통과 상태이므로 main 커밋만 하면 된다. 현재는
+   버전 관리 밖이라 `git restore` 한 번에 소실될 수 있다 — 가장 시급한 항목이다.
+2. **다음 마일스톤: Analytics Engine.** Data collection layer는 2026-09-28에 VALIDATED,
+   refresh safety gate는 2026-09-29에 SAFE로 닫혔다. InBody/Swim/Recovery/Strength canonical
+   데이터가 실기기 기준으로 정상 저장·갱신됨이 확인됐으므로 읽기/집계 계층을 시작할 수 있다.
+   현재 read layer가 전혀 없는 영역(예: swimming progression 기간 집계)이 첫 후보다.
+   **아직 시작하지 않았다.**

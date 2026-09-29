@@ -106,7 +106,7 @@ def render_recovery_sync_result(result: RecoverySyncResult) -> str:
         state = "recovery 갱신 완료"
     else:
         state = "이미 저장된 recovery (변경 없음)"
-    lines = [state, "", f"Recovery — {recovery.calendar_date}"]
+    lines = [state, "", f"Recovery: {recovery.calendar_date}"]
     lines.append(
         f"Sleep: {_duration(recovery.sleep_seconds) if recovery.sleep_seconds is not None else 'unavailable'}"
     )

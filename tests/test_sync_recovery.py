@@ -103,7 +103,8 @@ def test_repeated_sync_is_unchanged_and_changed_payload_updates_daily_row(tmp_pa
     assert all(json.loads(path.read_text(encoding="utf-8"))["requested_date"] == "2026-09-15" for path in manifests)
     output = render_recovery_sync_result(third)
     assert "recovery 갱신 완료" in output
-    assert "Recovery — 2026-09-15" in output
+    assert "Recovery: 2026-09-15" in output
+    output.encode("cp949")  # regression: a literal em-dash here crashed print() on a real Korean Windows console
     assert "Training Readiness: 76 (HIGH)" in output
     assert "Training Status: MAINTAINING" in output
 
