@@ -6,6 +6,7 @@ import sqlite3
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.resources import files
 from pathlib import Path
@@ -22,6 +23,13 @@ from muscle50.domain.normalization import strength_set_metrics
 from muscle50.domain.recovery import DailyRecovery
 from muscle50.domain.swimming import GarminSource, NormalizedSwimActivity, SwimDistance, SwimLap, SwimLength
 from muscle50.infrastructure.raw_store import ActivityCapture, RawArtifact, RecoveryCapture
+
+
+@dataclass(frozen=True)
+class MetricUpsertCounts:
+    inserted: int
+    updated: int
+    unchanged: int
 
 
 class ActivityRepository:
@@ -325,6 +333,83 @@ class ActivityRepository:
                 raise ValueError("swim detail type does not match the stored activity")
             _insert_swim_detail(connection, int(row["id"]), swim_detail, ignore_existing=True)
 
+    def list_source_activity_ids(self) -> tuple[str, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT source_activity_id FROM activities WHERE provider = 'garmin' ORDER BY source_activity_id"
+            ).fetchall()
+        return tuple(row["source_activity_id"] for row in rows)
+
+    def upsert_activity_metrics(
+        self,
+        source_activity_id: str,
+        metrics: tuple[ActivityMetric, ...],
+        allowed_keys: frozenset[str],
+        *,
+        write: bool = True,
+    ) -> MetricUpsertCounts:
+        """Insert or update only allow-listed metric keys; every other row is left untouched.
+
+        Never deletes metrics and never touches the parent activity row. With
+        ``write=False`` the same comparison runs inside a transaction that is rolled back.
+        """
+        disallowed = {metric.key for metric in metrics} - allowed_keys
+        if disallowed:
+            raise ValueError(f"metric keys are not allowed for this upsert: {sorted(disallowed)}")
+        if len({metric.key for metric in metrics}) != len(metrics):
+            raise ValueError("duplicate metric keys in one upsert")
+        inserted = updated = unchanged = 0
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT id FROM activities WHERE provider = 'garmin' AND source_activity_id = ?",
+                (source_activity_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"activity is not stored: {source_activity_id}")
+            activity_id = int(row["id"])
+            for metric in metrics:
+                numeric, text = _metric_values(metric)
+                existing = connection.execute(
+                    """
+                    SELECT numeric_value, text_value, unit, source_path
+                    FROM activity_metrics WHERE activity_id = ? AND metric_key = ?
+                    """,
+                    (activity_id, metric.key),
+                ).fetchone()
+                if existing is None:
+                    inserted += 1
+                    if write:
+                        connection.execute(
+                            """
+                            INSERT INTO activity_metrics (
+                                activity_id, metric_key, numeric_value, text_value, unit, source_path
+                            ) VALUES (?, ?, ?, ?, ?, ?)
+                            """,
+                            (activity_id, metric.key, numeric, text, metric.unit, metric.source_path),
+                        )
+                elif (
+                    existing["numeric_value"],
+                    existing["text_value"],
+                    existing["unit"],
+                    existing["source_path"],
+                ) == (numeric, text, metric.unit, metric.source_path):
+                    unchanged += 1
+                else:
+                    updated += 1
+                    if write:
+                        connection.execute(
+                            """
+                            UPDATE activity_metrics
+                            SET numeric_value = ?, text_value = ?, unit = ?, source_path = ?
+                            WHERE activity_id = ? AND metric_key = ?
+                            """,
+                            (numeric, text, metric.unit, metric.source_path, activity_id, metric.key),
+                        )
+            if not write:
+                connection.rollback()
+        return MetricUpsertCounts(inserted, updated, unchanged)
+
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         self._database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -357,6 +442,13 @@ class DailyRecoveryRepository:
                 (calendar_date,),
             ).fetchone()
         return _recovery_from_row(row) if row is not None else None
+
+    def list_calendar_dates(self) -> tuple[str, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT calendar_date FROM daily_recovery WHERE provider = 'garmin' ORDER BY calendar_date"
+            ).fetchall()
+        return tuple(row["calendar_date"] for row in rows)
 
     def find_source_capture(self, calendar_date: str) -> RecoveryCapture | None:
         with self._connect() as connection:

@@ -176,6 +176,14 @@ class RawStore:
             return None
         return _load_json_mapping(path, "exercise_sets")
 
+    def load_initial_summary(self, activity_id: str) -> Mapping[str, Any] | None:
+        """Read the initial flat activity-list summary; refresh snapshots are never read."""
+        _validate_activity_id(activity_id)
+        path = self._root / activity_id / "summary.json"
+        if not path.exists():
+            return None
+        return _load_json_mapping(path, "summary")
+
     def load_swim_payloads(
         self,
         activity_id: str,
@@ -252,6 +260,29 @@ class RecoveryRawStore:
             manifest_relative_path=manifest_path.relative_to(self._data_root).as_posix(),
             artifacts=tuple(artifacts),
         )
+
+    def load_capture_payloads(self, capture: RecoveryCapture) -> dict[str, Any]:
+        """Read an accepted capture's artifacts, verifying recorded size and sha256."""
+        _validate_recovery_date(capture.requested_date)
+        capture_dir = (self._root / capture.requested_date / capture.capture_id).resolve()
+        payloads: dict[str, Any] = {}
+        for artifact in capture.artifacts:
+            if artifact.kind not in _RECOVERY_ARTIFACT_FILES:
+                raise RawStoreError(f"알 수 없는 recovery RAW 종류입니다: {artifact.kind}")
+            path = (self._data_root / artifact.relative_path).resolve()
+            if path.parent != capture_dir:
+                raise RawStoreError("recovery RAW 경로가 capture 디렉터리와 일치하지 않습니다.")
+            try:
+                content = path.read_bytes()
+            except OSError as exc:
+                raise RawStoreError(f"기존 recovery RAW 파일을 읽을 수 없습니다: {artifact.kind}") from exc
+            if len(content) != artifact.byte_size or hashlib.sha256(content).hexdigest() != artifact.sha256:
+                raise RawStoreError(f"recovery RAW 파일이 기록된 hash와 다릅니다: {artifact.kind}")
+            try:
+                payloads[artifact.kind] = json.loads(content.decode("utf-8"))
+            except (UnicodeError, json.JSONDecodeError) as exc:
+                raise RawStoreError(f"기존 recovery RAW 파일 형식이 올바르지 않습니다: {artifact.kind}") from exc
+        return payloads
 
 
 def _json_bytes(value: Any) -> bytes:

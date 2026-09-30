@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# 2: training status from latestTrainingStatusData phrases; sleep HRV from avgOvernightHrv.
+RECOVERY_NORMALIZER_VERSION = 2
+
 
 @dataclass(frozen=True)
 class DailyRecovery:
@@ -37,4 +40,4 @@ class DailyRecovery:
     recovery_time_change_phrase: str | None
     training_status_key: str | None
     respiration_avg_brpm: float | None
-    normalizer_version: int = 1
+    normalizer_version: int = RECOVERY_NORMALIZER_VERSION

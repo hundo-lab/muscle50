@@ -13,6 +13,10 @@ class GarminConnectorError(RuntimeError):
     """A safe-to-display Garmin connector failure."""
 
 
+class GarminAuthenticationError(GarminConnectorError):
+    """Garmin rejected the session; later requests in the same run cannot succeed."""
+
+
 @dataclass(frozen=True)
 class GarminRawActivity:
     summary: Mapping[str, Any]
@@ -215,7 +219,7 @@ class PythonGarminConnector:
             return validator(call())
         except Exception as exc:
             if _is_authentication_error(exc):
-                raise GarminConnectorError("Garmin recovery 인증에 실패했습니다.") from exc
+                raise GarminAuthenticationError("Garmin recovery 인증에 실패했습니다.") from exc
             warnings.append(f"{label} 원본을 가져오지 못했습니다.")
             return _MISSING
 

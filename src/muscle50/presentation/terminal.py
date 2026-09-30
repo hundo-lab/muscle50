@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from muscle50.application.backfill_activity_load_metrics import ActivityLoadBackfillResult
 from muscle50.application.ingest_activity_range import RangeIngestResult
 from muscle50.application.refresh_garmin_activity import ActivityRefreshResult
-from muscle50.application.sync_garmin_recovery import RecoverySyncResult
+from muscle50.application.renormalize_garmin_recovery import RecoveryRenormalizeResult
+from muscle50.application.sync_garmin_recovery import RecoveryRangeSyncResult, RecoverySyncResult
 from muscle50.application.sync_latest_garmin import SyncResult
 from muscle50.domain.activity import ActivityMetric, ActivityType, StrengthSet
 from muscle50.domain.derivation import derive_summary
@@ -127,6 +129,71 @@ def render_recovery_sync_result(result: RecoverySyncResult) -> str:
     lines.append(f"Training Status: {recovery.training_status_key or 'unavailable'}")
     lines.append(f"Respiration: {_number(recovery.respiration_avg_brpm, ' brpm')}")
     lines.extend(f"경고: {warning}" for warning in result.warnings)
+    return "\n".join(lines)
+
+
+def render_recovery_range_result(result: RecoveryRangeSyncResult) -> str:
+    lines = [
+        f"Recovery 기간: {result.from_date.isoformat()} ~ {result.to_date.isoformat()}",
+        f"요청 날짜: {len(result.outcomes)}일",
+        f"신규 저장: {result.count('created')}일",
+        f"갱신: {result.count('updated')}일",
+        f"변경 없음: {result.count('unchanged')}일",
+        f"실패: {result.count('failed')}일",
+        f"미시도: {result.count('not_attempted')}일",
+    ]
+    for outcome in result.outcomes:
+        if outcome.status == "failed":
+            lines.append(f"실패: {outcome.calendar_date} ({outcome.error})")
+        elif outcome.status == "not_attempted":
+            lines.append(f"미시도: {outcome.calendar_date}")
+        elif outcome.result is not None and outcome.result.warnings:
+            lines.append(f"경고: {outcome.calendar_date} endpoint 경고 {len(outcome.result.warnings)}건")
+    if result.aborted_reason is not None:
+        lines.append(f"중단: {result.aborted_reason}")
+    return "\n".join(lines)
+
+
+def render_recovery_renormalize_result(result: RecoveryRenormalizeResult) -> str:
+    lines = [
+        "Recovery re-normalization from stored RAW (dry run, nothing written)"
+        if result.dry_run
+        else "Recovery re-normalization from stored RAW complete",
+        f"Dates examined: {result.dates_examined}",
+        f"Dates updated: {len(result.dates_updated)}",
+        f"Dates unchanged: {len(result.dates_unchanged)}",
+        f"Dates failed: {len(result.failures)}",
+    ]
+    lines.extend(f"Field changed: {name} ({count} dates)" for name, count in result.field_changes.items())
+    lines.extend(f"Failed: {failure.calendar_date} ({failure.error})" for failure in result.failures)
+    return "\n".join(lines)
+
+
+def render_activity_load_backfill_result(result: ActivityLoadBackfillResult) -> str:
+    lines = [
+        "Activity load metric backfill (dry run, nothing written)"
+        if result.dry_run
+        else "Activity load metric backfill complete",
+        f"Activities examined: {result.activities_examined}",
+        f"RAW summaries found: {result.raw_summaries_found}",
+        f"Activities changed: {result.activities_changed}",
+        f"Metric rows inserted: {result.metrics_inserted}",
+        f"Metric rows updated: {result.metrics_updated}",
+        f"Metrics already identical: {result.metrics_unchanged}",
+        f"Missing RAW: {len(result.missing_raw)}",
+        f"Unreadable RAW: {len(result.unreadable_raw)}",
+        f"Malformed values: {len(result.malformed_values)}",
+        f"Skipped values (missing/null): {len(result.skipped_values)}",
+    ]
+    lines.extend(f"Missing RAW: {activity_id}" for activity_id in result.missing_raw)
+    lines.extend(f"Unreadable RAW: {activity_id}" for activity_id in result.unreadable_raw)
+    lines.extend(
+        f"Malformed: {item.source_activity_id} {item.issue.source_key}" for item in result.malformed_values
+    )
+    lines.extend(
+        f"Skipped ({item.issue.kind}): {item.source_activity_id} {item.issue.source_key}"
+        for item in result.skipped_values
+    )
     return "\n".join(lines)
 
 

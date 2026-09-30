@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from datetime import date
 from typing import Any
 
 from muscle50.domain.recovery import DailyRecovery
+
+# Garmin training status keys look like PRODUCTIVE or NO_STATUS. The feedback phrase
+# appends a message-variant number (RECOVERY_2) that changes within one status period.
+_TRAINING_STATUS_KEY = re.compile(r"[A-Z]+(?:_[A-Z]+)*")
+_TRAINING_STATUS_PHRASE = re.compile(r"(?P<key>[A-Z]+(?:_[A-Z]+)*)(?:_\d+)?")
 
 
 class RecoveryNormalizationError(ValueError):
@@ -44,7 +50,7 @@ def normalize_recovery(calendar_date: str, payloads: Mapping[str, Any]) -> Daily
         sleep_start_gmt_ms=_as_int(sleep_daily.get("sleepStartTimestampGMT")),
         sleep_end_gmt_ms=_as_int(sleep_daily.get("sleepEndTimestampGMT")),
         sleep_score=_as_int(sleep_overall.get("value")),
-        sleep_avg_hrv_ms=_as_float(sleep_daily.get("avgSleepHRV")),
+        sleep_avg_hrv_ms=_first_float(sleep_daily.get("avgSleepHRV"), sleep.get("avgOvernightHrv")),
         hrv_last_night_avg_ms=_as_float(hrv_summary.get("lastNightAvg")),
         hrv_weekly_avg_ms=_as_float(hrv_summary.get("weeklyAvg")),
         hrv_status=_as_str(hrv_summary.get("status")),
@@ -102,16 +108,23 @@ def _resting_heart_rate(value: Any, calendar_date: str) -> float | None:
 
 
 def _training_status(value: Any) -> str | None:
+    """One unambiguous Garmin training status key, e.g. ``PRODUCTIVE``.
+
+    Supports an explicit string ``trainingStatusKey``/``trainingStatus`` and the observed
+    ``latestTrainingStatusData`` shape, where ``trainingStatus`` is a numeric code and the
+    key is the prefix of ``trainingStatusFeedbackPhrase``. The numeric code is never used.
+    """
     candidates: set[str] = set()
 
     def visit(item: Any) -> None:
         if isinstance(item, Mapping):
+            candidate = _status_key(item.get("trainingStatusKey")) or _status_key(item.get("trainingStatus"))
+            if candidate is None:
+                candidate = _status_phrase_key(item.get("trainingStatusFeedbackPhrase"))
+            if candidate is not None:
+                candidates.add(candidate)
             for key, nested in item.items():
-                if key in {"trainingStatus", "trainingStatusKey"}:
-                    candidate = _as_str(nested)
-                    if candidate is not None:
-                        candidates.add(candidate)
-                else:
+                if key not in {"trainingStatus", "trainingStatusKey", "trainingStatusFeedbackPhrase"}:
                     visit(nested)
         elif isinstance(item, Sequence) and not isinstance(item, (str, bytes)):
             for nested in item:
@@ -119,6 +132,17 @@ def _training_status(value: Any) -> str | None:
 
     visit(value)
     return next(iter(candidates)) if len(candidates) == 1 else None
+
+
+def _status_key(value: Any) -> str | None:
+    text = _as_str(value)
+    return text if text is not None and _TRAINING_STATUS_KEY.fullmatch(text) else None
+
+
+def _status_phrase_key(value: Any) -> str | None:
+    text = _as_str(value)
+    match = _TRAINING_STATUS_PHRASE.fullmatch(text) if text is not None else None
+    return match.group("key") if match is not None else None
 
 
 def _calendar_dates(value: Any) -> set[str]:
@@ -157,6 +181,14 @@ def _as_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _first_float(*values: Any) -> float | None:
+    for value in values:
+        numeric = _as_float(value)
+        if numeric is not None:
+            return numeric
+    return None
 
 
 def _as_int(value: Any) -> int | None:

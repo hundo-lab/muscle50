@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-09-29
+Last updated: 2026-09-30
 
 ## Project goal
 
@@ -28,6 +28,12 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 - Garmin source 값과 corrected/derived 값은 서로 덮어쓰지 않는다.
 - Nutrition Core는 deterministic domain model, JSON interchange schema, 공용 SQLite DB의
   append-only nutrition fact history를 제공한다.
+- Activity-load metric(training load/effect, HR zone, intensity minutes)은 shared
+  `normalize_activity`가 아니라 전용 RAW-only backfill(`garmin backfill-load-metrics`)이 초기 flat
+  `summary.json`에서 `activity_metrics`로 쓴다. Refresh 출력은 변하지 않고, refresh는 자신이
+  생산하지 않는 기존 metric key를 그대로 유지한다.
+- Recovery canonical row는 accepted RAW capture에서 언제든 재생성할 수 있다
+  (`garmin recovery-renormalize`, Garmin 호출 없음, capture 생성 없음).
 
 ## Implemented
 
@@ -48,10 +54,29 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   capture history, 날짜별 latest-value upsert, date/provenance 조회와 CLI summary
 - Nutrition meal/food profile domain, parser/repository ports, Decimal 기반 계산과 직렬화
 - Nutrition meal/food profile SQLite repository와 supersession-aware append-only fact 저장
+- Canonical activity-load metric 10종(`src/muscle50/domain/activity_load.py`): `training_load`,
+  `aerobic_training_effect`, `anaerobic_training_effect`(unit `score`),
+  `hr_time_in_zone_1_seconds`~`hr_time_in_zone_5_seconds`(`s`), `moderate_intensity_minutes`,
+  `vigorous_intensity_minutes`(`min`). 기존 `activity_metrics` schema에 저장(migration 없음).
+- `garmin backfill-load-metrics [--dry-run]`: 저장된 초기 flat `summary.json`만 읽어 위 10개 key만
+  insert/update. Garmin connector 의존성 없음, RAW/parent activity/strength/swim/다른 metric 불변,
+  idempotent.
+- `garmin recovery --from YYYY-MM-DD --to YYYY-MM-DD [--yes]`: inclusive 날짜 범위 recovery sync.
+  날짜별 순차 호출(날짜당 endpoint 9회), 최대 31일, 7일 초과는 `--yes` 필요, 역순/형식 오류는 인증
+  전 거부, 날짜별 created/updated/unchanged/failed/not_attempted 보고, 인증 실패 또는 연속 3일
+  실패 시 중단, 실패/미시도가 있으면 exit 1. 단일 날짜 `garmin recovery <date>`는 변경 없음.
+- Recovery normalizer version 2: `training_status_key`는 문자열 `trainingStatusKey`/`trainingStatus`,
+  없으면 `latestTrainingStatusData`의 `trainingStatusFeedbackPhrase` prefix(`RECOVERY_2` →
+  `RECOVERY`)를 사용하고 numeric `trainingStatus` code는 쓰지 않는다. `sleep_avg_hrv_ms`는
+  `dailySleepDTO.avgSleepHRV` 우선, 없으면 top-level `sleep.avgOvernightHrv`.
+- `garmin recovery-renormalize [--dry-run]`: 각 날짜의 accepted capture artifact를 size/sha256
+  검증 후 읽어 현재 normalizer로 재정규화. Garmin 호출·새 capture·RAW 쓰기 없음.
 
 ## Pending merge
 
-- 없음. `feature/inbody-connector`는 2026-09-28에 local main으로 fast-forward 병합됐다
+- `feature/garmin-analytics-prerequisites` (base main `65a929a`): activity-load metric,
+  recovery range sync, recovery normalizer v2. 로컬 커밋만 있고 merge/push 하지 않았다.
+- 이전 항목: `feature/inbody-connector`는 2026-09-28에 local main으로 fast-forward 병합됐다
   (병합 시점 main HEAD `4618df8`). Migration 번호 충돌(main `006_activity_refresh.sql` vs feature
   `006_inbody.sql`)은 InBody를 `007_inbody.sql`로 재배정해 해결한 상태로 병합됐다.
 
@@ -68,6 +93,33 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 - `tests/test_refresh_activity.py`, `tests/test_swim_normalization.py`, `tests/test_sync_recovery.py`
 
 ## Verification
+
+2026-09-29~30 Garmin Analytics Prerequisites 실 DB 검증(production home `%LOCALAPPDATA%\muscle50`).
+각 단계 전 SQLite backup API로 WAL-safe backup을 만들고(`db_backup_20260929e_pre_load_metrics`,
+`db_backup_20260930a_pre_recovery_range`, `db_backup_20260930b_pre_recovery_renormalize`) before/after
+evidence를 table digest와 RAW 전체 sha256으로 비교했다.
+
+- Activity-load metric backfill: 42 activity 모두 RAW summary 존재, 420 insert, missing/malformed/
+  skipped 0. 420/420 값이 저장된 RAW와 정확히 일치(반올림 없음). 두 번째 실행은 변경 0(420
+  identical). `activities`, 기존 121개 metric, `strength_sets`, swim/lap/length, RAW 358 files 불변.
+  검증된 Garmin refresh 동작은 수정하지 않았다(refresh 이후에도 backfill 값 유지는 synthetic
+  test로 검증, live refresh는 실행하지 않음).
+- Recovery range backfill(`garmin recovery --from 2026-09-01 --to 2026-09-28 --yes`, exit 0):
+  28/28 날짜, 공백 없음. 26 created, 1 updated(2026-09-14: 이전 capture가 당일 22:54 local의
+  미완성 하루라 `stress_average` 21 → 26만 변경, 이전 capture 보존), 1 unchanged(2026-09-27, 같은
+  capture 재사용). 신규 capture 27개 모두 9개 endpoint artifact 보유, endpoint warning/실패 0.
+  2026-09-13은 Garmin 원본 자체에 sleep/overnight HRV가 없다(legitimate no-sleep day).
+- Recovery normalizer v2 재정규화(`garmin recovery-renormalize`, Garmin 호출 0): 변경 column은
+  `training_status_key`(28), `sleep_avg_hrv_ms`(27), `normalizer_version`(28), `updated_at_utc`(28)뿐.
+  `training_status_key` 28/28(MAINTAINING 12, PRODUCTIVE 9, RECOVERY 7; 관측 code 4/5/7과 1:1),
+  `sleep_avg_hrv_ms` 27/28(2026-09-13은 RAW가 null). 28행 모두 RAW 재정규화와 일치. 두 번째
+  실행은 변경 0(`updated_at_utc` 포함 row 완전 동일). recovery capture/artifact table, capture
+  pointer, recovery RAW 290 files, activity/metric/strength/swim, non-recovery RAW 338 files 불변.
+- 모든 단계 후 `PRAGMA integrity_check` = ok, `foreign_key_check` clean, 중복/orphan 0.
+  2026-09-17 swim anomaly는 수정하지 않았다.
+- Gates(커밋 전): `uv run pytest -q` 345 passed, `uv run ruff check .`, `uv run mypy src tests`
+  (78 files), `git diff --check`, `uv build` 통과. `ruff format --check`는 configured gate가 아니며
+  기존 파일 14개를 이미 지적한다.
 
 2026-09-29 Garmin refresh safety gate (실기기 2건, 실 DB): refresh가 기존 canonical activity
 metadata를 파괴하지 않음을 before/after 비교로 확인했다.
@@ -189,6 +241,16 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
   `lapCount`가 없다). 기존 metric은 `_preserve_missing_canonical_values()`가 유지하므로
   삭제되지는 않지만, refresh만으로 새로 채워지지도 않는다.
 - Garmin Connect 연동은 비공식 API이므로 인증 및 응답 shape 변경 위험이 있다.
+- `garmin latest`/`garmin activities`는 activity-load metric을 채우지 않는다. 새 activity import 후
+  `garmin backfill-load-metrics`를 다시 실행해야 한다. 자동 enrichment 여부는 향후 설계 결정이다.
+- `sync_runs`로 recovery date coverage를 기록할 수 없다: 날짜 column이 없어 "sync했지만 데이터 없음"과
+  "sync한 적 없음"을 구분하지 못한다. 날짜 단위 coverage table(migration 필요)은 보류했다.
+  상세는 `docs/garmin-analytics-prerequisites.md`.
+- `mostRecentTrainingStatus`는 원리상 이전 날짜의 status를 담을 수 있다. 관측된 28일은 모두 entry
+  `calendarDate`가 요청 날짜와 같아 필터를 추가하지 않았다(향후 stale-attribution 위험).
+- `sleep_avg_hrv_ms`는 관측된 27일 모두 `hrv_last_night_avg_ms`와 같은 값이다(두 endpoint의 같은 측정).
+- Recovery의 일부 endpoint만 실패한 날짜는 range 결과에서 성공(exit 0)으로 집계되고 날짜별 warning
+  줄로만 드러난다.
 - 실제 Garmin 계정/개인 데이터 기반 smoke test는 자동 검증에 포함하지 않는다. 2026-09-28에
   `garmin refresh`에 한해 1회 수동 live smoke(activity 24481518495)를 수행했지만, 이는
   자동 회귀 스위트를 대체하지 않는다.
@@ -200,8 +262,8 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
   표시)은 의도적으로 아직 추가하지 않았다 — 맨몸 운동(예: pull-up 변형)에서는 0 kg가
   정당할 수 있어 오탐 위험이 있으므로 더 많은 사례를 관찰한 뒤 규칙을 설계해야 한다.
 - 실제 Garmin pool swim payload의 optional field 변형은 synthetic fixture 외에 아직 검증하지 않았다.
-- Recovery endpoint의 training readiness/status, recovery time, no-data day, timezone/date attribution은
-  synthetic payload만 검증했고 live smoke는 수행하지 않았다.
+- Recovery endpoint는 2026-09-01~28 live RAW로 검증했다(training status/sleep HRV shape 포함).
+  Timezone/date attribution의 경계 사례는 아직 synthetic payload만 검증했다.
 - swimming progression analytics용 기간/집계 read layer는 아직 없다.
 - Nutrition은 아직 public CLI command에 연결되지 않았다.
 - 기존 provisional nutrition schema로 직접 만든 외부 DB가 있다면 정식 migration marker가
@@ -232,6 +294,11 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
   --from/--to`가 같은 코드를 공유하도록 했다. Swim이 필요로 하는 lap/length 계층은 이미
   모든 activity에서 무조건 가져오는 `splits` RAW로 충분해 새 RAW endpoint나 migration을
   추가하지 않았다.
+- Activity-load metric은 shared normalization에 넣지 않고 전용 RAW-only backfill로 채운다 — 검증된
+  refresh 경로가 쓰는 값을 바꾸지 않기 위해서다. 값은 그대로 복사하고 범위/생리학적 검증은 향후
+  Analytics quality layer 책임으로 남겼다.
+- Training status canonical 값은 Garmin phrase prefix(`RECOVERY`)이며 numeric code나 suffix가
+  붙은 phrase(`RECOVERY_2`, suffix는 같은 status 기간 중에도 바뀌는 message variant)는 쓰지 않는다.
 - 날짜 범위 sync/run 결과는 CLI 출력의 inserted/skipped/failed count로 제공한다. 기존 스키마의
   `sync_runs` 테이블은 여전히 어떤 코드에서도 쓰지 않는 상태로 남겨 두었다 — command/error_code
   값 체계가 아직 정의되어 있지 않아 이번 범위에서 추측해 만들지 않았다.

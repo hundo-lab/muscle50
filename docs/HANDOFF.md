@@ -1,8 +1,90 @@
 # Session Handoff
 
-Last updated: 2026-09-29
+Last updated: 2026-09-30
 
 ## Current task
+
+Garmin Analytics Prerequisites (2026-09-29~30), branch `feature/garmin-analytics-prerequisites`
+(Paseo worktree `strong-bat`, base main `65a929a`). Activity-load metric, recovery range sync,
+recovery normalizer v2를 구현하고 production DB에서 단계별로 검증했다. 하나의 로컬 커밋으로
+정리했다. **Merge/push 하지 않았다. Historical activity import와 Analytics Engine은 시작하지 않았다.**
+
+## Garmin Analytics Prerequisites (2026-09-29~30)
+
+### What was attempted / completed
+
+1. **Activity-load metrics.** 10개 canonical key(`training_load`, `aerobic_training_effect`,
+   `anaerobic_training_effect`, `hr_time_in_zone_1..5_seconds`, `moderate_intensity_minutes`,
+   `vigorous_intensity_minutes`)를 `domain/activity_load.py`에 정의했다. 42개 production RAW 전수로
+   source path와 unit(score/s/min)을 확인했다. Shared `normalize_activity`에는 넣지 않았다 — 검증된
+   refresh 출력이 바뀌지 않게 하기 위해서다. `garmin backfill-load-metrics [--dry-run]`가 초기 flat
+   `summary.json`만 읽어(refresh `snapshots/`는 읽지 않음) 이 10개 key만 upsert한다.
+   Production: 42 activity, 420 insert, 420/420 RAW 일치, 두 번째 실행 변경 0. activity/strength/swim/
+   기존 metric/RAW 불변.
+2. **Recovery range sync.** `garmin recovery --from --to [--yes]`. Production
+   `--from 2026-09-01 --to 2026-09-28 --yes`(Garmin 약 252회 호출, exit 0): 28/28 날짜, 26 created,
+   1 updated(2026-09-14, 당일 저녁 partial capture였던 `stress_average` 21 → 26), 1 unchanged
+   (2026-09-27). 신규 capture 27개 모두 9 endpoint, endpoint 실패 0. 2026-09-13은 Garmin 원본에
+   sleep/overnight HRV가 없다.
+3. **Recovery normalizer v2.** Range 검증에서 `training_status_key`와 `sleep_avg_hrv_ms`가 28일 모두
+   NULL임을 발견했다. 원인: 실제 RAW는 `trainingStatus`가 numeric code(4/5/7)이고 key는
+   `trainingStatusFeedbackPhrase` prefix에 있으며, sleep HRV는 `dailySleepDTO.avgSleepHRV`가 아니라
+   top-level `avgOvernightHrv`에 있다. 정규화를 고치고 `normalizer_version`을 2로 올렸으며
+   `garmin recovery-renormalize [--dry-run]`(RAW-only, Garmin 호출 0)으로 28행을 재정규화했다.
+   결과: `training_status_key` 28/28(MAINTAINING 12, PRODUCTIVE 9, RECOVERY 7), `sleep_avg_hrv_ms`
+   27/28(2026-09-13 RAW null). 두 번째 실행 변경 0.
+
+### Files changed
+
+- 신규: `src/muscle50/domain/activity_load.py`, `src/muscle50/application/backfill_activity_load_metrics.py`,
+  `src/muscle50/application/renormalize_garmin_recovery.py`, `tests/test_activity_load_backfill.py`,
+  `tests/test_recovery_range.py`, `tests/test_recovery_renormalize.py`,
+  `docs/garmin-analytics-prerequisites.md`
+- 수정: `src/muscle50/cli.py`, `src/muscle50/application/sync_garmin_recovery.py`(range use case),
+  `src/muscle50/domain/recovery.py`(`RECOVERY_NORMALIZER_VERSION = 2`),
+  `src/muscle50/domain/recovery_normalization.py`, `src/muscle50/infrastructure/garmin/client.py`
+  (`GarminAuthenticationError` subclass), `src/muscle50/infrastructure/raw_store.py`
+  (`load_initial_summary`, `load_capture_payloads`), `src/muscle50/infrastructure/sqlite/database.py`
+  (`list_source_activity_ids`, `upsert_activity_metrics`, `list_calendar_dates`),
+  `src/muscle50/presentation/terminal.py`, `tests/test_recovery_normalization.py`(추가만),
+  `tests/test_sync_recovery.py`(normalizer version literal 1 → constant; 기존 테스트 중 유일한 수정),
+  `docs/garmin-recovery-endpoint-discovery.md`, `docs/CURRENT_STATE.md`, `docs/HANDOFF.md`
+- Migration 없음. Refresh 코드(`refresh_garmin_activity.py`)는 수정하지 않았다.
+
+### Tests / checks run
+
+`uv run pytest -q` 345 passed(기존 285 → 319 → 345), `uv run ruff check .`, `uv run mypy src tests`
+(78 files), `git diff --check`, `uv build` 통과. 모든 production 단계 후 `PRAGMA integrity_check` = ok,
+`foreign_key_check` clean, 중복/orphan 0. 상세 evidence는 `docs/CURRENT_STATE.md` "Verification".
+Evidence 파일(repo 밖): `C:	emp\muscle50-evidence-20260929\`, `C:	emp\muscle50-evidence-20260930\`.
+Backups: `%LOCALAPPDATA%\muscle50\db_backup_20260929e_pre_load_metrics`,
+`db_backup_20260930a_pre_recovery_range`, `db_backup_20260930b_pre_recovery_renormalize`.
+
+### Known risks
+
+- 새 activity import(`garmin latest`/`garmin activities`)는 load metric을 채우지 않는다 — import 후
+  backfill을 다시 실행해야 한다. 자동 enrichment는 향후 설계 결정.
+- `sync_runs` recovery coverage는 보류(schema에 날짜 column 없음, migration 필요).
+- `mostRecentTrainingStatus`의 stale-date 가능성은 필터 없이 남겨 두었다(관측 28일은 모두 날짜 일치).
+- Range 실행 중 repository integrity `RuntimeError`는 날짜별 요약 없이 traceback으로 멈춘다(완료된
+  날짜는 유지, 재실행 안전 — activity range import와 동일).
+- 2026-09-17 swim anomaly는 의도적으로 수정하지 않았다(향후 Analytics quality layer).
+
+### Recommended next action
+
+1. Historical activity import(명시적 승인 필요, 아직 실행하지 않음). 이 branch/worktree에서
+   fresh WAL-safe backup과 before-evidence 후:
+   ```powershell
+   uv run muscle50 garmin activities --from 2026-07-01 --to 2026-08-02
+   uv run muscle50 garmin backfill-load-metrics --dry-run
+   uv run muscle50 garmin backfill-load-metrics
+   ```
+   그 뒤 전체 real-data validation(신규 activity의 strength/swim/metric, 기존 42건 불변, RAW 불변,
+   integrity/foreign_key).
+2. 그 다음 이 branch의 main merge 여부 결정(승인 필요).
+3. Analytics Engine은 그 이후.
+
+## Previous task: Garmin refresh safety gate (2026-09-29)
 
 Garmin refresh safety gate를 닫았다. `garmin refresh`가 기존 canonical activity metadata를 NULL로
 덮어쓰던 버그를 hotfix하고, 실기기 activity 2건으로 실 DB 회귀 검증을 마쳤다. **판정: SAFE.**
@@ -261,6 +343,8 @@ Pagination/range-stop 로직은 실제로 필터를 깨뜨려 관련 테스트 2
   재사용했을 뿐이며, 이번 작업에서 새로 만든 것은 없다.
 - `sync_runs` 테이블은 여전히 미사용 상태다. command/error_code 값 체계가 정의되면
   range/latest 양쪽에서 사용할 수 있다.
+  (2026-09-30) Recovery date coverage에는 날짜 column이 없어 부적합하다는 판단으로 보류 —
+  `docs/garmin-analytics-prerequisites.md` E절.
 
 ## Known issues / risks
 
@@ -273,6 +357,8 @@ Pagination/range-stop 로직은 실제로 필터를 깨뜨려 관련 테스트 2
 
 ## Recommended next action
 
+0. **(2026-09-30 갱신)** 최신 권장 순서는 위 "Garmin Analytics Prerequisites" 절의 Recommended next
+   action을 따른다: historical activity import → load-metric backfill → 검증 → 그 뒤 Analytics Engine.
 1. **다음 마일스톤: Analytics Engine.** Data collection layer는 2026-09-28에 VALIDATED,
    refresh safety gate는 2026-09-29에 SAFE로 닫혔다. InBody/Swim/Recovery/Strength canonical
    데이터가 실기기 기준으로 정상 저장·갱신됨이 확인됐으므로 읽기/집계 계층을 시작할 수 있다.

@@ -137,3 +137,131 @@ def test_response_date_mismatches_become_warnings() -> None:
 def test_invalid_calendar_date_is_rejected(value: str) -> None:
     with pytest.raises(RecoveryNormalizationError):
         validate_calendar_date(value)
+
+
+def _observed_training_status(*entries: dict[str, Any]) -> dict[str, Any]:
+    """The stored real get_training_status shape (synthetic device IDs)."""
+    return {
+        "userId": 1,
+        "mostRecentVO2Max": None,
+        "mostRecentTrainingLoadBalance": None,
+        "heatAltitudeAcclimationDTO": None,
+        "mostRecentTrainingStatus": {
+            "userId": 1,
+            "lastPrimarySyncDate": "2026-09-28",
+            "showSelector": False,
+            "recordedDevices": [{"deviceId": 900 + index, "deviceName": "Synthetic"} for index in range(len(entries))],
+            "latestTrainingStatusData": {
+                str(900 + index): {
+                    "calendarDate": "2026-09-28",
+                    "deviceId": 900 + index,
+                    "primaryTrainingDevice": index == 0,
+                    "sinceDate": "2026-09-26",
+                    "trainingPaused": False,
+                    "acuteTrainingLoadDTO": {"acwrStatus": "OPTIMAL", "acwrStatusFeedback": "FEEDBACK_2"},
+                    **entry,
+                }
+                for index, entry in enumerate(entries)
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [
+        ({"trainingStatus": 5, "trainingStatusFeedbackPhrase": "RECOVERY_2"}, "RECOVERY"),
+        ({"trainingStatus": 7, "trainingStatusFeedbackPhrase": "PRODUCTIVE_6"}, "PRODUCTIVE"),
+        ({"trainingStatus": 4, "trainingStatusFeedbackPhrase": "MAINTAINING_1"}, "MAINTAINING"),
+        ({"trainingStatus": 0, "trainingStatusFeedbackPhrase": "NO_STATUS"}, "NO_STATUS"),
+    ],
+)
+def test_observed_nested_training_status_uses_phrase_key_not_numeric_code(entry: dict[str, Any], expected: str) -> None:
+    payloads = {**_payloads(), "training_status": _observed_training_status(entry)}
+
+    assert normalize_recovery("2026-09-28", payloads).training_status_key == expected
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {"trainingStatus": 5},
+        {"trainingStatus": 5, "trainingStatusFeedbackPhrase": None},
+        {"trainingStatus": 5, "trainingStatusFeedbackPhrase": ""},
+        {"trainingStatus": 5, "trainingStatusFeedbackPhrase": "recovery_2"},
+        {"trainingStatus": 5, "trainingStatusFeedbackPhrase": "RECOVERY_2_EXTRA"},
+        {"trainingStatus": "5"},
+        {"trainingStatus": None, "trainingStatusFeedbackPhrase": 5},
+    ],
+)
+def test_numeric_missing_or_malformed_training_status_is_not_claimed(entry: dict[str, Any]) -> None:
+    payloads = {**_payloads(), "training_status": _observed_training_status(entry)}
+
+    assert normalize_recovery("2026-09-28", payloads).training_status_key is None
+
+
+def test_explicit_string_training_status_wins_over_feedback_phrase() -> None:
+    entry = {"trainingStatus": "PRODUCTIVE", "trainingStatusFeedbackPhrase": "RECOVERY_2"}
+    payloads = {**_payloads(), "training_status": _observed_training_status(entry)}
+
+    assert normalize_recovery("2026-09-28", payloads).training_status_key == "PRODUCTIVE"
+
+
+def test_multi_device_phrase_statuses_follow_the_ambiguity_rule() -> None:
+    same = _observed_training_status(
+        {"trainingStatus": 5, "trainingStatusFeedbackPhrase": "RECOVERY_1"},
+        {"trainingStatus": 5, "trainingStatusFeedbackPhrase": "RECOVERY_2"},
+    )
+    different = _observed_training_status(
+        {"trainingStatus": 5, "trainingStatusFeedbackPhrase": "RECOVERY_2"},
+        {"trainingStatus": 7, "trainingStatusFeedbackPhrase": "PRODUCTIVE_1"},
+    )
+
+    assert normalize_recovery("2026-09-28", {"training_status": same}).training_status_key == "RECOVERY"
+    assert normalize_recovery("2026-09-28", {"training_status": different}).training_status_key is None
+
+
+def test_observed_top_level_overnight_hrv_populates_sleep_hrv() -> None:
+    payloads = _payloads()
+    del payloads["sleep"]["dailySleepDTO"]["avgSleepHRV"]
+    payloads["sleep"]["avgOvernightHrv"] = 62.0
+
+    assert normalize_recovery("2026-09-15", payloads).sleep_avg_hrv_ms == 62.0
+
+
+def test_daily_sleep_dto_hrv_keeps_precedence_over_overnight_hrv() -> None:
+    payloads = _payloads()
+    payloads["sleep"]["avgOvernightHrv"] = 62.0
+
+    assert normalize_recovery("2026-09-15", payloads).sleep_avg_hrv_ms == 52.5
+
+
+@pytest.mark.parametrize(
+    ("daily_value", "overnight_value", "expected"),
+    [
+        (None, None, None),
+        (None, "not-a-number", None),
+        (None, True, None),
+        ("bad", 61.0, 61.0),
+        (None, 0, 0.0),
+    ],
+)
+def test_sleep_hrv_missing_null_and_malformed_values(
+    daily_value: Any, overnight_value: Any, expected: float | None
+) -> None:
+    payloads = _payloads()
+    payloads["sleep"]["dailySleepDTO"]["avgSleepHRV"] = daily_value
+    payloads["sleep"]["avgOvernightHrv"] = overnight_value
+
+    assert normalize_recovery("2026-09-15", payloads).sleep_avg_hrv_ms == expected
+
+
+def test_observed_no_sleep_day_leaves_sleep_hrv_empty() -> None:
+    payloads = {
+        "sleep": {"dailySleepDTO": {"calendarDate": "2026-09-13", "sleepTimeSeconds": None}, "avgOvernightHrv": None}
+    }
+
+    recovery = normalize_recovery("2026-09-13", payloads)
+
+    assert recovery.sleep_avg_hrv_ms is None
+    assert recovery.sleep_seconds is None

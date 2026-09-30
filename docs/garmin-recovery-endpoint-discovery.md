@@ -11,20 +11,29 @@ the sync immediately, and a run where every endpoint fails is not accepted as an
 
 | RAW artifact | Client method | Normalized values | Missing/no-data handling |
 |---|---|---|---|
-| `sleep.json` | `get_sleep_data(date)` | duration/stages, GMT start/end epoch-ms, sleep score, sleep HRV, sleep respiration | `None`, `{}`, and missing nested fields normalize to `None` |
+| `sleep.json` | `get_sleep_data(date)` | duration/stages, GMT start/end epoch-ms, sleep score, sleep HRV (`dailySleepDTO.avgSleepHRV`, else top-level `avgOvernightHrv`), sleep respiration | `None`, `{}`, and missing nested fields normalize to `None` |
 | `hrv.json` | `get_hrv_data(date)` | last-night average, weekly average, status | package explicitly permits `None` |
 | `resting_heart_rate.json` | `get_rhr_daily(date, date)` | matching date's resting HR | empty list or missing row becomes `None` |
 | `daily_stats.json` | `get_stats(date)` | Body Battery high/low and average stress | missing values become `None`; negative stress sentinels are not normalized |
 | `body_battery.json` | `get_body_battery(date, date)` | RAW only | timeline is not used to derive high/low |
 | `stress.json` | `get_all_day_stress(date)` | RAW only | timeline is not used to derive average stress |
 | `training_readiness.json` | `get_training_readiness(date)` | score, level, recovery time and change phrase | empty list becomes `None` values |
-| `training_status.json` | `get_training_status(date)` | one unique exact `trainingStatus`/`trainingStatusKey` value | absent or ambiguous multi-device values become `None` |
+| `training_status.json` | `get_training_status(date)` | one unique status key: a string `trainingStatusKey`/`trainingStatus`, else the key prefix of `trainingStatusFeedbackPhrase` (`RECOVERY_2` → `RECOVERY`); the numeric `trainingStatus` code is never used | absent, malformed, or ambiguous multi-device values become `None` |
 | `respiration.json` | `get_respiration_data(date)` | RAW only | normalized respiration comes from the verified sleep field |
 
 Training readiness selects `inputContext == "AFTER_WAKEUP_RESET"`, falling back to the first entry when the
 marker is unavailable, matching `garminconnect`'s morning-readiness helper. `recoveryTime` is stored in minutes
 without interpreting `recoveryTimeChangePhrase`. `acwrFactorPercent` is not an acute/chronic workload ratio and
 is intentionally not normalized.
+
+Live RAW (2026-09-01 ~ 2026-09-28, recovery normalizer version 2) confirmed two shapes the pinned package
+models did not show. Sleep HRV is top-level `sleep.avgOvernightHrv`; `dailySleepDTO` has no HRV key. It equals the
+HRV endpoint's `lastNightAvg` on every observed date. Training status is
+`mostRecentTrainingStatus.latestTrainingStatusData.<deviceId>` with numeric `trainingStatus` and a
+`trainingStatusFeedbackPhrase` whose numeric suffix is a feedback-message variant (it changes while `sinceDate`
+stays fixed). Observed code/key pairs were 4 = `MAINTAINING`, 5 = `RECOVERY`, 7 = `PRODUCTIVE`.
+`garmin recovery-renormalize` re-applies the current normalizer to each date's accepted RAW capture without
+calling Garmin or creating captures.
 
 ## RAW and date policy
 

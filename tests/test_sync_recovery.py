@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from muscle50.application.sync_garmin_recovery import SyncGarminRecovery
+from muscle50.domain.recovery import RECOVERY_NORMALIZER_VERSION
 from muscle50.infrastructure.garmin.client import GarminRawRecovery
 from muscle50.infrastructure.raw_store import RecoveryRawStore
 from muscle50.infrastructure.sqlite.database import DailyRecoveryRepository
@@ -141,10 +142,12 @@ def test_same_raw_capture_can_refresh_an_outdated_normalized_row(tmp_path: Path)
     refreshed = use_case.execute("2026-09-15")
 
     assert (refreshed.created, refreshed.updated) == (False, True)
-    assert refreshed.recovery.normalizer_version == 1
+    assert refreshed.recovery.normalizer_version == RECOVERY_NORMALIZER_VERSION
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM recovery_raw_captures").fetchone()[0] == 1
-        assert connection.execute("SELECT normalizer_version FROM daily_recovery").fetchone()[0] == 1
+        assert connection.execute("SELECT normalizer_version FROM daily_recovery").fetchone()[0] == (
+            RECOVERY_NORMALIZER_VERSION
+        )
 
 
 def test_no_data_date_stores_null_raw_payloads_without_inventing_zeroes(tmp_path: Path) -> None:
