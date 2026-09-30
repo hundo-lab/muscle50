@@ -6,8 +6,10 @@ Last updated: 2026-09-30
 
 Garmin Analytics Prerequisites (2026-09-29~30), branch `feature/garmin-analytics-prerequisites`
 (Paseo worktree `strong-bat`, base main `65a929a`). Activity-load metric, recovery range sync,
-recovery normalizer v2를 구현하고 production DB에서 단계별로 검증했다. 하나의 로컬 커밋으로
-정리했다. **Merge/push 하지 않았다. Historical activity import와 Analytics Engine은 시작하지 않았다.**
+recovery normalizer v2를 구현해 `4645f5f`로 커밋했고, 이어서 historical activity import
+(2026-07-01~08-02)와 load-metric backfill을 production DB에서 검증했다(이 문서 갱신은 별도
+docs-only 커밋). **Garmin Analytics Prerequisites는 이 feature branch에서 구현 및 실데이터 검증
+완료 상태다. Merge/push 하지 않았다. Analytics Engine은 시작하지 않았다.**
 
 ## Garmin Analytics Prerequisites (2026-09-29~30)
 
@@ -56,9 +58,48 @@ recovery normalizer v2를 구현하고 production DB에서 단계별로 검증�
 `uv run pytest -q` 345 passed(기존 285 → 319 → 345), `uv run ruff check .`, `uv run mypy src tests`
 (78 files), `git diff --check`, `uv build` 통과. 모든 production 단계 후 `PRAGMA integrity_check` = ok,
 `foreign_key_check` clean, 중복/orphan 0. 상세 evidence는 `docs/CURRENT_STATE.md` "Verification".
-Evidence 파일(repo 밖): `C:	emp\muscle50-evidence-20260929\`, `C:	emp\muscle50-evidence-20260930\`.
+Evidence 파일(repo 밖): `C:\temp\muscle50-evidence-20260929\`, `C:\temp\muscle50-evidence-20260930\`,
+`C:\temp\muscle50-evidence-20260930-hist\`.
 Backups: `%LOCALAPPDATA%\muscle50\db_backup_20260929e_pre_load_metrics`,
-`db_backup_20260930a_pre_recovery_range`, `db_backup_20260930b_pre_recovery_renormalize`.
+`db_backup_20260930a_pre_recovery_range`, `db_backup_20260930b_pre_recovery_renormalize`,
+`db_backup_20260930c_pre_historical_import`.
+
+### Historical activity import (2026-09-30)
+
+Commit `4645f5f` 코드 그대로 실행했다(코드 변경 없음).
+
+- 명령: `uv run muscle50 garmin activities --from 2026-07-01 --to 2026-08-02` → exit 0.
+  Garmin이 36건을 반환했고 36건 모두 신규 import(이미 저장됨 0, 실패 0, RAW manifest warning 0).
+  실제 activity 날짜는 2026-07-01~2026-07-31이며 2026-08-01/08-02에는 activity가 없다.
+  Strength 24, pool swim 12, training day 21. RAW 240 files 추가(모두 신규 activity 디렉터리).
+- Strength: 신규 24건, canonical set 933(ACTIVE 471 / REST 462). 933 set 전부를 RAW 필드
+  (messageIndex, setType, reps, weight g/1000, category, name, duration)와 직접 비교해 불일치 0.
+  ACTIVE 중 UNKNOWN 분류 147/471, weight 0/누락 39, reps 0 20 — ingestion 실패가 아니라
+  data-quality/review 이슈다.
+- Swim: 신규 12 session, lap 286, length 645(수영 417 / rest 228). 모든 lap/length 값을 RAW
+  `splits`와 비교해 불일치 0. 11 session은 50 m pool, 2026-07-23은 source와 일관된 20 m pool.
+  Session별 수영 length 거리 합 = parent distance, 수영 length 수 = source active length count.
+  누락된 swim child record 없음.
+- Load metrics: `backfill-load-metrics --dry-run` 예측(36 changed, 360 insert, 420 identical)과 실제
+  실행이 동일. 78 activity 모두 10개 metric 보유, 780/780 값이 각자의 RAW와 일치. 기존 420 load
+  metric 불변. 두 번째 실행 canonical 변경 0.
+- Regression: 기존 42 activity의 parent row, metric, strength set, swim/lap/length, refresh state,
+  RAW 파일이 activity별 fingerprint로 모두 불변. `daily_recovery`와 recovery RAW 불변. 중복/orphan 0,
+  `PRAGMA integrity_check` = ok, `foreign_key_check` clean, 기존 RAW 628 files 불변(최종 868 files).
+  2026-09-17 swim anomaly 불변.
+- Final Garmin activity coverage: 78 activities, 2026-07-01~2026-09-28, 54 distinct training days
+  (strength 55, lap swimming 21, running 1, track running 1).
+
+### Data-quality findings (future Analytics quality layer; 수정하지 않음)
+
+- 신규 기간 수영 length 40/417이 42 s/100 m보다 빠르다(세계기록 페이스 미만, 12 session 중 9개).
+  기존 swim 데이터에도 같은 현상(110 lengths)이 있어 import 실패가 아니라 systemic source/data-quality
+  이슈다. 예: 2026-07-07 `23503867925` length 53, breaststroke 50 m 5.6 s.
+- Strength UNKNOWN 분류 147/471, weight 0/누락 39, reps 0 20(신규 ACTIVE set 기준). 일부는 bodyweight
+  운동으로 정당할 수 있다.
+- 2026-07-20 swim 2건(`23659117397`, `23659117767`)은 27분 간격이며 split session일 수 있다. 자동으로
+  합치지 않는다.
+- 2026-07-23 20 m pool은 내부적으로 일관된다. 평소 pool 길이와 다르다는 이유만으로 오류로 취급하지 않는다.
 
 ### Known risks
 
@@ -70,19 +111,22 @@ Backups: `%LOCALAPPDATA%\muscle50\db_backup_20260929e_pre_load_metrics`,
   날짜는 유지, 재실행 안전 — activity range import와 동일).
 - 2026-09-17 swim anomaly는 의도적으로 수정하지 않았다(향후 Analytics quality layer).
 
+### Prerequisite status
+
+- Garmin Analytics Prerequisites: 이 feature branch에서 구현 및 실데이터 검증 완료.
+- 완료: historical activity import, recovery 28일 backfill, recovery normalizer v2 re-normalization,
+  activity load-metric backfill.
+- Strength refresh/review는 Analytics Engine 전에 필요하지 않다.
+- 보류: `sync_runs` recovery coverage, 향후 import의 자동 load-metric enrichment.
+- Analytics Engine은 시작하지 않았다.
+
 ### Recommended next action
 
-1. Historical activity import(명시적 승인 필요, 아직 실행하지 않음). 이 branch/worktree에서
-   fresh WAL-safe backup과 before-evidence 후:
-   ```powershell
-   uv run muscle50 garmin activities --from 2026-07-01 --to 2026-08-02
-   uv run muscle50 garmin backfill-load-metrics --dry-run
-   uv run muscle50 garmin backfill-load-metrics
-   ```
-   그 뒤 전체 real-data validation(신규 activity의 strength/swim/metric, 기존 42건 불변, RAW 불변,
-   integrity/foreign_key).
-2. 그 다음 이 branch의 main merge 여부 결정(승인 필요).
-3. Analytics Engine은 그 이후.
+1. 이 branch(`4645f5f` + docs-only 커밋)의 main 통합 여부 결정(명시적 승인 필요). main은 여전히
+   `65a929a`이므로 fast-forward 가능하다. 통합 전 main에서 전체 게이트(pytest/Ruff/mypy/
+   `git diff --check`/`uv build`) 재실행 권장.
+2. 그 뒤 Analytics Engine(명시적 승인 필요).
+3. 새 activity를 import할 때마다 `garmin backfill-load-metrics`를 이어서 실행한다.
 
 ## Previous task: Garmin refresh safety gate (2026-09-29)
 
@@ -358,7 +402,8 @@ Pagination/range-stop 로직은 실제로 필터를 깨뜨려 관련 테스트 2
 ## Recommended next action
 
 0. **(2026-09-30 갱신)** 최신 권장 순서는 위 "Garmin Analytics Prerequisites" 절의 Recommended next
-   action을 따른다: historical activity import → load-metric backfill → 검증 → 그 뒤 Analytics Engine.
+   action을 따른다: historical import와 load-metric backfill은 완료됐고, 다음은 main 통합 결정 →
+   Analytics Engine이다.
 1. **다음 마일스톤: Analytics Engine.** Data collection layer는 2026-09-28에 VALIDATED,
    refresh safety gate는 2026-09-29에 SAFE로 닫혔다. InBody/Swim/Recovery/Strength canonical
    데이터가 실기기 기준으로 정상 저장·갱신됨이 확인됐으므로 읽기/집계 계층을 시작할 수 있다.

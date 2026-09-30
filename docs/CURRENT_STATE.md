@@ -75,7 +75,23 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 ## Pending merge
 
 - `feature/garmin-analytics-prerequisites` (base main `65a929a`): activity-load metric,
-  recovery range sync, recovery normalizer v2. 로컬 커밋만 있고 merge/push 하지 않았다.
+  recovery range sync, recovery normalizer v2(`4645f5f`) + historical import 검증 기록(docs-only
+  커밋). 구현 및 실데이터 검증 완료, main fast-forward 가능. 로컬 커밋만 있고 merge/push 하지 않았다.
+
+## Garmin Analytics Prerequisites status
+
+- 이 feature branch에서 구현 및 실데이터 검증 완료로 간주한다.
+- 완료: historical activity import(2026-07-01~08-02), recovery 28일 backfill(2026-09-01~28), recovery
+  normalizer v2 re-normalization, activity load-metric backfill(78/78 activity).
+- Strength refresh/review(UNKNOWN 분류 정리)는 Analytics Engine 전에 필요하지 않다.
+- 보류: `sync_runs` recovery coverage, 향후 import의 자동 load-metric enrichment.
+- Analytics Engine은 시작하지 않았다.
+
+## Data coverage (production, 2026-09-30)
+
+- Garmin activities: 78건, 2026-07-01~2026-09-28, 54 distinct training days.
+  Strength 55, lap swimming 21, running 1, track running 1. 78건 모두 10개 load metric 보유(780 rows).
+- Garmin recovery: 2026-09-01~2026-09-28, 28/28 날짜, recovery normalizer version 2.
 - 이전 항목: `feature/inbody-connector`는 2026-09-28에 local main으로 fast-forward 병합됐다
   (병합 시점 main HEAD `4618df8`). Migration 번호 충돌(main `006_activity_refresh.sql` vs feature
   `006_inbody.sql`)은 InBody를 `007_inbody.sql`로 재배정해 해결한 상태로 병합됐다.
@@ -93,6 +109,26 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 - `tests/test_refresh_activity.py`, `tests/test_swim_normalization.py`, `tests/test_sync_recovery.py`
 
 ## Verification
+
+2026-09-30 Historical Garmin activity import(commit `4645f5f` 코드, 코드 변경 없음). WAL-safe backup
+`db_backup_20260930c_pre_historical_import`과 activity별 fingerprint evidence
+(`C:\temp\muscle50-evidence-20260930-hist\`)로 before/after를 비교했다.
+
+- `uv run muscle50 garmin activities --from 2026-07-01 --to 2026-08-02` → exit 0. 요청 범위는
+  2026-07-01~08-02이며 Garmin이 36건을 반환했고 모두 신규 import(skip 0, 실패 0, RAW warning 0).
+  실제 activity 날짜는 2026-07-01~2026-07-31이고 2026-08-01/08-02에는 activity가 없다.
+  Strength 24, pool swim 12, training day 21.
+- Strength: 신규 24건, canonical set 933(ACTIVE 471 / REST 462), 933 set 전부 RAW와 비교해 불일치 0.
+  ACTIVE 중 UNKNOWN 147/471, weight 0/누락 39, reps 0 20 — ingestion 실패가 아닌 data-quality/review
+  이슈.
+- Swim: 신규 12 session, lap 286, length 645, 모든 lap/length 값 RAW 비교 불일치 0. 11 session은
+  50 m pool, 2026-07-23은 source와 일관된 20 m pool. 누락된 swim child record 없음.
+- Load metrics: backfill이 360 metric을 insert했고 기존 420 load metric은 불변. 78 activity 모두 10개
+  metric, 780/780 값이 저장된 RAW와 일치. 두 번째 backfill canonical 변경 0.
+- Regression/integrity: 기존 42 activity의 parent row, metric, strength set, swim data, refresh state,
+  RAW 모두 불변. `daily_recovery`와 recovery RAW 불변. 중복/orphan 0, `PRAGMA integrity_check` = ok,
+  `foreign_key_check` clean, RAW immutable(기존 628 files 불변, 신규 240 files 추가). 2026-09-17 swim
+  anomaly 불변.
 
 2026-09-29~30 Garmin Analytics Prerequisites 실 DB 검증(production home `%LOCALAPPDATA%\muscle50`).
 각 단계 전 SQLite backup API로 WAL-safe backup을 만들고(`db_backup_20260929e_pre_load_metrics`,
@@ -241,6 +277,14 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
   `lapCount`가 없다). 기존 metric은 `_preserve_missing_canonical_values()`가 유지하므로
   삭제되지는 않지만, refresh만으로 새로 채워지지도 않는다.
 - Garmin Connect 연동은 비공식 API이므로 인증 및 응답 shape 변경 위험이 있다.
+- Data-quality findings(future Analytics quality layer, 수정하지 않음):
+  - 2026-07 신규 기간 수영 length 40/417이 42 s/100 m보다 빠르다(12 session 중 9개). 기존 swim
+    데이터에도 같은 현상이 있어 import 실패가 아닌 systemic source/data-quality 이슈다.
+  - 신규 ACTIVE strength set 중 UNKNOWN 분류 147/471, weight 0/누락 39, reps 0 20.
+  - 2026-07-20 swim 2건(`23659117397`, `23659117767`)은 27분 간격으로 split session일 수 있다.
+    자동으로 합치지 않는다.
+  - 2026-07-23 20 m pool은 내부적으로 일관되며, 평소와 다른 pool 길이라는 이유만으로 오류로 취급하지
+    않는다.
 - `garmin latest`/`garmin activities`는 activity-load metric을 채우지 않는다. 새 activity import 후
   `garmin backfill-load-metrics`를 다시 실행해야 한다. 자동 enrichment 여부는 향후 설계 결정이다.
 - `sync_runs`로 recovery date coverage를 기록할 수 없다: 날짜 column이 없어 "sync했지만 데이터 없음"과
