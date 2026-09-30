@@ -34,6 +34,9 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   생산하지 않는 기존 metric key를 그대로 유지한다.
 - Recovery canonical row는 accepted RAW capture에서 언제든 재생성할 수 있다
   (`garmin recovery-renormalize`, Garmin 호출 없음, capture 생성 없음).
+- Analytics Engine v1은 canonical 데이터 위의 read-only computed read model이다(migration 없음).
+  순수 domain(`domain/analytics.py`) + read-only reader(`mode=ro`, `query_only`, migrate/mkdir 없음)
+  + CLI `muscle50 analytics snapshot`. 상세 규칙은 `docs/analytics-engine.md`.
 
 ## Implemented
 
@@ -71,21 +74,27 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   `dailySleepDTO.avgSleepHRV` 우선, 없으면 top-level `sleep.avgOvernightHrv`.
 - `garmin recovery-renormalize [--dry-run]`: 각 날짜의 accepted capture artifact를 size/sha256
   검증 후 읽어 현재 normalizer로 재정규화. Garmin 호출·새 capture·RAW 쓰기 없음.
+- Analytics Engine v1 rolling training snapshot(`muscle50 analytics snapshot --date YYYY-MM-DD
+  [--days 1..90, 기본 7] [--json]`): Garmin activity 수/type, load metric 10종(metric별 명시적
+  sum/max), strength(session/active set/reps/volume/exercise별, 제외 사유별 count), swimming(summary
+  distance와 lap-detail distance 분리, implausible lap 제외 plausible detail distance, pool length),
+  recovery(daily field latest/mean/min/max, state field latest, categorical latest, row 없는 날짜와
+  null field 구분), provenance(source activity ID/날짜), data-quality issue 목록.
+  추천/생리학적 점수 없음. muscle-group 집계 없음(mapping이 없음).
 
 ## Pending merge
 
-- `feature/garmin-analytics-prerequisites` (base main `65a929a`): activity-load metric,
-  recovery range sync, recovery normalizer v2(`4645f5f`) + historical import 검증 기록(docs-only
-  커밋). 구현 및 실데이터 검증 완료, main fast-forward 가능. 로컬 커밋만 있고 merge/push 하지 않았다.
+- `feature/analytics-engine` (base main `dc2c99f`): Analytics Engine v1. 미커밋 working tree 상태이며
+  commit/merge/push 하지 않았다.
+- `feature/garmin-analytics-prerequisites`는 main `dc2c99f`에 통합 완료.
 
 ## Garmin Analytics Prerequisites status
 
-- 이 feature branch에서 구현 및 실데이터 검증 완료로 간주한다.
+- 구현, 실데이터 검증, main 통합 완료(`dc2c99f`).
 - 완료: historical activity import(2026-07-01~08-02), recovery 28일 backfill(2026-09-01~28), recovery
   normalizer v2 re-normalization, activity load-metric backfill(78/78 activity).
-- Strength refresh/review(UNKNOWN 분류 정리)는 Analytics Engine 전에 필요하지 않다.
 - 보류: `sync_runs` recovery coverage, 향후 import의 자동 load-metric enrichment.
-- Analytics Engine은 시작하지 않았다.
+- Analytics Engine v1(rolling snapshot)은 `feature/analytics-engine`에서 구현·검증됨(미커밋).
 
 ## Data coverage (production, 2026-09-30)
 
@@ -109,6 +118,25 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 - `tests/test_refresh_activity.py`, `tests/test_swim_normalization.py`, `tests/test_sync_recovery.py`
 
 ## Verification
+
+2026-09-30 Analytics Engine v1(`feature/analytics-engine`, base `dc2c99f`, 미커밋). Production DB/RAW는
+read-only로만 사용했다.
+
+- Gates: `uv run pytest -q` 390 passed(기존 345 + 신규 45), `uv run ruff check .`, `uv run mypy src tests`
+  (84 files), `git diff --check` 통과.
+- `muscle50 analytics snapshot`을 production home에서 as-of 2026-09-17/09-10/09-03/09-28(7일)과
+  2026-09-28 `--days 90`(= 2026-07-01~09-28 전체)로 text/JSON 실행, 모두 exit 0.
+- 90일 JSON을 직접 SQL 재계산과 대조: 58/58 일치(activity 78, training day 54, set row 2088/ACTIVE
+  1054/REST 1034, reps, volume, 제외 사유 count, UNKNOWN 276, lap 408, length 1112, swimming length,
+  summary/detail/plausible distance, pool length, load metric 10종 값과 78/78 coverage, recovery row 28,
+  recovery mean, latest training status). 같은 명령 재실행 JSON byte-identical.
+- 2026-09-17 `24391051389`: summary 3025 m 그대로, plausible lap detail 525 m, issue 2건(phantom lap
+  2500 m). 2026-09-10 `24302653969`: summary 1275 m, plausible 1200 m(phantom lap 75 m, lap/length
+  distance 불일치 2 lap). 전체 swim summary 30460 m, plausible detail 27885 m, plausible lap 안의 빠른
+  length 41건(개수만 보고).
+- 검증 전후 fingerprint(`C:\temp\muscle50-evidence-20260930-analytics\before.json`/`after.json`):
+  `muscle50.sqlite3` sha256/size/mtime 동일, `-wal` 0 bytes 동일, 28개 table 전체 row digest 동일,
+  RAW 868 files sha256 동일, 새 디렉터리 없음. `-shm` mtime만 바뀌었다(SQLite WAL reader mark, 데이터와 무관).
 
 2026-09-30 Historical Garmin activity import(commit `4645f5f` 코드, 코드 변경 없음). WAL-safe backup
 `db_backup_20260930c_pre_historical_import`과 activity별 fingerprint evidence
@@ -308,7 +336,12 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
 - 실제 Garmin pool swim payload의 optional field 변형은 synthetic fixture 외에 아직 검증하지 않았다.
 - Recovery endpoint는 2026-09-01~28 live RAW로 검증했다(training status/sleep HRV shape 포함).
   Timezone/date attribution의 경계 사례는 아직 synthetic payload만 검증했다.
-- swimming progression analytics용 기간/집계 read layer는 아직 없다.
+- Analytics v1 data-quality 판정(수정하지 않음, `docs/analytics-engine.md`): 2026-09-17 `24391051389`와
+  2026-09-10 `24302653969`의 Garmin summary distance가 phantom lap(2500 m, 75 m)을 이미 포함한다.
+  Snapshot은 summary를 그대로 보고하고 plausible lap detail distance를 따로 제공한다.
+- Analytics v1 gap: muscle-group mapping 없음, `swim_lengths.length_type` 전부 NULL, `pool_length`
+  activity metric unit NULL, lap duration vs length duration 불일치 규칙 미정, swim pace/SWOLF
+  progression과 기간 비교(trend)는 아직 없다.
 - Nutrition은 아직 public CLI command에 연결되지 않았다.
 - 기존 provisional nutrition schema로 직접 만든 외부 DB가 있다면 정식 migration marker가
   없으므로 별도 호환성 검토가 필요하다.
@@ -338,6 +371,10 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
   --from/--to`가 같은 코드를 공유하도록 했다. Swim이 필요로 하는 lap/length 계층은 이미
   모든 activity에서 무조건 가져오는 `splits` RAW로 충분해 새 RAW endpoint나 migration을
   추가하지 않았다.
+- Analytics는 schema를 추가하지 않는 computed read model이다. Garmin summary 값은 절대 보정하지 않고,
+  swim detail은 lap 평균 속도 > 2.5 m/s(또는 distance가 있는데 duration 없음)이면 detail-derived distance
+  에서만 제외하고 quality issue로 보고한다. Load metric은 metric별 명시적 rule(sum/max)만 쓰고 평균은
+  쓰지 않는다. `training_load` 합은 Garmin acute load가 아니다.
 - Activity-load metric은 shared normalization에 넣지 않고 전용 RAW-only backfill로 채운다 — 검증된
   refresh 경로가 쓰는 값을 바꾸지 않기 위해서다. 값은 그대로 복사하고 범위/생리학적 검증은 향후
   Analytics quality layer 책임으로 남겼다.

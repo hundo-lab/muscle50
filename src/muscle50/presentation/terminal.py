@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import dataclasses
+import json
+from datetime import date
+
 from muscle50.application.backfill_activity_load_metrics import ActivityLoadBackfillResult
 from muscle50.application.ingest_activity_range import RangeIngestResult
 from muscle50.application.refresh_garmin_activity import ActivityRefreshResult
@@ -9,6 +13,12 @@ from muscle50.application.renormalize_garmin_recovery import RecoveryRenormalize
 from muscle50.application.sync_garmin_recovery import RecoveryRangeSyncResult, RecoverySyncResult
 from muscle50.application.sync_latest_garmin import SyncResult
 from muscle50.domain.activity import ActivityMetric, ActivityType, StrengthSet
+from muscle50.domain.analytics import (
+    MAX_PLAUSIBLE_SWIM_SPEED_MPS,
+    MetricAggregate,
+    RecoveryRule,
+    TrainingSnapshot,
+)
 from muscle50.domain.derivation import derive_summary
 from muscle50.domain.swimming import NormalizedSwimActivity, derive_lap_metrics
 
@@ -296,3 +306,163 @@ def _strength_set_value(strength_set: StrengthSet) -> str:
 
     reps = str(strength_set.reps) if strength_set.reps is not None else "반복수 미제공"
     return f"{weight} × {reps}"
+
+
+def render_training_snapshot_json(snapshot: TrainingSnapshot) -> str:
+    """Full snapshot including provenance; ASCII-only and stable for identical input."""
+    return json.dumps(dataclasses.asdict(snapshot), indent=2, ensure_ascii=True, default=_json_default)
+
+
+def render_training_snapshot(snapshot: TrainingSnapshot) -> str:
+    # ASCII only: Windows cp949 consoles cannot encode some punctuation (see recovery output).
+    window = snapshot.window
+    lines = [
+        f"Training snapshot: {window.start.isoformat()} ~ {window.as_of.isoformat()} "
+        f"({window.lookback_days} days, analytics v{snapshot.analytics_version})",
+        "Missing values are shown as unavailable, never as zero. [rule, n/m] = sources with a value.",
+    ]
+
+    overview = snapshot.activities
+    lines.extend(("", f"Activities: {overview.activity_count} (training days: {len(overview.training_dates)})"))
+    lines.extend(f"  {item.canonical_type}/{item.source_type_key}: {item.count}" for item in overview.by_type)
+    lines.append(f"  Elapsed: {_aggregate_text(overview.elapsed_seconds, duration=True)}")
+    if overview.activity_count:
+        lines.append("  Load (window totals, not Garmin acute load; training effect = session max):")
+        lines.extend(f"    {item.key}: {_aggregate_text(item)}" for item in overview.load_metrics)
+
+    strength = snapshot.strength
+    lines.extend(("", f"Strength: {strength.session_count} sessions"))
+    if strength.session_count:
+        excluded = strength.volume_exclusions
+        lines.extend(
+            (
+                f"  Active sets: {strength.active_set_count} (rest rows {strength.rest_set_count})",
+                f"  Reps: {_optional(strength.reps)} (sets missing reps {strength.sets_missing_reps}, "
+                f"0-rep sets {strength.zero_rep_sets})",
+                f"  Volume: {_optional(strength.volume_kg, ' kg')} from {strength.volume_set_count} sets "
+                f"(excluded: missing reps {excluded.missing_reps}, zero reps {excluded.zero_reps}, "
+                f"missing weight {excluded.missing_weight}, negative weight {excluded.negative_weight}, "
+                f"zero weight {excluded.zero_weight})",
+                f"  Unclassified ACTIVE sets: {strength.unclassified_active_set_count}",
+                "  Exercises:",
+            )
+        )
+        for exercise in strength.exercises:
+            name = exercise.display_name or exercise.exercise_key or "Unclassified"
+            flag = "" if exercise.classified else " (unclassified)"
+            lines.append(
+                f"    {name} [{exercise.category or 'no category'}]{flag}: {exercise.active_set_count} sets, "
+                f"reps {_optional(exercise.reps)}, volume {_optional(exercise.volume_kg, ' kg')}, "
+                f"max {_optional(exercise.max_weight_kg, ' kg')}"
+            )
+
+    swimming = snapshot.swimming
+    lines.extend(("", f"Swimming: {swimming.session_count} sessions"))
+    if swimming.session_count:
+        pools = ", ".join(_fixed(item) for item in swimming.pool_lengths_meters) or "unavailable"
+        lines.extend(
+            (
+                f"  Garmin summary distance: {_aggregate_text(swimming.summary_distance_meters)}",
+                f"  Lap detail distance: {_aggregate_text(swimming.detail_distance_meters)}",
+                f"  Plausible lap detail distance (laps <= {MAX_PLAUSIBLE_SWIM_SPEED_MPS:g} m/s): "
+                f"{_aggregate_text(swimming.plausible_detail_distance_meters)}",
+                f"  Elapsed: {_aggregate_text(swimming.elapsed_seconds, duration=True)}",
+                f"  Moving: {_aggregate_text(swimming.moving_seconds, duration=True)}",
+                f"  Pool lengths: {pools} m",
+                f"  Implausible laps: {swimming.implausible_lap_count}, "
+                f"implausible lengths in plausible laps: {swimming.implausible_length_count}",
+                "  Sessions:",
+            )
+        )
+        for session in swimming.sessions:
+            marker = (
+                " [summary includes implausible laps]" if session.summary_distance_includes_implausible_laps else ""
+            )
+            lines.append(
+                f"    {session.local_date.isoformat()} {session.source_activity_id}: "
+                f"summary {_optional(session.summary_distance_meters, ' m')}, "
+                f"plausible detail {_optional(session.plausible_detail_distance_meters, ' m')}, "
+                f"pool {_optional(session.pool_length_meters, ' m')}, laps {session.lap_count}, "
+                f"lengths {session.length_count}{marker}"
+            )
+        lines.append("  Load (swimming only):")
+        lines.extend(f"    {item.key}: {_aggregate_text(item)}" for item in swimming.load_metrics)
+
+    recovery = snapshot.recovery
+    missing_days = ", ".join(item.isoformat() for item in recovery.dates_without_row) or "none"
+    lines.extend(
+        (
+            "",
+            f"Recovery: {len(recovery.dates_with_row)}/{recovery.requested_day_count} days with a row "
+            f"(no row: {missing_days})",
+        )
+    )
+    for numeric in recovery.numeric_fields:
+        count = f"[{len(numeric.available_dates)}/{len(recovery.dates_with_row)}]"
+        if numeric.latest_value is None:
+            lines.append(f"  {numeric.field}: unavailable {count}")
+            continue
+        duration = numeric.unit == "s"
+        latest = (
+            f"latest {_value_text(numeric.latest_value, numeric.unit, duration)} ({_date_text(numeric.latest_date)})"
+        )
+        if numeric.rule is RecoveryRule.DAILY:
+            lines.append(
+                f"  {numeric.field}: {latest}, mean {_value_text(numeric.mean, numeric.unit, duration)}, "
+                f"min {_value_text(numeric.minimum, numeric.unit, duration)}, "
+                f"max {_value_text(numeric.maximum, numeric.unit, duration)} {count}"
+            )
+        else:
+            lines.append(f"  {numeric.field}: {latest} {count}")
+    for categorical in recovery.categorical_fields:
+        if categorical.latest_value is None:
+            lines.append(f"  {categorical.field}: unavailable")
+        else:
+            lines.append(
+                f"  {categorical.field}: latest {categorical.latest_value} ({_date_text(categorical.latest_date)})"
+            )
+
+    lines.extend(("", f"Quality issues: {len(snapshot.quality_issues)}"))
+    lines.extend(
+        f"  {issue.code.value} {issue.source_activity_id or '-'}: {issue.detail}" for issue in snapshot.quality_issues
+    )
+    return "\n".join(lines)
+
+
+def _json_default(value: object) -> str:
+    if isinstance(value, date):
+        return value.isoformat()
+    raise TypeError(f"not JSON serializable: {type(value).__name__}")
+
+
+def _fixed(value: float) -> str:
+    # Up to two decimals, without the six-significant-digit truncation of :g on large totals.
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def _optional(value: float | int | None, suffix: str = "") -> str:
+    if value is None:
+        return "unavailable"
+    rendered = str(value) if isinstance(value, int) else _fixed(value)
+    return f"{rendered}{suffix}"
+
+
+def _value_text(value: float | None, unit: str | None, duration: bool) -> str:
+    if value is None:
+        return "unavailable"
+    if duration:
+        return _duration(value)
+    return _optional(value, f" {unit}" if unit and unit != "score" else "")
+
+
+def _date_text(value: date | None) -> str:
+    return value.isoformat() if value is not None else "unknown date"
+
+
+def _aggregate_text(item: MetricAggregate, *, duration: bool = False) -> str:
+    total = len(item.values) + len(item.missing_source_ids)
+    coverage = f"[{item.rule.value}, {len(item.values)}/{total}]"
+    if item.value is None:
+        return f"unavailable {coverage}"
+    rendered = _duration(item.value) if duration else _optional(item.value, f" {item.unit}" if item.unit else "")
+    return f"{rendered} {coverage}"

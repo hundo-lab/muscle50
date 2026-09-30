@@ -101,6 +101,18 @@ capture를 재사용하고, 응답이 바뀌면 과거 snapshot을 유지한 채
 최신 accepted capture 기준으로 갱신합니다. 잘못된 날짜는 로그인이나 네트워크 호출 전에
 거부합니다.
 
+## Training snapshot (Analytics v1)
+
+저장된 데이터만 읽어 지정 날짜로 끝나는 기간(기본 7일)의 운동/회복 요약을 계산합니다. DB를 읽기 전용으로
+열고 Garmin에 접속하지 않습니다. 없는 값은 0이 아니라 `unavailable`로 표시합니다.
+
+```powershell
+muscle50 analytics snapshot --date 2026-09-28
+muscle50 analytics snapshot --date 2026-09-28 --days 28 --json
+```
+
+집계 규칙과 수영 lap/length 이상치 처리는 `docs/analytics-engine.md`를 참고하세요.
+
 ## 개발 검증
 
 ```powershell

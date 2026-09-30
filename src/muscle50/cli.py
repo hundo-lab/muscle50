@@ -26,7 +26,9 @@ from muscle50.application.sync_garmin_recovery import (
 )
 from muscle50.application.sync_inbody import SyncInBody, SyncInBodyResult
 from muscle50.application.sync_latest_garmin import NoActivitiesError, SyncLatestGarminActivity
+from muscle50.application.training_snapshot import BuildTrainingSnapshot
 from muscle50.config import AppPaths, ConfigurationError
+from muscle50.domain.analytics import DEFAULT_LOOKBACK_DAYS, MAX_LOOKBACK_DAYS, InvalidSnapshotWindowError
 from muscle50.domain.inbody_normalization import InBodyNormalizationError
 from muscle50.domain.normalization import NormalizationError, activity_id_from
 from muscle50.domain.recovery_normalization import RecoveryNormalizationError, validate_calendar_date
@@ -35,6 +37,7 @@ from muscle50.infrastructure.garmin.client import GarminConnectorError, PythonGa
 from muscle50.infrastructure.inbody.raw_store import InBodyRawStore
 from muscle50.infrastructure.inbody.samsung_health import SamsungHealthInBodySource
 from muscle50.infrastructure.raw_store import RawStore, RawStoreError, RecoveryRawStore
+from muscle50.infrastructure.sqlite.analytics_reader import AnalyticsDatabaseError, SqliteAnalyticsReader
 from muscle50.infrastructure.sqlite.body_composition import SqliteBodyCompositionRepository
 from muscle50.infrastructure.sqlite.database import ActivityRepository, DailyRecoveryRepository
 from muscle50.presentation.terminal import (
@@ -45,6 +48,8 @@ from muscle50.presentation.terminal import (
     render_recovery_sync_result,
     render_refresh_result,
     render_sync_result,
+    render_training_snapshot,
+    render_training_snapshot_json,
 )
 
 # Longer recovery ranges need --yes because each date costs several Garmin requests.
@@ -84,6 +89,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Re-normalize stored recovery rows from their accepted RAW capture (no Garmin API calls)",
     )
     renormalize.add_argument("--dry-run", action="store_true", help="report changes without writing")
+    analytics = commands.add_parser("analytics", help="Read-only analytics over stored canonical data")
+    analytics_commands = analytics.add_subparsers(dest="analytics_command", required=True)
+    snapshot = analytics_commands.add_parser(
+        "snapshot",
+        help="Rolling training snapshot ending on --date (reads the database read-only; no Garmin calls)",
+    )
+    snapshot.add_argument("--date", dest="as_of", required=True, metavar="YYYY-MM-DD", help="last day of the window")
+    snapshot.add_argument(
+        "--days",
+        type=int,
+        default=DEFAULT_LOOKBACK_DAYS,
+        help=f"inclusive lookback window in days (1-{MAX_LOOKBACK_DAYS}, default {DEFAULT_LOOKBACK_DAYS})",
+    )
+    snapshot.add_argument("--json", action="store_true", help="print the full snapshot with provenance as JSON")
     inbody = commands.add_parser("inbody", help="InBody body-composition commands")
     inbody_commands = inbody.add_subparsers(dest="inbody_command", required=True)
     inbody_sync = inbody_commands.add_parser("sync", help="Import a Samsung Health companion export")
@@ -115,6 +134,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _garmin_backfill_load_metrics(dry_run=args.dry_run)
     if args.command == "garmin" and args.garmin_command == "recovery-renormalize":
         return _garmin_recovery_renormalize(dry_run=args.dry_run)
+    if args.command == "analytics" and args.analytics_command == "snapshot":
+        return _analytics_snapshot(args.as_of, args.days, as_json=args.json)
     if args.command == "inbody" and args.inbody_command == "sync":
         return _inbody_sync(args.file, show_values=args.show_values)
     return 2
@@ -342,6 +363,26 @@ def _garmin_refresh(source_activity_id: str) -> int:
         return 1
     except KeyboardInterrupt:
         print("\n취소했습니다.", file=sys.stderr)
+        return 130
+
+
+def _analytics_snapshot(as_of_text: str, lookback_days: int, *, as_json: bool) -> int:
+    # Deliberately read-only: no ensure_directories(), no migrate(), no Garmin connector.
+    try:
+        as_of = date.fromisoformat(validate_calendar_date(as_of_text))
+    except RecoveryNormalizationError:
+        print("오류: --date는 YYYY-MM-DD 형식이어야 합니다.", file=sys.stderr)
+        return 1
+    try:
+        paths = AppPaths.from_environment()
+        snapshot = BuildTrainingSnapshot(SqliteAnalyticsReader(paths.database_path)).execute(as_of, lookback_days)
+        print(render_training_snapshot_json(snapshot) if as_json else render_training_snapshot(snapshot))
+        return 0
+    except (AnalyticsDatabaseError, ConfigurationError, InvalidSnapshotWindowError) as exc:
+        print(f"오류: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\n취소되었습니다.", file=sys.stderr)
         return 130
 
 

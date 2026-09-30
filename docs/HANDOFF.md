@@ -2,7 +2,64 @@
 
 Last updated: 2026-09-30
 
-## Current task
+## Current task: Analytics Engine v1 (2026-09-30)
+
+Branch `feature/analytics-engine` (worktree `C:\Users\hundo\Desktop\MyProjects\analytics-engine`, base
+local main `dc2c99f`). **구현과 production read-only 검증 완료. 미커밋 상태이며 commit/merge/push 하지
+않았다.** 설계와 규칙 전체는 `docs/analytics-engine.md`.
+
+### What was attempted / completed
+
+1. Repo/schema/production data audit(read-only, `immutable=1`). 기존 analytics primitive는 per-activity
+   helper(`derive_summary`, `derive_lap_metrics`/`derive_length_metrics`, `derive_activity_review`,
+   `strength_set_metrics`)뿐이고 window 집계와 read-only DB 경로가 없었다.
+2. 순수 domain `build_training_snapshot()`: window(inclusive, 1~90일, 기본 7), activity overview,
+   load metric 10종(명시적 sum/max, per-activity 값과 missing ID 포함), strength(active set/reps/
+   volume/exercise, 제외 사유), swimming(summary vs detail, implausible lap 제외), recovery(daily/state/
+   categorical, row 없음 vs null 구분), quality issue 목록.
+3. `SqliteAnalyticsReader`(`mode=ro` + `query_only`, 단일 read transaction, 없으면 생성 안 함, schema
+   version ≥ 7 확인), `BuildTrainingSnapshot`, text/JSON renderer, CLI `analytics snapshot`.
+4. 2026-09-17 swim 판정: Garmin summary distance 3025 m 자체가 phantom lap(lap seq 1, 2500 m / 1.787 s)을
+   포함한다. Summary는 그대로, plausible lap detail distance 525 m를 따로 보고, issue로 명시. 같은 규칙이
+   2026-09-10 `24302653969`(75 m / 0.966 s)도 찾아냈다. Production 데이터는 수정하지 않았다.
+
+### Files changed
+
+- 신규: `src/muscle50/domain/analytics.py`, `src/muscle50/infrastructure/sqlite/analytics_reader.py`,
+  `src/muscle50/application/training_snapshot.py`, `tests/analytics_builders.py`(synthetic builder),
+  `tests/test_analytics_snapshot.py`, `tests/test_analytics_reader.py`, `docs/analytics-engine.md`
+- 수정: `src/muscle50/cli.py`(`analytics snapshot`), `src/muscle50/presentation/terminal.py`(renderer 추가만),
+  `README.md`(사용법 절), `docs/CURRENT_STATE.md`, `docs/HANDOFF.md`
+- 신규 파일은 untracked 상태다(index에 stage하지 않음).
+- Migration 없음. Ingestion/refresh/RAW/normalization 코드는 수정하지 않았다. Reader는
+  `database.py`의 private row mapper(`_activity_from_rows`, `_swim_detail_from_connection`,
+  `_recovery_from_row`)를 import해 재사용한다.
+
+### Tests / checks run
+
+`uv run pytest -q` 390 passed, `uv run ruff check .`, `uv run mypy src tests`(84 files), `git diff --check`
+통과. Production 검증과 fingerprint 비교는 `docs/CURRENT_STATE.md` "Verification" 2026-09-30 Analytics 절.
+Evidence(repo 밖): `C:\temp\muscle50-evidence-20260930-analytics\`(fingerprint.py, before/after.json,
+audit*.py, snapshot_*.txt/json, crosscheck.py/txt).
+
+### Known risks / open decisions
+
+- `MAX_PLAUSIBLE_SWIM_SPEED_MPS = 2.5`는 판단값이다. Lap 판정(distance 제외)은 threshold에 둔감하지만
+  length 개수(counted only)는 민감하다.
+- Muscle-group 집계는 mapping이 없어 구현하지 않았다. Garmin category → muscle group mapping을 만들지는
+  사용자 결정이 필요하다.
+- Read-only reader도 WAL DB의 `-shm`에 reader mark를 쓰고, `-wal`/`-shm`이 없으면 빈 파일을 만든다
+  (SQLite 동작, main DB 파일은 불변).
+- 새 activity import 후 `garmin backfill-load-metrics`를 돌리지 않으면 snapshot에서 해당 activity의
+  load metric이 missing으로 보고된다(0으로 처리되지 않음).
+
+### Recommended next action
+
+1. 리뷰 후 `feature/analytics-engine` commit 여부 결정(명시적 승인 필요), 이어서 main 통합 여부 결정.
+2. 다음 slice 후보: 기간 비교(이번 주 vs 이전 주), swim pace/SWOLF 추세(plausible length만), muscle-group
+   mapping 설계(승인 시), 09-17/09-10 swim의 correction overlay(승인 시).
+
+## Previous task: Garmin Analytics Prerequisites
 
 Garmin Analytics Prerequisites (2026-09-29~30), branch `feature/garmin-analytics-prerequisites`
 (Paseo worktree `strong-bat`, base main `65a929a`). Activity-load metric, recovery range sync,
