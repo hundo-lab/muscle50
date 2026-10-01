@@ -2,7 +2,56 @@
 
 Last updated: 2026-10-01
 
-## Current task: user-selected focus override `--focus` (2026-10-01)
+## Current task: Exercise Taxonomy coverage update (2026-10-01)
+
+Paseo worktree `taxonomy-coverage`(branch `feature/taxonomy-coverage`, base `8b259e7` = `--focus` commit).
+**구현, 테스트, production read-only 검증 완료. 사용자 승인(2026-10-01)으로 이 branch에 commit했다.**
+Merge/rebase/push 없음. Recommendation 로직 변경 없음.
+
+### What was attempted / completed
+
+- Read-only audit(`immutable=1`): ACTIVE label 47개(UNKNOWN 포함) 중 `no_rule` 8개 = Connect에서 지정한 7개
+  (probability 100; 09-22 `24451010022`, 09-29 `24536298902`, 09-30 `24549434906`) + `PLYO/BOX_JUMP`.
+  7개 이름 모두 Garmin FIT profile에 존재.
+- `exercise_taxonomy.py`에 저장값 그대로의 label 7개 rule 추가(규칙과 이유: `docs/exercise-taxonomy.md` 결정 표).
+  `PLYO/BOX_JUMP`는 계속 rule 없음. UNKNOWN 판정과 label identity는 변경 없음.
+- Tests: `PRODUCTION_LABELS` 7개 추가, known-mapping 7건, variant 구분 test 6건, analytics `by_exercise`에서
+  shoulder variant가 별개 group인지 확인하는 test.
+
+### Decisions (사용자, 2026-10-01)
+
+- `ROW/BENT_OVER_ROW_WITH_BARBELL`: posterior_deltoid secondary 추가(row family와 일치). 28일 posterior_deltoid
+  secondary exposure 6 → 12. 추천 출력은 변화 없음(secondary는 추천에서 쓰지 않음).
+- `LYING_TRICEPS_EXTENSION_TO_CLOSE_GRIP_BENCH_PRESS`: `elbow_extension`, triceps, chest/anterior_deltoid 유지.
+- `PLYO/BOX_JUMP` 최종 결정(사용자, 2026-10-01): **의도적으로 rule 없음(`no_rule`)**. Plyometric은 taxonomy v1 범위 밖이며 `squat`으로 매핑하지 않고 새 `jump` pattern도 추가하지 않는다. 현재 근거는 watch가 자동 인식한 1 set(confidence 37.5%)뿐이다: 2026-09-10 `24304351575` 마지막 set, 3 reps, 10 kg, 1.9 s, 직전 rest 1548 s(상체 세션 종료 후). 유일한 non-UNKNOWN ACTIVE `no_rule` label로 계속 드러난다.
+
+### Files changed
+
+`src/muscle50/domain/exercise_taxonomy.py`, `tests/test_exercise_taxonomy.py`, `tests/test_analytics_taxonomy.py`,
+`docs/exercise-taxonomy.md`, `docs/CURRENT_STATE.md`, 이 파일.
+
+### Checks run
+
+- `uv run --extra dev pytest` 538 passed, `ruff check .`, `mypy src tests`(97 files), `git diff --check` 통과.
+- Production read-only 4개 명령 exit 0, snapshot JSON 재실행 byte-identical. DB/WAL/28 table/RAW 954 files
+  fingerprint 전후 동일. Evidence: `C:\temp\muscle50-evidence-20261001-coverage\`
+  (before/after/final fingerprint, snapshot/rec/sh `_before`/`_after`/`_final` text+JSON, labels.py, report.py).
+  `_final` = posterior_deltoid 결정 반영본; `_after` 대비 snapshot taxonomy 절 2줄만 다르고 recommend JSON/text 동일.
+
+### Known failures or risks
+
+- 09-30 pull 15 set이 이제 집계돼 10-01에 pull이 `resting`(어제 ≥ 6 primary)으로 바뀌고 swim에 "no butterfly or
+  paddles" 주의가 추가된다. 로직 변경이 아니라 데이터 반영이다. 자동 focus는 legs 그대로.
+- UNKNOWN 271(전체) / 33(28일)은 그대로다.
+- Recommendation hardening 별도 issue(여기서 수정하지 않음): `LATERAL_RAISE/ONE_ARM_CABLE_LATERAL_RAISE` progression이
+  고정 +2.5 kg step으로 6 kg → 8.5 kg(약 42%)을 제안한다. 가벼운 one-arm cable isolation에는 과한 증가다.
+
+### Recommended next action
+
+1. main 통합 여부 결정(명시적 승인 필요).
+2. 이후 recommendation hardening(별도 작업, lateral raise +2.5 kg step 포함).
+
+## Previous task: user-selected focus override `--focus` (2026-10-01)
 
 Paseo worktree `training-recommendation`(branch `feature/training-recommendation`, base main = origin/main `7740d7d`).
 **구현, 테스트, production read-only 검증 완료. 사용자 승인(2026-10-01)으로 이 branch에 commit했다.** Merge/push 없음.

@@ -140,6 +140,31 @@ def test_distinct_garmin_labels_are_never_merged_even_with_identical_taxonomy() 
     assert labels[("CRUNCH", "LEG_EXTENSIONS")].mapping_basis == "category_override"
 
 
+def test_shoulder_variants_stay_separate_garmin_labels() -> None:
+    taxonomy = _snapshot(
+        [
+            _strength(
+                "s",
+                "10",
+                strength_set(1, category="SHOULDER_PRESS", name="SEATED_BARBELL_SHOULDER_PRESS", probability=100.0),
+                strength_set(2, category="SHOULDER_PRESS", name="DUMBBELL_SHOULDER_PRESS", probability=100.0),
+                strength_set(3, category="SHOULDER_PRESS"),
+                strength_set(4, category="LATERAL_RAISE", name="ONE_ARM_CABLE_LATERAL_RAISE", probability=100.0),
+                strength_set(5, category="LATERAL_RAISE"),
+            )
+        ]
+    ).strength.taxonomy
+    labels = _labels(taxonomy)
+
+    assert labels[("SHOULDER_PRESS", "SEATED_BARBELL_SHOULDER_PRESS")].sets == (SetRef("s", 1),)
+    assert labels[("SHOULDER_PRESS", "DUMBBELL_SHOULDER_PRESS")].sets == (SetRef("s", 2),)
+    assert labels[("SHOULDER_PRESS", None)].sets == (SetRef("s", 3),)
+    assert labels[("LATERAL_RAISE", "ONE_ARM_CABLE_LATERAL_RAISE")].sets == (SetRef("s", 4),)
+    assert labels[("LATERAL_RAISE", None)].sets == (SetRef("s", 5),)
+    assert taxonomy.no_rule_active_set_count == 0
+    assert _groups(taxonomy.by_primary_muscle) == {"anterior_deltoid": 3, "lateral_deltoid": 2}
+
+
 def test_secondary_exposures_are_reported_separately_and_not_added_to_primary_totals() -> None:
     taxonomy = _taxonomy()
 

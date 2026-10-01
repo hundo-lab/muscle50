@@ -22,7 +22,8 @@ from muscle50.domain.exercise_taxonomy import (
     label_origin,
 )
 
-# Every (category, name) label observed in production on 2026-10-01 (ACTIVE sets).
+# Every (category, name) label observed in production on 2026-10-01 (ACTIVE sets), including the
+# labels set in Garmin Connect for the 2026-09-22, 09-29 and 09-30 activities.
 # PLYO/BOX_JUMP is deliberately without a rule; UNKNOWN is never resolved.
 PRODUCTION_LABELS: tuple[tuple[str, str | None], ...] = (
     ("BENCH_PRESS", None),
@@ -40,18 +41,24 @@ PRODUCTION_LABELS: tuple[tuple[str, str | None], ...] = (
     ("FLYE", "DUMBBELL_FLYE"),
     ("HIP_RAISE", "BARBELL_HIP_THRUST_ON_FLOOR"),
     ("LATERAL_RAISE", None),
+    ("LATERAL_RAISE", "ONE_ARM_CABLE_LATERAL_RAISE"),
     ("LEG_CURL", None),
     ("LEG_RAISE", "WEIGHTED_HANGING_LEG_RAISE"),
     ("LUNGE", None),
     ("LUNGE", "BARBELL_LUNGE"),
     ("PULL_UP", None),
+    ("PULL_UP", "CLOSE_GRIP_LAT_PULLDOWN"),
     ("PULL_UP", "LAT_PULLDOWN"),
     ("PULL_UP", "STANDING_CABLE_PULLOVER"),
     ("PULL_UP", "STRAIGHT_ARM_PULLDOWN"),
+    ("PULL_UP", "WIDE_GRIP_LAT_PULLDOWN"),
     ("PUSH_UP", None),
     ("ROW", None),
+    ("ROW", "BENT_OVER_ROW_WITH_BARBELL"),
     ("ROW", "SEATED_CABLE_ROW"),
     ("SHOULDER_PRESS", None),
+    ("SHOULDER_PRESS", "DUMBBELL_SHOULDER_PRESS"),
+    ("SHOULDER_PRESS", "SEATED_BARBELL_SHOULDER_PRESS"),
     ("SHRUG", None),
     ("SHRUG", "UPRIGHT_ROW"),
     ("SIT_UP", None),
@@ -61,6 +68,7 @@ PRODUCTION_LABELS: tuple[tuple[str, str | None], ...] = (
     ("TRICEPS_EXTENSION", "BENCH_DIP"),
     ("TRICEPS_EXTENSION", "CABLE_OVERHEAD_TRICEPS_EXTENSION"),
     ("TRICEPS_EXTENSION", "DUMBBELL_KICKBACK"),
+    ("TRICEPS_EXTENSION", "LYING_TRICEPS_EXTENSION_TO_CLOSE_GRIP_BENCH_PRESS"),
     ("TRICEPS_EXTENSION", "OVERHEAD_DUMBBELL_TRICEPS_EXTENSION"),
     ("TRICEPS_EXTENSION", "TRICEPS_PRESSDOWN"),
 )
@@ -206,6 +214,62 @@ _M = MuscleGroup
         ("TRICEPS_EXTENSION", "TRICEPS_PRESSDOWN", _P.ELBOW_EXTENSION, _M.TRICEPS, (), MappingBasis.EXERCISE_NAME),
         ("LEG_CURL", None, _P.KNEE_FLEXION, _M.HAMSTRINGS, (), MappingBasis.CATEGORY_ONLY),
         ("SIT_UP", None, _P.CORE, _M.CORE, (), MappingBasis.CATEGORY_ONLY),
+        (
+            "SHOULDER_PRESS",
+            "SEATED_BARBELL_SHOULDER_PRESS",
+            _P.VERTICAL_PUSH,
+            _M.ANTERIOR_DELTOID,
+            (_M.TRICEPS, _M.LATERAL_DELTOID),
+            MappingBasis.EXERCISE_NAME,
+        ),
+        (
+            "SHOULDER_PRESS",
+            "DUMBBELL_SHOULDER_PRESS",
+            _P.VERTICAL_PUSH,
+            _M.ANTERIOR_DELTOID,
+            (_M.TRICEPS, _M.LATERAL_DELTOID),
+            MappingBasis.EXERCISE_NAME,
+        ),
+        (
+            "LATERAL_RAISE",
+            "ONE_ARM_CABLE_LATERAL_RAISE",
+            _P.SHOULDER_ABDUCTION,
+            _M.LATERAL_DELTOID,
+            (),
+            MappingBasis.EXERCISE_NAME,
+        ),
+        (
+            "ROW",
+            "BENT_OVER_ROW_WITH_BARBELL",
+            _P.HORIZONTAL_PULL,
+            _M.UPPER_BACK,
+            (_M.LATS, _M.BICEPS, _M.POSTERIOR_DELTOID),
+            MappingBasis.EXERCISE_NAME,
+        ),
+        (
+            "PULL_UP",
+            "CLOSE_GRIP_LAT_PULLDOWN",
+            _P.VERTICAL_PULL,
+            _M.LATS,
+            (_M.BICEPS, _M.UPPER_BACK),
+            MappingBasis.EXERCISE_NAME,
+        ),
+        (
+            "PULL_UP",
+            "WIDE_GRIP_LAT_PULLDOWN",
+            _P.VERTICAL_PULL,
+            _M.LATS,
+            (_M.UPPER_BACK, _M.BICEPS),
+            MappingBasis.EXERCISE_NAME,
+        ),
+        (
+            "TRICEPS_EXTENSION",
+            "LYING_TRICEPS_EXTENSION_TO_CLOSE_GRIP_BENCH_PRESS",
+            _P.ELBOW_EXTENSION,
+            _M.TRICEPS,
+            (_M.CHEST, _M.ANTERIOR_DELTOID),
+            MappingBasis.EXERCISE_NAME,
+        ),
     ],
 )
 def test_known_mappings(
@@ -227,6 +291,29 @@ def test_known_mappings(
     assert result.rule.secondary_muscles == secondary
     assert result.rule.basis is basis
     assert result.unmapped_reason is None
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        (("SHOULDER_PRESS", "SEATED_BARBELL_SHOULDER_PRESS"), ("SHOULDER_PRESS", "DUMBBELL_SHOULDER_PRESS")),
+        (("SHOULDER_PRESS", "SEATED_BARBELL_SHOULDER_PRESS"), ("SHOULDER_PRESS", None)),
+        (("LATERAL_RAISE", "ONE_ARM_CABLE_LATERAL_RAISE"), ("LATERAL_RAISE", None)),
+        (("PULL_UP", "CLOSE_GRIP_LAT_PULLDOWN"), ("PULL_UP", "LAT_PULLDOWN")),
+        (("PULL_UP", "WIDE_GRIP_LAT_PULLDOWN"), ("PULL_UP", "LAT_PULLDOWN")),
+        (("ROW", "BENT_OVER_ROW_WITH_BARBELL"), ("ROW", None)),
+    ],
+)
+def test_garmin_variants_keep_their_own_label_even_with_similar_attributes(
+    first: tuple[str, str | None], second: tuple[str, str | None]
+) -> None:
+    a = classify_exercise(*first)
+    b = classify_exercise(*second)
+    assert a.rule is not None and b.rule is not None
+    assert (a.source_category, a.source_name) == first
+    assert (a.rule.source_category, a.rule.source_name) == first
+    assert (b.rule.source_category, b.rule.source_name) == second
+    assert a.rule != b.rule
 
 
 def test_garmin_leg_extensions_under_crunch_is_a_visible_category_override() -> None:

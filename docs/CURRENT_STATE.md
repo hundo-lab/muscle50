@@ -87,7 +87,7 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   recovery(daily field latest/mean/min/max, state field latest, categorical latest, row 없는 날짜와
   null field 구분), provenance(source activity ID/날짜), data-quality issue 목록.
   추천/생리학적 점수 없음.
-- Exercise Taxonomy v1: 검토된 production label 38개에 대한 명시적 rule(category fallback, fuzzy, 추론
+- Exercise Taxonomy v1: 검토된 production label 45개(2026-10-01 coverage update로 Connect 지정 label 7개 추가)에 대한 명시적 rule(category fallback, fuzzy, 추론
   없음), movement pattern 15 / muscle group 13. Snapshot `strength.taxonomy`가 원본 Garmin label별,
   movement pattern별, primary muscle별 ACTIVE set(각 set 정확히 한 번), 별도 secondary muscle set exposure,
   명시적 unmapped(`unknown_source_label`/`no_rule`)와 UNKNOWN 영향 activity, Garmin label origin(confirmed/
@@ -108,6 +108,8 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 
 ## Pending merge
 
+- Paseo worktree `taxonomy-coverage`(branch `feature/taxonomy-coverage`, base `8b259e7`): taxonomy rule 7개 추가.
+  사용자 승인(2026-10-01)으로 commit. merge/rebase/push 없음(별도 승인 필요).
 - Paseo worktree `training-recommendation`(branch `feature/training-recommendation`, base main = origin/main
   `7740d7d`): 사용자 지정 focus override(`--focus`)를 사용자 승인(2026-10-01)으로 commit했다. main merge/push 하지
   않았다(별도 승인 필요).
@@ -146,6 +148,17 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 - `tests/test_refresh_activity.py`, `tests/test_swim_normalization.py`, `tests/test_sync_recovery.py`
 
 ## Verification
+
+2026-10-01 Taxonomy coverage update(worktree `taxonomy-coverage`, base `8b259e7`, feature branch commit):
+
+- Gates: `uv run --extra dev pytest` 538 passed(기존 524 + 신규 14), `ruff check .`, `mypy src tests`(97 files),
+  `git diff --check` 통과.
+- Production read-only: `analytics snapshot --date 2026-10-01 --days 28`(text/JSON, JSON 재실행 byte-identical),
+  `recommend --date 2026-10-01`, `--focus shoulders`, `--focus shoulders --json` 모두 exit 0. 28일 mapped 205 → 243,
+  no_rule 39 → 1(BOX_JUMP), UNKNOWN 33 그대로. Shoulders 세션 SEATED_BARBELL / DUMBBELL shoulder press +
+  ONE_ARM_CABLE_LATERAL_RAISE 약 32분. 자동 focus는 legs 그대로.
+- Fingerprint(`C:\temp\muscle50-evidence-20261001-coverage\before.json`/`after.json`/`final.json`/`precommit.json`): DB/WAL sha256/size/mtime,
+  28 table digest, RAW 954 files 동일.
 
 2026-10-01 사용자 지정 focus override(`--focus`, worktree `training-recommendation`, base `7740d7d`, feature branch commit):
 
@@ -351,6 +364,10 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
 
 ## Known issues
 
+- Recommendation hardening 후보(미수정): double progression의 고정 +2.5 kg step이 가벼운 isolation에 과하다.
+  2026-10-01 `LATERAL_RAISE/ONE_ARM_CABLE_LATERAL_RAISE` 6 kg → 8.5 kg(약 42%). Taxonomy coverage 작업 범위 밖.
+- `PLYO/BOX_JUMP`(1 set, 자동 인식 37.5%)는 의도적으로 rule 없음(사용자 결정 2026-10-01; plyometric은 v1 범위
+  밖). 유일한 non-UNKNOWN ACTIVE `no_rule` label.
 - Recommendation history window off-by-one(미수정): strength history는 D-28~D-1, 다음 수영 목표의 swim history는
   Analytics snapshot window D-27~D를 쓴다. 2026-10-01 요청에서 2026-09-03 swim이 swim history에서 빠졌다. 그 날
   600 m lap은 50 m length 하나가 2.72 m/s(> 2.5)라 baseline이 될 수 없어 결과에는 영향이 없었다.

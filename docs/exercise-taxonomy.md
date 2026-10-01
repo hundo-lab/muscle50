@@ -42,7 +42,8 @@ Muscle group 13개: `chest`, `lats`, `upper_back`, `anterior_deltoid`, `lateral_
 
 - Rule lookup은 저장된 `(category, name)`과의 **정확한 일치**다. Fuzzy matching, 대소문자/공백 보정, 무게/반복/
   인접 set 기반 추론, LLM 분류 없음.
-- **Rule은 production에서 관찰되고 사람이 검토한 label에만 존재한다**(2026-10-01 ACTIVE label 39개 중 38개).
+- **Rule은 production에서 관찰되고 사람이 검토한 label에만 존재한다**(2026-10-01 ACTIVE label 39개 중 38개; 같은 날 coverage update로
+  Garmin Connect에서 지정된 7개 추가 → UNKNOWN 제외 46개 중 45개, 남은 `no_rule`은 `PLYO/BOX_JUMP`뿐).
   테스트가 rule 집합 = 검토한 production label 집합을 고정한다.
 - **Category fallback 없음**: `BENCH_PRESS/<새 name>`은 `BENCH_PRESS/-` rule로 떨어지지 않고 `no_rule`이 되어
   `strength_unmapped_exercise` quality issue로 드러난다. 새 Garmin label은 rule을 명시적으로 추가해야 한다.
@@ -62,7 +63,12 @@ Muscle group 13개: `chest`, `lats`, `upper_back`, `anterior_deltoid`, `lateral_
 | `ROW/-`, `ROW/SEATED_CABLE_ROW` | primary `upper_back`; lats/biceps/posterior_deltoid secondary | horizontal row의 mid-back 주도 |
 | `DEADLIFT/BARBELL_DEADLIFT` | primary glutes; hamstrings/quadriceps secondary | `DEADLIFT/STRAIGHT_LEG_DEADLIFT`는 primary hamstrings |
 | `SHRUG/UPRIGHT_ROW` | `shoulder_abduction`, lateral_deltoid; upper_back secondary | |
-| `PLYO/BOX_JUMP` (1, auto-detected) | rule 없음 → `no_rule` | plyometric은 v1 strength taxonomy 밖. explicit unmapped 경로 |
+| `PLYO/BOX_JUMP` (1, auto-detected 37.5%) | rule 없음 → `no_rule` | plyometric은 v1 strength taxonomy 밖. explicit unmapped 경로. 2026-10-01 coverage update에서 재검토 후 유지 |
+| `SHOULDER_PRESS/SEATED_BARBELL_SHOULDER_PRESS` (8), `SHOULDER_PRESS/DUMBBELL_SHOULDER_PRESS` (6) | `vertical_push`, anterior_deltoid; triceps/lateral_deltoid secondary. 서로, 그리고 `SHOULDER_PRESS/-`와 별개 label | 2026-09-22 `24451010022` Connect 수정 label(probability 100) |
+| `LATERAL_RAISE/ONE_ARM_CABLE_LATERAL_RAISE` (3) | `shoulder_abduction`, lateral_deltoid, secondary 없음. `LATERAL_RAISE/-`와 별개 label | `LATERAL_RAISE/-` rule과 같은 속성 |
+| `ROW/BENT_OVER_ROW_WITH_BARBELL` (6) | `horizontal_pull`, upper_back; lats/biceps/posterior_deltoid secondary | `ROW/-`·`ROW/SEATED_CABLE_ROW`와 같은 row-family secondary(사용자 결정 2026-10-01) |
+| `PULL_UP/CLOSE_GRIP_LAT_PULLDOWN` (5), `PULL_UP/WIDE_GRIP_LAT_PULLDOWN` (4) | `vertical_pull`, lats; biceps/upper_back secondary | `PULL_UP/LAT_PULLDOWN`과 같은 속성, 별개 label |
+| `TRICEPS_EXTENSION/LYING_TRICEPS_EXTENSION_TO_CLOSE_GRIP_BENCH_PRESS` (6) | `elbow_extension`, triceps; chest/anterior_deltoid secondary | Garmin FIT `triceps_extension_exercise_name` 14: lying extension에서 close-grip press로 잇는 복합 동작. Garmin category와 `TRICEPS_EXTENSION/BENCH_DIP` 선례를 따라 elbow_extension(추천에서는 isolation)이며 press 부분은 secondary로만 반영. 추천 자격을 바꾸려고 horizontal_push로 재분류하지 않는다(사용자 결정 2026-10-01) |
 
 이 선택들은 primary headline 합계를 움직이므로 바꾸려면 rule table과 테스트를 함께 수정한다.
 
@@ -119,6 +125,16 @@ Unmapped UNKNOWN set도 probability가 98.8–99.6%라 `auto_detected`로 집계
 운동 추천, 선호/빈도 종목 선택, progressive overload, 무게/반복 목표, recovery 기반 조정, UNKNOWN 수정 안내 같은
 사용자 알림, 수영 목표/추천, Daily Recommendation, Training Goals/Profile. Taxonomy는 label에 속성을 붙이는 것만
 담당한다.
+
+## Coverage update (2026-10-01)
+
+Garmin Connect에서 종목을 지정한 activity(2026-09-22 `24451010022`, 09-29 `24536298902`, 09-30 `24549434906`)의
+label 7개가 `no_rule`이었다. 위 표의 rule을 추가했고 label은 저장값 그대로다. 28일 snapshot(as-of 2026-10-01):
+ACTIVE 277 중 mapped 205 → 243, unmapped 72 → 34(UNKNOWN 33 그대로, no_rule 39 → 1 = `PLYO/BOX_JUMP`).
+Primary anterior_deltoid 1 → 15, lateral_deltoid 3 → 6. Secondary posterior_deltoid 6 → 12. Recommendation 로직은
+바꾸지 않았다.
+
+`PLYO/BOX_JUMP` 최종 결정(사용자, 2026-10-01): **의도적으로 rule 없음(`no_rule`)**. Plyometric은 taxonomy v1 범위 밖이며 `squat`으로 매핑하지 않고 새 `jump` pattern도 추가하지 않는다. 현재 근거는 watch가 자동 인식한 1 set(confidence 37.5%)뿐이다: 2026-09-10 `24304351575` 마지막 set, 3 reps, 10 kg, 1.9 s, 직전 rest 1548 s(상체 세션 종료 후). 유일한 non-UNKNOWN ACTIVE `no_rule` label로 계속 드러난다.
 
 ## UNKNOWN 분석 (production, read-only, 2026-10-01)
 
