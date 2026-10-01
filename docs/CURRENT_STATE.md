@@ -121,7 +121,8 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   `TRICEPS_EXTENSION/BENCH_DIP`는 항상 숫자 없음 + `smallest_available_direction_unknown` + assistance/추가 저항 양방향
   안내. Regression, recovery hold/reduce, 48 h rest rule은 기존대로 숫자 `maintain`으로 덮는다. 15%는 사용자 history로
   보정한 숫자 목표 신뢰 기준(생리학적 최적값 아님). 상세는 `docs/training-recommendation.md` "증량 step".
-- (branch `feature/daily-sync`, base main = origin/main `c06a36c`, main 미통합, 아래 Pending merge) Daily orchestration
+- (`c3f5842`/`8b08773`, 2026-10-02 local main으로 fast-forward 통합, origin push 안 함; production live 검증 완료 —
+  아래 Verification) Daily orchestration
   `muscle50 daily [--date D] [--focus F] [--avoid M ...] [--json]`과 `muscle50 daily --after-workout [--date D] [--json]`.
   `application/daily_sync.py`의 `RunDailySync`가 기존 use case만 조합한다: Garmin 로그인 1회 → `IngestGarminActivityRange`
   (D-1~D) → `BackfillActivityLoadMetrics` → `SyncGarminRecovery.execute_range`(D-1~D) → `BuildTrainingRecommendation`(D).
@@ -139,9 +140,10 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 
 ## Pending merge
 
-- Paseo worktree `daily-sync`(branch `feature/daily-sync`, base main = origin/main `c06a36c`): Daily orchestration
-  commit. Gates 통과, production live Garmin 실행은 하지 않았다(자동 테스트는 fake Garmin만). main은 이 branch의
-  ancestor(fast-forward 가능). merge/push는 별도 승인 필요.
+- 현재 pending merge 없음.
+- Daily orchestration(`c3f5842`, `8b08773`)은 2026-10-02에 local main으로 fast-forward(`c06a36c` → `8b08773`, merge
+  commit/rebase/squash 없음)됐다. origin/main은 `c06a36c` 그대로(push는 별도 승인). Branch `feature/daily-sync`와 Paseo
+  worktree `daily-sync`는 유지한다.
 - Progression Hardening v1(`13d5ed2`)은 2026-10-02에 main으로 fast-forward(`4f26ec2` → `13d5ed2`, merge commit/rebase/
   cherry-pick 없음)되고 origin에 일반 push됐다. main = origin/main = GitHub main `13d5ed2`(`git ls-remote` 확인).
   Branch `feature/progression-hardening`(`13d5ed2`)과 Paseo worktree `progression-hardening`은 의도적으로 유지한다.
@@ -186,6 +188,21 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 
 ## Verification
 
+2026-10-02 Daily orchestration production live 검증(사용자 실행, 실제 Garmin 계정, `feature/daily-sync` `8b08773`):
+
+- 첫 실행: garmin_login ok, activities found 0 / new 0 / already stored 0 / failed 0, load_metrics inserted 0 /
+  updated 0 / unchanged 800, recovery created 1 / updated 1 / failed 0, recommendation ok. 저장된 최신 recovery가
+  2026-10-02가 됐다.
+- 바로 이어 2회째: activities found 0 / new 0, load_metrics inserted 0 / updated 0 / unchanged 800, recovery created 0 /
+  updated 0 / unchanged 2 / failed 0, recommendation ok. 실제 계정에서 daily 흐름과 production idempotency 확인.
+
+2026-10-02 Daily orchestration main 통합(`c06a36c` → `8b08773` fast-forward, push 안 함):
+
+- 통합 전 feature gates와 통합 후 main gates 모두 `uv run --extra dev pytest` 614 passed, `ruff check .`,
+  `mypy src tests`(99 files), `git diff --check` 통과. 통합·gates 중 Garmin live 호출 없음.
+- Production DB/RAW fingerprint 통합 전후 동일(DB/WAL, 28 table, RAW 974 files — live 검증 이후 상태), evidence
+  `C:\temp\muscle50-evidence-20261002-daily-integration\`.
+
 2026-10-02 Daily orchestration(worktree `daily-sync`, base `c06a36c`, feature branch commit):
 
 - Gates: `uv run --extra dev pytest` 614 passed(582 + 신규 32, `tests/test_daily_sync.py`), `ruff check .`,
@@ -196,7 +213,8 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
   `--after-workout`, activity endpoint 경고 + refresh 안내, 같은 날 2회 실행 시 row 수·RAW 파일 동일(신규 0, metric
   unchanged, recovery unchanged), 단계별 실패와
   exit 1, 로그인 실패, 인증 전 입력 거부, standalone `recommend`와 JSON/text 동일, 같은 입력 JSON byte-identical.
-- 실제 Garmin 계정은 호출하지 않았다(live 검증은 별도 승인 필요). Production DB/RAW는 구현·테스트 중 사용하지 않았고
+- 구현 당시 실제 Garmin 계정은 호출하지 않았다(live 검증은 이후 사용자가 수행, 위 항목). Production DB/RAW는
+  구현·테스트 중 사용하지 않았고
   fingerprint 전후 동일(DB/WAL, 28 table, RAW 954 files), evidence `C:\temp\muscle50-evidence-20261002-daily-sync\`.
 
 2026-10-02 Progression Hardening v1 main 통합(`4f26ec2` → `13d5ed2` fast-forward, push 완료):
@@ -459,7 +477,7 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
 
 ## Known issues
 
-- (Daily orchestration, `feature/daily-sync`, main 미통합) `muscle50 daily` 이후에도 수동인 것: Garmin Connect에서
+- (Daily orchestration, local main `8b08773`) `muscle50 daily` 이후에도 수동인 것: Garmin Connect에서
   종목을 고친 뒤 `garmin refresh <id>`, InBody import(`inbody sync --file`), Garmin 첫 로그인과 token 만료 시 재로그인(MFA,
   terminal 필요), 자동 예약 실행(scheduler 없음). Sync coverage는 여전히 기록하지 않는다(`sync_runs` 미사용) — "운동 없음"과
   "미동기화"를 구분하지 못한다. 기본 날짜는 이 컴퓨터의 날짜라 자정 직후 실행이나 다른 시간대 기록은 `--date`로 지정해야

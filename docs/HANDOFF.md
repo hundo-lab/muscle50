@@ -5,7 +5,15 @@ Last updated: 2026-10-02
 ## Current task: Daily orchestration `muscle50 daily` (2026-10-02)
 
 Paseo worktree `daily-sync`(branch `feature/daily-sync`, base main = origin/main `c06a36c`).
-**구현, 테스트, gates 완료. 이 branch에 commit. main merge/push 안 함(별도 승인 필요).** Live Garmin 실행 안 함.
+**완료: 2026-10-02에 local main으로 fast-forward 통합(`c06a36c` → `8b08773`, merge commit/rebase/squash 없음). origin push
+안 함(별도 승인).** Branch와 worktree는 유지한다.
+
+### Production live verification (2026-10-02, 사용자 실행)
+
+- 첫 실행: 모든 단계 ok. activities new 0, load_metrics 쓰기 0(unchanged 800), recovery created 1 / updated 1 →
+  저장된 recovery가 2026-10-02까지, recommendation ok.
+- 바로 이어 2회째: activities new 0, load_metrics 쓰기 0, recovery unchanged 2, recommendation ok. 실제 production에서
+  idempotency 확인. 통합·gates 중에는 Garmin live 호출을 하지 않았다.
 
 ### What was attempted / completed
 
@@ -49,13 +57,14 @@ Garmin endpoint 경고를 버리지 않고 전달; `garmin activities` 출력 �
 - Sync coverage 미기록, 기본 날짜는 이 컴퓨터 날짜, 오늘 recovery는 시계 아침 sync 전에는 partial.
 - Activity endpoint 경고(예: exercise sets 없이 저장)는 처음 저장한 실행에서만 보이고 이후 실행은 그 activity를 건너뛴다 —
   경고에 나온 `garmin refresh <id>`로 복구.
-- Live Garmin 계정으로 `daily`를 아직 실행하지 않았다.
-- Main 통합 시 `CURRENT_STATE.md`의 "main 미통합" 표기(Implemented, Pending merge, Known issues)를 같은 commit에서 갱신할 것.
+- Live 검증은 2026-10-02에 완료됐다(위). Live 검증 날에는 새 activity가 없어서 실제 계정의 activity 가져오기와 load metric
+  채우기는 아직 0건 경로만 확인됐다(fake Garmin 테스트로는 둘 다 검증).
+- `CURRENT_STATE.md`의 daily 통합 표기는 통합 docs commit에서 갱신했다.
 
 ### Recommended next action
 
-1. 사용자 승인 시 live 1회 확인: `uv run muscle50 daily` (production에 기존 sync 경로로만 기록됨).
-2. main fast-forward 여부 결정(main은 ancestor). Push는 별도 승인.
+1. origin push 여부 결정(별도 승인; local main은 origin/main보다 앞서 있다).
+2. 운동이 있는 날 `uv run muscle50 daily --after-workout` 결과로 실제 activity 가져오기 + load metric 경로 확인.
 3. 다음 P0: Nutrition meal logging MVP(`feature/nutrition-logging`).
 
 ## Previous task: Progression Hardening v1 (2026-10-01)
