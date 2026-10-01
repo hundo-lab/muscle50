@@ -2,7 +2,58 @@
 
 Last updated: 2026-10-02
 
-## Current task: Progression Hardening v1 (2026-10-01)
+## Current task: Daily orchestration `muscle50 daily` (2026-10-02)
+
+Paseo worktree `daily-sync`(branch `feature/daily-sync`, base main = origin/main `c06a36c`).
+**구현, 테스트, gates 완료. 이 branch에 commit. main merge/push 안 함(별도 승인 필요).** Live Garmin 실행 안 함.
+
+### What was attempted / completed
+
+- 평소 4~5개 명령(`garmin activities`, `garmin backfill-load-metrics`, `garmin recovery --from/--to`, `recommend`)을
+  `muscle50 daily` 하나로 대체. 기존 use case를 조합만 하는 `application/daily_sync.py`(`RunDailySync`): Garmin 로그인
+  1회 → activities D-1~D → load metrics → recovery D-1~D → 오늘 추천. 규칙·저장·normalization 중복 없음.
+- 운동 후: `muscle50 daily --after-workout`(activities + load metrics만, recovery·추천 `skipped`).
+- 실패 규칙과 출력 형식은 `CURRENT_STATE.md` Implemented의 Daily orchestration 항목 참고. 요약: sync 단계는 서로 독립,
+  하나라도 `failed`/`not_run`이면 추천을 만들지 않고 exit 1, 이미 저장된 작업은 유지, 같은 명령 재실행은 안전.
+- `--json` 출력의 `"recommendation"`은 standalone `recommend --json`과 같은 문서. Text는 단계 블록 뒤에 기존 recommend
+  text를 그대로 붙인다.
+
+### Daily workflow (exact commands)
+
+```powershell
+uv run muscle50 daily                         # 운동 전(시계가 아침 데이터를 올린 뒤): sync + 오늘 자동 추천
+uv run muscle50 daily --focus shoulders       # focus 지정; --avoid MUSCLE 반복 가능, --json 가능
+uv run muscle50 daily --after-workout         # 운동 후(시계 sync 뒤): activity + load metric만
+uv run muscle50 daily --date 2026-10-02       # 날짜 직접 지정
+```
+
+실패 시: 출력의 `FAILED stages:` 줄을 확인하고 같은 명령을 다시 실행한다(idempotent). 그 사이 저장된 데이터만으로 계획이
+필요하면 `uv run muscle50 recommend --date <D>`(read-only).
+
+### Files changed
+
+`src/muscle50/application/daily_sync.py`(신규), `src/muscle50/cli.py`(`daily` parser/handler, `_today`, stderr prompt),
+`src/muscle50/presentation/terminal.py`(`render_daily_sync`, `render_daily_sync_json`), `tests/test_daily_sync.py`(신규, 31),
+`README.md`, `docs/CURRENT_STATE.md`, 이 파일.
+
+### Checks run
+
+- `uv run --extra dev pytest` 613 passed, `ruff check .`, `mypy src tests`(99 files), `git diff --check` 통과.
+- Production DB/RAW fingerprint before = after(구현·테스트는 임시 home과 fake Garmin만 사용).
+
+### Known failures or risks / still manual
+
+- `garmin refresh`(Connect 수정 후), InBody import, Garmin 첫 로그인/재로그인(MFA), 예약 실행은 여전히 수동.
+- Sync coverage 미기록, 기본 날짜는 이 컴퓨터 날짜, 오늘 recovery는 시계 아침 sync 전에는 partial.
+- Live Garmin 계정으로 `daily`를 아직 실행하지 않았다.
+
+### Recommended next action
+
+1. 사용자 승인 시 live 1회 확인: `uv run muscle50 daily` (production에 기존 sync 경로로만 기록됨).
+2. main fast-forward 여부 결정(main은 ancestor). Push는 별도 승인.
+3. 다음 P0: Nutrition meal logging MVP(`feature/nutrition-logging`).
+
+## Previous task: Progression Hardening v1 (2026-10-01)
 
 Paseo worktree `progression-hardening`(branch `feature/progression-hardening`, base main = origin/main `4f26ec2`).
 **완료: 2026-10-02에 main으로 fast-forward 통합(`4f26ec2` → `13d5ed2`)하고 origin에 일반 push했다. main = origin/main =

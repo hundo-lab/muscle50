@@ -114,6 +114,24 @@ muscle50 analytics snapshot --date 2026-09-28 --days 28 --json
 집계 규칙과 수영 lap/length 이상치 처리는 `docs/analytics-engine.md`를, 종목 → movement pattern/
 muscle group 매핑(Exercise Taxonomy v1)은 `docs/exercise-taxonomy.md`를 참고하세요.
 
+## 하루 workflow (`muscle50 daily`)
+
+평소 하루에 필요한 activity 동기화(어제~오늘), load metric 채우기, recovery 동기화(어제~오늘), 오늘 추천을 명령 하나로
+실행합니다. 각 단계는 위의 개별 명령과 같은 코드를 그대로 쓰므로 여러 번 실행해도 안전합니다.
+
+```powershell
+muscle50 daily                              # 운동 전: 오늘 날짜로 sync 후 자동 추천
+muscle50 daily --focus pull                 # 오늘 focus 직접 지정 (push/pull/legs/shoulders)
+muscle50 daily --avoid triceps --json       # recommend와 같은 --avoid / JSON 출력
+muscle50 daily --date 2026-10-02            # 날짜 직접 지정 (기본값: 이 컴퓨터의 오늘)
+muscle50 daily --after-workout              # 운동 후: activity 가져오기 + load metric만 (recovery·추천 없음)
+```
+
+단계(Garmin 로그인, activities, load_metrics, recovery, recommendation)별 결과를 먼저 보여 주고, 추천은
+`muscle50 recommend --date <날짜>`와 같은 내용을 그 아래에 그대로 출력합니다. 어느 sync 단계든 실패하면 실패한 단계를
+표시하고 exit code 1로 끝나며, 불완전할 수 있는 데이터로 추천을 만들지 않습니다(이미 저장된 데이터는 유지).
+`garmin refresh`, InBody import, Garmin 첫 로그인(MFA)은 여전히 별도 명령입니다.
+
 ## Training recommendation (v1)
 
 저장된 데이터만 읽어 지정 날짜의 strength 계획(focus, 익숙한 Garmin 종목, set/rep/load 목표, recovery·수영

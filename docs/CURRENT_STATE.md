@@ -121,10 +121,26 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   `TRICEPS_EXTENSION/BENCH_DIP`는 항상 숫자 없음 + `smallest_available_direction_unknown` + assistance/추가 저항 양방향
   안내. Regression, recovery hold/reduce, 48 h rest rule은 기존대로 숫자 `maintain`으로 덮는다. 15%는 사용자 history로
   보정한 숫자 목표 신뢰 기준(생리학적 최적값 아님). 상세는 `docs/training-recommendation.md` "증량 step".
+- (branch `feature/daily-sync`, base main = origin/main `c06a36c`, main 미통합, 아래 Pending merge) Daily orchestration
+  `muscle50 daily [--date D] [--focus F] [--avoid M ...] [--json]`과 `muscle50 daily --after-workout [--date D] [--json]`.
+  `application/daily_sync.py`의 `RunDailySync`가 기존 use case만 조합한다: Garmin 로그인 1회 → `IngestGarminActivityRange`
+  (D-1~D) → `BackfillActivityLoadMetrics` → `SyncGarminRecovery.execute_range`(D-1~D) → `BuildTrainingRecommendation`(D).
+  `--date` 기본값은 이 컴퓨터의 오늘(`date.today()`). `--after-workout`은 activities + load metrics만(recovery·추천
+  `skipped`). Normalization/저장/recovery/추천 규칙은 새로 만들지 않았고 idempotency와 RAW snapshot 의미는 그대로다.
+  실패 규칙: 세 sync 단계는 서로 독립이라 한 단계가 실패해도 나머지는 실행해 유효한 작업을 보존한다. Activity
+  discovery 실패 시 load_metrics는 `not_run`. 개별 activity 실패, page limit, 이번 실행에서 저장한 activity의 RAW summary
+  누락, recovery 날짜 실패/미시도는 해당 단계 `failed`. 이전부터 있던 activity의 RAW 누락과 recovery endpoint 경고는
+  `warning`. 어느 단계든 `failed`/`not_run`이면 추천은 만들지 않고(`not_run`) exit 1이며, read-only
+  `muscle50 recommend --date D` 명령을 안내한다. 알려진 오류 계열만 잡고 그 밖의 오류(예: range ingest가 일부러 전파하는
+  local 무결성 오류)는 명령 전체를 중단한다. 출력: ASCII 단계 블록 + `Stored data now` freshness 줄 + 기존
+  `recommend` text 그대로. `--json`은 단계 요약 + `"recommendation"`에 standalone `recommend --json` 문서를 그대로 넣고
+  recovery row timestamp는 넣지 않아 같은 입력이면 byte-identical. 진행 안내와 Garmin 재로그인 prompt는 stderr.
 
 ## Pending merge
 
-- 현재 pending merge 없음.
+- Paseo worktree `daily-sync`(branch `feature/daily-sync`, base main = origin/main `c06a36c`): Daily orchestration
+  commit. Gates 통과, production live Garmin 실행은 하지 않았다(자동 테스트는 fake Garmin만). main은 이 branch의
+  ancestor(fast-forward 가능). merge/push는 별도 승인 필요.
 - Progression Hardening v1(`13d5ed2`)은 2026-10-02에 main으로 fast-forward(`4f26ec2` → `13d5ed2`, merge commit/rebase/
   cherry-pick 없음)되고 origin에 일반 push됐다. main = origin/main = GitHub main `13d5ed2`(`git ls-remote` 확인).
   Branch `feature/progression-hardening`(`13d5ed2`)과 Paseo worktree `progression-hardening`은 의도적으로 유지한다.
@@ -168,6 +184,18 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 - `tests/test_refresh_activity.py`, `tests/test_swim_normalization.py`, `tests/test_sync_recovery.py`
 
 ## Verification
+
+2026-10-02 Daily orchestration(worktree `daily-sync`, base `c06a36c`, feature branch commit):
+
+- Gates: `uv run --extra dev pytest` 613 passed(582 + 신규 31, `tests/test_daily_sync.py`), `ruff check .`,
+  `mypy src tests`(99 files), `git diff --check` 통과. 새 파일은 `ruff format` clean, `cli.py`도 clean 유지
+  (`terminal.py`는 main부터 미포맷이라 전체 reformat 하지 않음).
+- 테스트는 stub collaborator(단계별 실패 규칙)와 fake Garmin 하나(activity + recovery) + 임시 `MUSCLE50_HOME`의 CLI
+  end-to-end로 나눴다: 기본 날짜(오늘)와 D-1~D 범위, 명시 날짜, load metric 채움, `--focus`/`--avoid` 전달,
+  `--after-workout`, 같은 날 2회 실행 시 row 수·RAW 파일 동일(신규 0, metric unchanged, recovery unchanged), 단계별 실패와
+  exit 1, 로그인 실패, 인증 전 입력 거부, standalone `recommend`와 JSON/text 동일, 같은 입력 JSON byte-identical.
+- 실제 Garmin 계정은 호출하지 않았다(live 검증은 별도 승인 필요). Production DB/RAW는 구현·테스트 중 사용하지 않았고
+  fingerprint 전후 동일(DB/WAL, 28 table, RAW 954 files), evidence `C:\temp\muscle50-evidence-20261002-daily-sync\`.
 
 2026-10-02 Progression Hardening v1 main 통합(`4f26ec2` → `13d5ed2` fast-forward, push 완료):
 
@@ -429,6 +457,13 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
 
 ## Known issues
 
+- (Daily orchestration, `feature/daily-sync`, main 미통합) `muscle50 daily` 이후에도 수동인 것: Garmin Connect에서
+  종목을 고친 뒤 `garmin refresh <id>`, InBody import(`inbody sync --file`), Garmin 첫 로그인과 token 만료 시 재로그인(MFA,
+  terminal 필요), 자동 예약 실행(scheduler 없음). Sync coverage는 여전히 기록하지 않는다(`sync_runs` 미사용) — "운동 없음"과
+  "미동기화"를 구분하지 못한다. 기본 날짜는 이 컴퓨터의 날짜라 자정 직후 실행이나 다른 시간대 기록은 `--date`로 지정해야
+  한다. 오늘 recovery row는 시계가 아침 데이터를 올린 뒤에야 sleep/readiness가 채워진다(partial row는 실패가 아니라
+  데이터로 보고). `--json`은 저장된 Garmin 로그인이 유효할 때 stdout이 JSON만이다(재로그인 prompt는 stderr). Load metric
+  backfill은 기존 use case 그대로 저장된 전체 activity를 다시 확인한다(idempotent, Garmin 호출 없음).
 - (Progression Hardening v1 `13d5ed2`에서 수정, main/origin 포함) 고정 +2.5 kg step이 가벼운
   isolation에 과했다(`LATERAL_RAISE/ONE_ARM_CABLE_LATERAL_RAISE` 6 → 8.5 kg, 42%). 이제 15% 초과면 숫자 없이 "next
   available step above 6 kg". 남은 한계: 장비별 실제 증량 단위는 모름(추론 안 함), 증량 후 reps 재시작(상한 - 4)은

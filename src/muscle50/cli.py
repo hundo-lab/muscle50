@@ -9,6 +9,7 @@ from datetime import date
 from pathlib import Path
 
 from muscle50.application.backfill_activity_load_metrics import BackfillActivityLoadMetrics
+from muscle50.application.daily_sync import DailyMode, RunDailySync, daily_sync_start
 from muscle50.application.inbody_source import InBodySourceError
 from muscle50.application.ingest_activity import ActivitySyncError
 from muscle50.application.ingest_activity_range import IngestGarminActivityRange, InvalidDateRangeError
@@ -45,6 +46,8 @@ from muscle50.infrastructure.sqlite.body_composition import SqliteBodyCompositio
 from muscle50.infrastructure.sqlite.database import ActivityRepository, DailyRecoveryRepository
 from muscle50.presentation.terminal import (
     render_activity_load_backfill_result,
+    render_daily_sync,
+    render_daily_sync_json,
     render_range_result,
     render_recovery_range_result,
     render_recovery_renormalize_result,
@@ -131,6 +134,34 @@ def build_parser() -> argparse.ArgumentParser:
         f"still apply. Choices: {', '.join(focus.value for focus in StrengthFocus)}",
     )
     recommend.add_argument("--json", action="store_true", help="print the full recommendation with evidence as JSON")
+    daily = commands.add_parser(
+        "daily",
+        help="Sync yesterday-to-today Garmin activities, load metrics and recovery, then recommend the day "
+        "(one command for the normal daily workflow)",
+    )
+    daily.add_argument(
+        "--date", dest="as_of", metavar="YYYY-MM-DD", help="day to sync and plan (default: today on this computer)"
+    )
+    daily.add_argument(
+        "--after-workout",
+        action="store_true",
+        help="only import activities and fill load metrics (no recovery sync, no recommendation)",
+    )
+    daily.add_argument(
+        "--avoid",
+        action="append",
+        default=[],
+        choices=[muscle.value for muscle in MuscleGroup],
+        metavar="MUSCLE",
+        help="same as recommend --avoid; repeatable",
+    )
+    daily.add_argument(
+        "--focus",
+        choices=[focus.value for focus in StrengthFocus],
+        metavar="FOCUS",
+        help=f"same as recommend --focus. Choices: {', '.join(focus.value for focus in StrengthFocus)}",
+    )
+    daily.add_argument("--json", action="store_true", help="print stage results and the recommendation as JSON")
     inbody = commands.add_parser("inbody", help="InBody body-composition commands")
     inbody_commands = inbody.add_subparsers(dest="inbody_command", required=True)
     inbody_sync = inbody_commands.add_parser("sync", help="Import a Samsung Health companion export")
@@ -169,6 +200,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.as_of,
             [MuscleGroup(item) for item in args.avoid],
             StrengthFocus(args.focus) if args.focus else None,
+            as_json=args.json,
+        )
+    if args.command == "daily":
+        return _daily(
+            args.as_of,
+            [MuscleGroup(item) for item in args.avoid],
+            StrengthFocus(args.focus) if args.focus else None,
+            after_workout=args.after_workout,
             as_json=args.json,
         )
     if args.command == "inbody" and args.inbody_command == "sync":
@@ -440,6 +479,71 @@ def _recommend(as_of_text: str, avoid: list[MuscleGroup], focus: StrengthFocus |
         )
         return 0
     except (AnalyticsDatabaseError, ConfigurationError) as exc:
+        print(f"오류: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\n취소되었습니다.", file=sys.stderr)
+        return 130
+
+
+def _today() -> date:
+    """This computer's calendar date (the same local-date convention Garmin activities use)."""
+    return date.today()
+
+
+def _prompt_on_stderr(prompt: str) -> str:
+    # Keeps stdout to the result alone (the --json document) if Garmin asks for a fresh login.
+    print(prompt, end="", file=sys.stderr, flush=True)
+    return input()
+
+
+def _daily(
+    as_of_text: str | None,
+    avoid: list[MuscleGroup],
+    focus: StrengthFocus | None,
+    *,
+    after_workout: bool,
+    as_json: bool,
+) -> int:
+    # Every check here runs before authentication so a bad request costs no Garmin calls.
+    if after_workout and (avoid or focus is not None):
+        print("오류: --after-workout은 추천을 만들지 않으므로 --focus/--avoid와 함께 쓸 수 없습니다.", file=sys.stderr)
+        return 1
+    if as_of_text is None:
+        as_of = _today()
+    else:
+        try:
+            as_of = date.fromisoformat(validate_calendar_date(as_of_text))
+        except RecoveryNormalizationError:
+            print("오류: --date는 YYYY-MM-DD 형식이어야 합니다.", file=sys.stderr)
+            return 1
+    mode = DailyMode.AFTER_WORKOUT if after_workout else DailyMode.FULL
+
+    try:
+        paths = AppPaths.from_environment()
+        paths.ensure_directories()
+        activity_repository = ActivityRepository(paths.database_path)
+        activity_repository.migrate()
+        recovery_repository = DailyRecoveryRepository(paths.database_path)
+        recovery_repository.migrate()
+        raw_store = RawStore(paths.raw_dir, paths.root, paths.tmp_dir)
+        recovery_raw_store = RecoveryRawStore(paths.recovery_raw_dir, paths.root, paths.tmp_dir)
+        use_case = RunDailySync(
+            connect=lambda: PythonGarminConnector.authenticate(paths.auth_dir, input_fn=_prompt_on_stderr),
+            activity_ingest=lambda connector: IngestGarminActivityRange(connector, activity_repository, raw_store),
+            load_metric_backfill=BackfillActivityLoadMetrics(activity_repository, raw_store),
+            recovery_sync=lambda connector: SyncGarminRecovery(connector, recovery_repository, recovery_raw_store),
+            # A read-only reader built exactly as `recommend` builds it; it reads after the sync stages write.
+            recommender=BuildTrainingRecommendation(SqliteAnalyticsReader(paths.database_path)),
+        )
+        print(
+            f"muscle50 daily {as_of.isoformat()}: syncing {daily_sync_start(as_of).isoformat()}..{as_of.isoformat()}",
+            file=sys.stderr,
+        )
+        result = use_case.execute(as_of, mode, avoid, focus)
+        print(render_daily_sync_json(result) if as_json else render_daily_sync(result))
+        return 0 if result.ok else 1
+    except ConfigurationError as exc:
         print(f"오류: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

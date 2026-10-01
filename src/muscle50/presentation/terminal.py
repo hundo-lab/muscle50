@@ -7,6 +7,13 @@ import json
 from datetime import date
 
 from muscle50.application.backfill_activity_load_metrics import ActivityLoadBackfillResult
+from muscle50.application.daily_sync import (
+    STAGE_ACTIVITIES,
+    STAGE_LOAD_METRICS,
+    STAGE_RECOVERY,
+    DailyMode,
+    DailySyncResult,
+)
 from muscle50.application.ingest_activity_range import RangeIngestResult
 from muscle50.application.refresh_garmin_activity import ActivityRefreshResult
 from muscle50.application.renormalize_garmin_recovery import RecoveryRenormalizeResult
@@ -641,6 +648,143 @@ def render_training_recommendation(recommendation: TrainingRecommendation) -> st
         )
         lines.append(f"  [{notice.code}] {where + ': ' if where else ''}{notice.message}")
     return "\n".join(lines)
+
+
+def render_daily_sync_json(result: DailySyncResult) -> str:
+    """Stage summaries plus the unchanged recommendation JSON; stable for identical input.
+
+    Recovery rows are summarized by date and status only: their import timestamps would make
+    repeated runs differ.
+    """
+    activities = result.activities
+    load = result.load_metrics
+    recovery = result.recovery
+    payload = {
+        "as_of": result.as_of.isoformat(),
+        "mode": result.mode.value,
+        "sync_from": result.sync_from.isoformat(),
+        "ok": result.ok,
+        "failed_stages": list(result.failed_stages),
+        "stages": [
+            {"stage": item.stage, "status": item.status.value, "error": item.error, "warnings": list(item.warnings)}
+            for item in result.stages
+        ],
+        "activities": None
+        if activities is None
+        else {
+            "from": activities.from_date.isoformat(),
+            "to": activities.to_date.isoformat(),
+            "discovered": activities.discovered_count,
+            "inserted": activities.inserted_count,
+            "already_stored": activities.skipped_count,
+            "failed": activities.failed_count,
+            "undated": activities.undated_count,
+            "page_limit_reached": activities.page_limit_reached,
+            "outcomes": [
+                {
+                    "source_activity_id": item.source_activity_id,
+                    "source_type_key": item.source_type_key,
+                    "status": item.status,
+                    "error": item.error,
+                }
+                for item in activities.outcomes
+            ],
+        },
+        "load_metrics": None
+        if load is None
+        else {
+            "activities_examined": load.activities_examined,
+            "metric_rows_inserted": load.metrics_inserted,
+            "metric_rows_updated": load.metrics_updated,
+            "metric_rows_unchanged": load.metrics_unchanged,
+            "missing_raw": list(load.missing_raw),
+            "unreadable_raw": list(load.unreadable_raw),
+            "malformed_values": len(load.malformed_values),
+            "skipped_values": len(load.skipped_values),
+        },
+        "recovery": None
+        if recovery is None
+        else {
+            "from": recovery.from_date.isoformat(),
+            "to": recovery.to_date.isoformat(),
+            "aborted_reason": recovery.aborted_reason,
+            "outcomes": [
+                {
+                    "calendar_date": item.calendar_date,
+                    "status": item.status,
+                    "error": item.error,
+                    "warnings": list(item.result.warnings) if item.result is not None else [],
+                }
+                for item in recovery.outcomes
+            ],
+        },
+        # Exactly the standalone `recommend --json` document, never re-serialized differently.
+        "recommendation": None
+        if result.recommendation is None
+        else json.loads(render_training_recommendation_json(result.recommendation)),
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=True)
+
+
+def render_daily_sync(result: DailySyncResult) -> str:
+    # ASCII labels (cp949 consoles); Garmin error messages are printed as received.
+    lines = [f"muscle50 daily for {result.as_of.isoformat()} ({result.mode.value.replace('_', '-')})", "Stages:"]
+    for item in result.stages:
+        lines.append(f"  {item.stage}: {item.status.value}{_daily_stage_detail(result, item.stage)}")
+        if item.error:
+            lines.append(f"    error: {item.error}")
+        lines.extend(f"    warning: {warning}" for warning in item.warnings)
+    recommendation = result.recommendation
+    if recommendation is not None:
+        freshness = recommendation.data_freshness
+        lines.append(
+            f"Stored data now: activity {_stored_date(freshness.latest_activity_date)}, "
+            f"strength {_stored_date(freshness.latest_strength_date)}, "
+            f"swim {_stored_date(freshness.latest_swim_date)}, "
+            f"recovery {_stored_date(freshness.latest_recovery_date)}"
+        )
+    if not result.ok:
+        failed = ", ".join(result.failed_stages) or "none"
+        lines.append(f"FAILED stages: {failed}. Data already synced is kept; rerunning the same command is safe.")
+        if result.mode is DailyMode.FULL and recommendation is None:
+            lines.append(
+                "No recommendation was built from possibly incomplete data. A read-only plan from the data stored "
+                f"now: muscle50 recommend --date {result.as_of.isoformat()}"
+            )
+    elif result.mode is DailyMode.AFTER_WORKOUT:
+        lines.append("Imported. The next `muscle50 daily` will count this workout.")
+    text = "\n".join(lines)
+    if recommendation is None:
+        return text
+    return f"{text}\n\n{render_training_recommendation(recommendation)}"
+
+
+def _daily_stage_detail(result: DailySyncResult, stage: str) -> str:
+    activities = result.activities
+    if stage == STAGE_ACTIVITIES and activities is not None:
+        return (
+            f" ({activities.from_date.isoformat()}..{activities.to_date.isoformat()}: found "
+            f"{activities.discovered_count}, new {activities.inserted_count}, already stored "
+            f"{activities.skipped_count}, failed {activities.failed_count})"
+        )
+    load = result.load_metrics
+    if stage == STAGE_LOAD_METRICS and load is not None:
+        return (
+            f" (metric rows inserted {load.metrics_inserted}, updated {load.metrics_updated}, "
+            f"unchanged {load.metrics_unchanged})"
+        )
+    recovery = result.recovery
+    if stage == STAGE_RECOVERY and recovery is not None:
+        return (
+            f" ({recovery.from_date.isoformat()}..{recovery.to_date.isoformat()}: created {recovery.count('created')}, "
+            f"updated {recovery.count('updated')}, unchanged {recovery.count('unchanged')}, "
+            f"failed {recovery.count('failed')}, not attempted {recovery.count('not_attempted')})"
+        )
+    return ""
+
+
+def _stored_date(value: date | None) -> str:
+    return value.isoformat() if value is not None else "none stored"
 
 
 def _prescription(exercise: PlannedExercise) -> str:
