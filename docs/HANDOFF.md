@@ -2,7 +2,66 @@
 
 Last updated: 2026-10-01
 
-## Current task: Exercise Taxonomy v1 (2026-10-01)
+## Current task: Training Recommendation v1 (2026-10-01)
+
+Branch `feature/training-recommendation` (Paseo worktree `training-recommendation`, base main = origin/main `a92404b`,
+Analytics Engine v1 + Exercise Taxonomy v1 포함). **구현, 테스트, production read-only 검증 완료. 사용자 승인으로 이
+branch에 commit했다(`git log feature/training-recommendation`).** merge/push 하지 않았다. 설계·규칙·한계 전체는
+`docs/training-recommendation.md`.
+
+### What was attempted / completed
+
+1. Audit(read-only, `immutable=1`): 기존 primitive(`SqliteAnalyticsReader`, `build_training_snapshot` swim plausibility,
+   taxonomy, `label_origin`) 재사용. Goal model 없음 → `TrainingGoals` code default. Recovery readiness/recovery time은
+   Garmin 아침(`AFTER_WAKEUP_RESET`) 항목이라 D row 사용, training status는 하루 끝 값이라 D-1 사용, body battery/
+   stress/RHR은 미사용. Lap `intensity_type` 전부 NULL, paddle/fin 기록 없음. 긴 lap 다수에 implausible length timing.
+2. 순수 domain: recovery 규칙(`normal`/`hold`/`reduce`), region focus 선택, 익숙한 원본 label 종목 선택, label별 double
+   progression(같은 무게 비교만 regression), swim overlap, UNKNOWN notice, swim 분석(연속 구간, plausible timing,
+   pace)과 다음 수영 목표 4종.
+3. Application `BuildTrainingRecommendation`, ASCII text/JSON renderer, CLI `muscle50 recommend --date [--json]
+   [--avoid MUSCLE]`(read-only, migrate/mkdir/인증 없음).
+4. Production 14개 날짜 검증, threshold 발동 빈도 calibration(butterfly 100 m → 200 m로 조정: 9/21 → 4/21 swim).
+5. 사용자 요청으로 focus 선택 개선: 7일 session 수 floor/ceiling 규칙(legs 14일 중 10일)을 제거하고, region 자신의
+   28일 주기 대비 due(경과일 / personal interval, 2~7일 clamp), 7일 이상 미훈련 neglected 보호(수영 불포함),
+   swim overlap, recovery reduce 시 최근 2일 region 후순위, 자기 평균 대비 7일 volume 순으로 바꿨다. Session 판정
+   기준(하루 ≥ 3 set)은 바꾸지 않았다. 결과 legs 10/push 3/pull 1 → legs 7/pull 5/push 2. 남은 legs 7일은 모두
+   neglected(3), push/pull resting 또는 swim overlap(3), 자기 주기상 due(1)로 설명된다.
+
+### Files changed
+
+- 신규: `src/muscle50/domain/{training_goals,recovery_assessment,strength_recommendation,swim_recommendation,
+  training_recommendation}.py`, `src/muscle50/application/recommend_training.py`,
+  `tests/test_{strength_recommendation,swim_recommendation,recovery_assessment,recommend_cli}.py`,
+  `docs/training-recommendation.md`
+- 수정: `src/muscle50/cli.py`(recommend), `src/muscle50/presentation/terminal.py`(renderer), `README.md`,
+  `docs/CURRENT_STATE.md`, `docs/HANDOFF.md`
+- Migration, ingestion/refresh/normalization, taxonomy, analytics 변경 없음.
+
+### Tests / checks run
+
+`uv run --extra dev pytest` 509 passed, `ruff check .`, `mypy src tests`(97 files), `git diff --check` 통과.
+Production: 14개 날짜 exit 0, JSON byte-identical 재실행, text ASCII, before/after fingerprint 동일(`-shm` mtime 제외).
+Evidence(repo 밖): `C:\temp\muscle50-evidence-20261001-recommend\`.
+
+### Known risks / open decisions
+
+- Focus는 매일 독립 계산이다. 62일 counterfactual에서 pull 26 / push 14 / legs 22(실제 session pull 24 / push 20 /
+  legs 9): pull은 사용자 비율과 같고 push 몫이 하체 보호로 legs에 간다. Push가 실제보다 적게 추천되는 점은 관찰 대상.
+- 대부분 load target이 `low` confidence: category-only 자동 인식 label(`BENCH_PRESS/-` 30-60 kg 등)에 장비가 섞임.
+- 연속 수영 baseline은 plausible length timing 구간만 써서 보수적이다(28일 최장 650 m) → anchor는 설정 1000 m.
+- 임계값은 이 계정 2026-07~09 데이터 기준(butterfly 임계값은 같은 데이터로 100 → 200 m 조정). HRV 규칙 0/28일,
+  stagnation 대안 0/14일 발동. 통증은 `--avoid` 명시 입력으로만 반영.
+- 아침 readiness: 28/28 날짜에 `AFTER_WAKEUP_RESET` 존재. 단 2026-09-12는 두 항목 중 23:17 값이 저장돼 있다(기존
+  recovery normalizer가 첫 항목 선택; 이 작업에서 수정하지 않음). 후속 작업 후보.
+- 기존 CURRENT_STATE/HANDOFF의 taxonomy evidence 경로에 있던 `\t`/`\b` 깨짐을 함께 고쳤다.
+
+### Recommended next action
+
+1. main 통합 여부 결정(명시적 승인 필요). push/merge 하지 않았다.
+2. Garmin Connect에서 UNKNOWN/자동 인식 종목 수정 → `garmin refresh <id>`로 추천 정확도 향상.
+3. 이후: sync coverage 기록(미동기화 vs 휴식), LLM 표현 계층(결정 변경 금지).
+
+## Previous task: Exercise Taxonomy v1 (2026-10-01)
 
 Branch `feature/exercise-taxonomy` (Paseo worktree `exercise-taxonomy`, base main = origin/main `2603b85`,
 Analytics Engine v1 포함). **구현, 테스트, production read-only 검증 완료. 사용자 승인으로 이 branch에
@@ -38,7 +97,7 @@ commit했다. merge/push 하지 않았다.** 설계와 규칙 전체는 `docs/ex
 `uv run --extra dev pytest` 445 passed, `uv run --extra dev ruff check .`, `uv run --extra dev mypy src tests`
 (87 files), `git diff --check` 통과. Production: 90일 snapshot JSON/text exit 0, 재실행 byte-identical, 독립 SQL
 cross-check 15/15(`crosscheck_v2.py`), before/after fingerprint 동일(`-shm` mtime 제외). Evidence(repo 밖):
-`C:	emp\muscle50-evidence-20261001-taxonomy\`(fingerprint.py, before/after.json, audit*.py, fit_sets.py,
+`C:\temp\muscle50-evidence-20261001-taxonomy\`(fingerprint.py, before/after.json, audit*.py, fit_sets.py,
 snapshot_v2_90d*.json/txt, crosscheck_v2.py/txt, after_v2.json, fit_profile.py = Garmin FIT SDK profile 사본).
 
 ### Known risks / open decisions

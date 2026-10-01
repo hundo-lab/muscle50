@@ -12,6 +12,7 @@ from muscle50.application.backfill_activity_load_metrics import BackfillActivity
 from muscle50.application.inbody_source import InBodySourceError
 from muscle50.application.ingest_activity import ActivitySyncError
 from muscle50.application.ingest_activity_range import IngestGarminActivityRange, InvalidDateRangeError
+from muscle50.application.recommend_training import BuildTrainingRecommendation
 from muscle50.application.refresh_garmin_activity import (
     ActivityNotFoundError,
     ActivityRefreshError,
@@ -29,6 +30,7 @@ from muscle50.application.sync_latest_garmin import NoActivitiesError, SyncLates
 from muscle50.application.training_snapshot import BuildTrainingSnapshot
 from muscle50.config import AppPaths, ConfigurationError
 from muscle50.domain.analytics import DEFAULT_LOOKBACK_DAYS, MAX_LOOKBACK_DAYS, InvalidSnapshotWindowError
+from muscle50.domain.exercise_taxonomy import MuscleGroup
 from muscle50.domain.inbody_normalization import InBodyNormalizationError
 from muscle50.domain.normalization import NormalizationError, activity_id_from
 from muscle50.domain.recovery_normalization import RecoveryNormalizationError, validate_calendar_date
@@ -48,6 +50,8 @@ from muscle50.presentation.terminal import (
     render_recovery_sync_result,
     render_refresh_result,
     render_sync_result,
+    render_training_recommendation,
+    render_training_recommendation_json,
     render_training_snapshot,
     render_training_snapshot_json,
 )
@@ -103,6 +107,22 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"inclusive lookback window in days (1-{MAX_LOOKBACK_DAYS}, default {DEFAULT_LOOKBACK_DAYS})",
     )
     snapshot.add_argument("--json", action="store_true", help="print the full snapshot with provenance as JSON")
+    recommend = commands.add_parser(
+        "recommend",
+        help="Deterministic strength and next-swim recommendation for --date "
+        "(reads the database read-only; no Garmin calls)",
+    )
+    recommend.add_argument("--date", dest="as_of", required=True, metavar="YYYY-MM-DD", help="day to plan for")
+    recommend.add_argument(
+        "--avoid",
+        action="append",
+        default=[],
+        choices=[muscle.value for muscle in MuscleGroup],
+        metavar="MUSCLE",
+        help="muscle group to leave out today (for example pain); repeatable. "
+        f"Choices: {', '.join(muscle.value for muscle in MuscleGroup)}",
+    )
+    recommend.add_argument("--json", action="store_true", help="print the full recommendation with evidence as JSON")
     inbody = commands.add_parser("inbody", help="InBody body-composition commands")
     inbody_commands = inbody.add_subparsers(dest="inbody_command", required=True)
     inbody_sync = inbody_commands.add_parser("sync", help="Import a Samsung Health companion export")
@@ -136,6 +156,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _garmin_recovery_renormalize(dry_run=args.dry_run)
     if args.command == "analytics" and args.analytics_command == "snapshot":
         return _analytics_snapshot(args.as_of, args.days, as_json=args.json)
+    if args.command == "recommend":
+        return _recommend(args.as_of, [MuscleGroup(item) for item in args.avoid], as_json=args.json)
     if args.command == "inbody" and args.inbody_command == "sync":
         return _inbody_sync(args.file, show_values=args.show_values)
     return 2
@@ -379,6 +401,30 @@ def _analytics_snapshot(as_of_text: str, lookback_days: int, *, as_json: bool) -
         print(render_training_snapshot_json(snapshot) if as_json else render_training_snapshot(snapshot))
         return 0
     except (AnalyticsDatabaseError, ConfigurationError, InvalidSnapshotWindowError) as exc:
+        print(f"오류: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\n취소되었습니다.", file=sys.stderr)
+        return 130
+
+
+def _recommend(as_of_text: str, avoid: list[MuscleGroup], *, as_json: bool) -> int:
+    # Deliberately read-only: no ensure_directories(), no migrate(), no Garmin connector.
+    try:
+        as_of = date.fromisoformat(validate_calendar_date(as_of_text))
+    except RecoveryNormalizationError:
+        print("오류: --date는 YYYY-MM-DD 형식이어야 합니다.", file=sys.stderr)
+        return 1
+    try:
+        paths = AppPaths.from_environment()
+        recommendation = BuildTrainingRecommendation(SqliteAnalyticsReader(paths.database_path)).execute(as_of, avoid)
+        print(
+            render_training_recommendation_json(recommendation)
+            if as_json
+            else render_training_recommendation(recommendation)
+        )
+        return 0
+    except (AnalyticsDatabaseError, ConfigurationError) as exc:
         print(f"오류: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

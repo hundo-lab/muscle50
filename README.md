@@ -114,6 +114,19 @@ muscle50 analytics snapshot --date 2026-09-28 --days 28 --json
 집계 규칙과 수영 lap/length 이상치 처리는 `docs/analytics-engine.md`를, 종목 → movement pattern/
 muscle group 매핑(Exercise Taxonomy v1)은 `docs/exercise-taxonomy.md`를 참고하세요.
 
+## Training recommendation (v1)
+
+저장된 데이터만 읽어 지정 날짜의 strength 계획(focus, 익숙한 Garmin 종목, set/rep/load 목표, recovery·수영
+간섭 조정)과 다음 수영 목표를 결정적 규칙으로 계산합니다. DB는 읽기 전용, Garmin 접속 없음, LLM 없음.
+
+```powershell
+muscle50 recommend --date 2026-09-24
+muscle50 recommend --date 2026-09-24 --json
+muscle50 recommend --date 2026-09-24 --avoid triceps
+```
+
+규칙과 한계는 `docs/training-recommendation.md`를 참고하세요.
+
 ## 개발 검증
 
 ```powershell

@@ -23,7 +23,11 @@ from muscle50.domain.analytics import (
     TrainingSnapshot,
 )
 from muscle50.domain.derivation import derive_summary
+from muscle50.domain.recovery_assessment import RecoveryObservation
+from muscle50.domain.strength_recommendation import PlannedExercise, ProgressionAction, kg_text
+from muscle50.domain.swim_recommendation import SwimSegment, pace_text
 from muscle50.domain.swimming import NormalizedSwimActivity, derive_lap_metrics
+from muscle50.domain.training_recommendation import TrainingRecommendation
 
 _TYPE_LABELS = {
     ActivityType.RUNNING: "러닝",
@@ -473,6 +477,164 @@ def _group_lines(groups: tuple[TaxonomyGroup, ...]) -> list[str]:
 def _origins_text(origins: LabelOriginCounts) -> str:
     text = f"confirmed {origins.confirmed}, auto-detected {origins.auto_detected}"
     return f"{text}, unspecified {origins.unspecified}" if origins.unspecified else text
+
+
+def render_training_recommendation_json(recommendation: TrainingRecommendation) -> str:
+    """Full recommendation with evidence; ASCII-only and stable for identical input."""
+    return json.dumps(dataclasses.asdict(recommendation), indent=2, ensure_ascii=True, default=_json_default)
+
+
+def render_training_recommendation(recommendation: TrainingRecommendation) -> str:
+    # ASCII only (cp949 consoles); Garmin activity names are never printed.
+    strength = recommendation.strength
+    goals = recommendation.goals
+    lines = [
+        f"Training recommendation for {recommendation.as_of.isoformat()} "
+        f"(v{recommendation.recommendation_version}; history from {recommendation.history_start.isoformat()})",
+        "Deterministic rules on stored data only. Rules: docs/training-recommendation.md",
+        "",
+        "== Strength ==",
+    ]
+    if strength.focus is None:
+        lines.append("Focus: none (no usable strength history)")
+    else:
+        lines.append(f"Focus: {strength.focus} ({', '.join(strength.focus_muscles)})")
+    lines.extend(f"  - {reason}" for reason in strength.reasons)
+    lines.append("  Regions (ranked):")
+    for region in strength.regions:
+        due = f"{region.due_ratio:g}" if region.due_ratio is not None else "-"
+        flags = [
+            name
+            for name, value in (
+                ("resting", not region.eligible),
+                ("neglected", region.neglected),
+                ("swim overlap", region.swim_demoted),
+                ("reduce-recent", region.recently_trained_under_reduce),
+            )
+            if value
+        ]
+        lines.append(
+            f"    {region.region}: due {due} (interval {region.personal_interval_days:g} d), "
+            f"{region.sets_last_7_days} sets/7 d, yesterday {region.sets_previous_day}"
+            f"{' [' + ', '.join(flags) + ']' if flags else ''}"
+        )
+    if strength.exercises:
+        lines.append(
+            f"Session: {len(strength.exercises)} exercises, {strength.working_sets} working sets, "
+            f"about {strength.estimated_minutes} min (goal {strength.session_minutes_goal} min); "
+            f"stop {goals.reps_in_reserve_min}-{goals.reps_in_reserve_max} reps short of failure "
+            "(advice; reps in reserve is not recorded)"
+        )
+    for index, exercise in enumerate(strength.exercises, start=1):
+        lines.append(f"  {index}. [{exercise.role.value}] {exercise.label}: {_prescription(exercise)}")
+        lines.append(
+            f"       {exercise.primary_muscle} / {exercise.movement_pattern}; "
+            f"{exercise.sessions_last_28_days} sessions, {exercise.active_sets_last_28_days} sets in 28 days; "
+            f"last {exercise.last_performed.isoformat()}"
+        )
+        lines.extend(f"       adjustment: {text}" for text in exercise.adjustments)
+    if strength.alternative is not None:
+        alternative = strength.alternative
+        lines.append(f"  Optional alternative for {alternative.replaces_label}: {alternative.label}")
+        lines.append(f"       {alternative.reason}")
+
+    lines.extend(("", "== Progression targets =="))
+    for exercise in strength.exercises:
+        progression = exercise.progression
+        lines.append(f"  {exercise.label} [{progression.action.value}, load confidence {progression.load_confidence}]")
+        lines.extend(f"    - {text}" for text in progression.basis)
+        lines.extend(f"    ! {text}" for text in progression.caveats)
+
+    recovery = recommendation.recovery
+    lines.extend(("", f"== Recovery adjustment: {strength.adjustment_level} =="))
+    lines.extend(f"  {_observation_text(item)}" for item in recovery.observations)
+    lines.extend(f"  -> {text}" for text in strength.adjustments)
+
+    swimming = recommendation.swimming
+    goal = swimming.goal
+    baseline = swimming.baseline
+    lines.extend(
+        (
+            "",
+            f"== Next swim goal: {goal.session_type} ==",
+            f"  Main set: {goal.main_set}",
+            f"  Total: about {_fixed(goal.total_meters)} m",
+        )
+    )
+    lines.extend(f"  - {reason}" for reason in goal.reasons)
+    lines.extend(f"  ! {caution}" for caution in goal.cautions)
+    fast, slow = baseline.target_pace_seconds_per_100m
+    lines.extend(
+        (
+            f"  Baseline: configured continuous {_fixed(baseline.configured_continuous_meters)} m; "
+            f"recent longest continuous {_segment_line(baseline.recent_longest_segment)}",
+            f"  Best recent freestyle pace: {_segment_line(baseline.recent_best_pace_segment)}",
+            f"  1500 m goal: {pace_text(fast)}-{pace_text(slow)} "
+            f"({_clock(goals.target_1500m_fastest_seconds)}-{_clock(goals.target_1500m_slowest_seconds)})",
+            f"  Swims in the last 7 days: {swimming.sessions_last_7_days} "
+            f"(goal {swimming.goal_sessions_per_week}/week)",
+        )
+    )
+    for session in swimming.sessions[-4:]:
+        longest = session.longest_segment.distance_meters if session.longest_segment else None
+        lines.append(
+            f"    {session.local_date.isoformat()} {session.source_activity_id}: "
+            f"{_optional(session.distance_meters, ' m')} ({session.distance_basis}), "
+            f"longest continuous {_optional(longest, ' m')}"
+            f"{', high intensity' if session.high_intensity else ''}"
+        )
+
+    lines.extend(("", "== Data quality / UNKNOWN notices =="))
+    if not recommendation.notices:
+        lines.append("  none")
+    for notice in recommendation.notices:
+        where = " ".join(
+            part
+            for part in (
+                notice.local_date.isoformat() if notice.local_date else "",
+                notice.source_activity_id or "",
+            )
+            if part
+        )
+        lines.append(f"  [{notice.code}] {where + ': ' if where else ''}{notice.message}")
+    return "\n".join(lines)
+
+
+def _prescription(exercise: PlannedExercise) -> str:
+    progression = exercise.progression
+    rep_range = progression.rep_range
+    reps = f"{progression.target_reps} reps" if progression.target_reps is not None else "reps"
+    load = f" @ {kg_text(progression.load_kg)}" if progression.load_kg is not None else " (no load target)"
+    if progression.action is ProgressionAction.ESTABLISH_BASELINE:
+        load = " (choose a load for the range; no comparable history)"
+    return f"{exercise.sets} sets x {reps}{load} (range {rep_range.minimum}-{rep_range.maximum})"
+
+
+def _observation_text(item: RecoveryObservation) -> str:
+    if item.value is None:
+        value = "missing (not treated as poor)"
+    elif item.field == "sleep_seconds" and isinstance(item.value, (int, float)):
+        value = _duration(float(item.value))
+    else:
+        value = str(item.value)
+    fired = f" -> {item.fired_level.value} ({item.rule})" if item.fired_level is not None else ""
+    return f"{item.field} [{item.source_date.isoformat()}]: {value}{fired}"
+
+
+def _segment_line(segment: SwimSegment | None) -> str:
+    if segment is None:
+        return "none in the last 28 days"
+    pace = segment.pace_seconds_per_100m
+    pace_part = f", {pace_text(pace)}" if pace is not None else ""
+    verified = "" if segment.verified_from_lengths else ", unverified lap"
+    return (
+        f"{_fixed(segment.distance_meters)} m ({segment.local_date.isoformat()} {segment.source_activity_id} "
+        f"lap {segment.lap_sequence}, {'/'.join(segment.strokes)}{pace_part}{verified})"
+    )
+
+
+def _clock(seconds: int) -> str:
+    return f"{seconds // 60}:{seconds % 60:02d}"
 
 
 def _json_default(value: object) -> str:

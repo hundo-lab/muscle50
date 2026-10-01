@@ -40,6 +40,9 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 - Exercise Taxonomy v1(`domain/exercise_taxonomy.py`)은 저장된 Garmin `(category, name)` label을 그대로
   identity로 두고 movement pattern / primary·secondary muscle만 붙이는 순수 lookup table이다(이름 변경·병합
   없음, migration 없음, 저장하지 않음). Analytics snapshot이 계산 시 적용한다. 상세는 `docs/exercise-taxonomy.md`.
+- Training Recommendation v1(`domain/training_recommendation.py` + `recovery_assessment`, `strength_recommendation`,
+  `swim_recommendation`, `training_goals`)은 read-only reader 위의 결정적 규칙 계층이다(LLM/ML/합성 점수 없음,
+  migration 없음). CLI `muscle50 recommend --date`. 상세는 `docs/training-recommendation.md`.
 
 ## Implemented
 
@@ -89,11 +92,21 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   movement pattern별, primary muscle별 ACTIVE set(각 set 정확히 한 번), 별도 secondary muscle set exposure,
   명시적 unmapped(`unknown_source_label`/`no_rule`)와 UNKNOWN 영향 activity, Garmin label origin(confirmed/
   auto-detected) 개수, activity/set provenance를 보고한다. Rule 없는 label은 `strength_unmapped_exercise` issue.
+- Training Recommendation v1(`muscle50 recommend --date YYYY-MM-DD [--json] [--avoid MUSCLE]`): region(push/pull/
+  legs) focus를 어제 heavy work 제외, 7일+ 미훈련(neglected, 수영 불포함) 보호, 수영 overlap, recovery reduce 시
+  최근 region 후순위, 자기 28일 주기 대비 due, 자기 평균 대비 7일 volume 순으로 선택; 28일 history의 익숙한
+  원본 Garmin label로 key/accessory/isolation(약 40분); label별 double progression(같은 무게 rep 증가, work set 2개
+  상한 도달 시 +2.5 kg, 같은 무게 rep 감소 시 maintain, load 일관성 낮으면 `low` confidence); 필드별 recovery 규칙
+  (`normal`/`hold`/`reduce`, missing ≠ poor); 강한 수영(zone 5 ≥ 120 s, anaerobic TE ≥ 2.5, butterfly ≥ 200 m) 후
+  push/pull 후순위와 overhead press 제외; UNKNOWN activity별 Garmin Connect 수정 + `garmin refresh` 안내; 다음 수영
+  목표(`distance_progression`/`pace_intervals`/`easy_continuous`/`recovery_technique`)는 plausible length timing
+  구간만 baseline으로 사용하고 2026-09-17 3025 m summary는 제외. `TrainingGoals`는 code default.
 
 ## Pending merge
 
-- `feature/exercise-taxonomy` (base main/origin `2603b85`, Paseo worktree `exercise-taxonomy`): Exercise
-  Taxonomy v1. 사용자 승인으로 이 branch에 commit했다(`git log feature/exercise-taxonomy`). merge/push 하지 않았다.
+- `feature/training-recommendation` (base main/origin `a92404b`, Paseo worktree `training-recommendation`):
+  Training Recommendation v1. 사용자 승인으로 이 branch에 commit했다. merge/push 하지 않았다.
+- Exercise Taxonomy v1은 `a92404b`로 main/origin에 포함됐다.
 - Analytics Engine v1은 `2603b85`로 main/origin에 포함됐다.
 - `feature/garmin-analytics-prerequisites`는 main `dc2c99f`에 통합 완료.
 
@@ -128,6 +141,18 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 
 ## Verification
 
+2026-10-01 Training Recommendation v1(`feature/training-recommendation`, base `a92404b`). Production DB/RAW는
+`mode=ro&immutable=1` audit와 read-only CLI로만 사용했다.
+
+- Gates: `uv run --extra dev pytest` 509 passed(기존 445 + 신규 64), `ruff check .`, `mypy src tests`(97 files),
+  `git diff --check` 통과.
+- `muscle50 recommend` 14개 날짜(07-08, 07-29, 07-31, 08-25, 08-29, 09-11, 09-13, 09-17, 09-18, 09-21, 09-24,
+  09-25, 09-28, 10-01) text/JSON exit 0, JSON 재실행 byte-identical, text ASCII. 결과 표는
+  `docs/training-recommendation.md`.
+- Calibration: recovery 09-01~28 normal 18 / hold 4 / reduce 6; swim 21개 중 high intensity 5, butterfly ≥ 200 m 4.
+- Fingerprint(`C:\temp\muscle50-evidence-20261001-recommend\before.json`/`after.json`): `muscle50.sqlite3`
+  sha256/size/mtime 동일, `-wal` 0 bytes 동일, 28 table digest 동일, RAW 868 files 동일. `-shm` mtime만 변경.
+
 2026-10-01 Exercise Taxonomy v1(`feature/exercise-taxonomy`, base `2603b85`). Production DB/RAW는
 `mode=ro&immutable=1` audit와 read-only CLI로만 사용했다.
 
@@ -139,7 +164,7 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
   set 수·속성, pattern, primary, secondary, 각 합계 reconciliation, canonical 필드 없음).
 - UNKNOWN 276: Garmin JSON 대체 후보 없음, FIT category 65534(260)/65535(16), velocity/ROM/wktStepIndex 없음 →
   해소 0건(276 → 276). Correction/overlay 추가 없음.
-- Fingerprint(`C:	emp\muscle50-evidence-20261001-taxonomyefore.json`/`after.json`): `muscle50.sqlite3`
+- Fingerprint(`C:\temp\muscle50-evidence-20261001-taxonomy\before.json`/`after.json`): `muscle50.sqlite3`
   sha256/size/mtime 동일, `-wal` 0 bytes 동일, 28 table digest 동일, RAW 868 files 동일. `-shm` mtime만 변경
   (SQLite WAL reader mark).
 
