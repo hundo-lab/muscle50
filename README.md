@@ -111,7 +111,8 @@ muscle50 analytics snapshot --date 2026-09-28
 muscle50 analytics snapshot --date 2026-09-28 --days 28 --json
 ```
 
-집계 규칙과 수영 lap/length 이상치 처리는 `docs/analytics-engine.md`를 참고하세요.
+집계 규칙과 수영 lap/length 이상치 처리는 `docs/analytics-engine.md`를, 종목 → movement pattern/
+muscle group 매핑(Exercise Taxonomy v1)은 `docs/exercise-taxonomy.md`를 참고하세요.
 
 ## 개발 검증
 

@@ -15,6 +15,7 @@ This module aggregates; it does not score, recommend, repair, or estimate. Rules
 from __future__ import annotations
 
 import math
+from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -23,6 +24,14 @@ from enum import StrEnum
 from muscle50.domain.activity import ActivityType, NormalizedActivity, StrengthSet
 from muscle50.domain.activity_load import ACTIVITY_LOAD_METRICS
 from muscle50.domain.activity_review import derive_activity_review
+from muscle50.domain.exercise_taxonomy import (
+    TAXONOMY_VERSION,
+    ExerciseClassification,
+    LabelOrigin,
+    UnmappedReason,
+    classify_strength_set,
+    label_origin,
+)
 from muscle50.domain.recovery import DailyRecovery
 from muscle50.domain.swimming import derive_lap_metrics, derive_length_metrics
 
@@ -115,6 +124,7 @@ class QualityIssueCode(StrEnum):
     NON_NUMERIC_LOAD_METRIC = "non_numeric_load_metric"
     STRENGTH_SET_DETAIL_MISSING = "strength_set_detail_missing"
     STRENGTH_UNCLASSIFIED_EXERCISE = "strength_unclassified_exercise"
+    STRENGTH_UNMAPPED_EXERCISE = "strength_unmapped_exercise"
     STRENGTH_NEGATIVE_WEIGHT = "strength_negative_weight"
     STRENGTH_MISSING_REPS = "strength_missing_reps"
     SWIM_DETAIL_MISSING = "swim_detail_missing"
@@ -222,6 +232,80 @@ class ExerciseAggregate:
 
 
 @dataclass(frozen=True)
+class SetRef:
+    source_activity_id: str
+    sequence: int
+
+
+@dataclass(frozen=True)
+class LabelOriginCounts:
+    """How the Garmin labels behind a count were produced (counts only, never a weight)."""
+
+    confirmed: int
+    auto_detected: int
+    unspecified: int
+
+
+@dataclass(frozen=True)
+class TaxonomyGroup:
+    """ACTIVE sets that share one taxonomy value, with set-level provenance."""
+
+    key: str
+    active_set_count: int
+    label_origins: LabelOriginCounts
+    source_activity_ids: tuple[str, ...]
+    sets: tuple[SetRef, ...]
+
+
+@dataclass(frozen=True)
+class TaxonomyExerciseGroup:
+    """ACTIVE sets of one original Garmin label, exactly as stored, with its taxonomy.
+
+    Mapped labels carry a movement pattern, primary and secondary muscles, and the mapping
+    basis; unmapped labels (UNKNOWN or without a rule) carry ``unmapped_reason`` instead.
+    """
+
+    category: str | None
+    exercise_name: str | None
+    movement_pattern: str | None
+    primary_muscle: str | None
+    secondary_muscles: tuple[str, ...]
+    mapping_basis: str | None
+    unmapped_reason: str | None
+    active_set_count: int
+    label_origins: LabelOriginCounts
+    source_activity_ids: tuple[str, ...]
+    sets: tuple[SetRef, ...]
+
+
+@dataclass(frozen=True)
+class StrengthTaxonomySummary:
+    """ACTIVE sets by exercise taxonomy.
+
+    ``by_exercise`` has one entry per original Garmin label (mapped or not) and sums to
+    ``active_set_count``. ``by_movement_pattern`` and ``by_primary_muscle`` count every mapped
+    ACTIVE set exactly once, so each sums to ``mapped_active_set_count``; together with
+    ``unmapped_active_set_count`` they reconcile to ``active_set_count``.
+    ``secondary_muscle_set_exposures`` counts, per muscle, the ACTIVE sets that list it as a
+    secondary muscle. Exposures are not sets of their own: they are never added to primary
+    totals and do not sum to anything meaningful across muscles.
+    """
+
+    taxonomy_version: int
+    active_set_count: int
+    mapped_active_set_count: int
+    unmapped_active_set_count: int
+    unknown_active_set_count: int
+    unknown_source_activity_ids: tuple[str, ...]
+    no_rule_active_set_count: int
+    mapped_label_origins: LabelOriginCounts
+    by_exercise: tuple[TaxonomyExerciseGroup, ...]
+    by_movement_pattern: tuple[TaxonomyGroup, ...]
+    by_primary_muscle: tuple[TaxonomyGroup, ...]
+    secondary_muscle_set_exposures: tuple[TaxonomyGroup, ...]
+
+
+@dataclass(frozen=True)
 class StrengthSessionSummary:
     source_activity_id: str
     local_date: date
@@ -250,6 +334,7 @@ class StrengthSummary:
     exercises: tuple[ExerciseAggregate, ...]
     sessions: tuple[StrengthSessionSummary, ...]
     load_metrics: tuple[MetricAggregate, ...]
+    taxonomy: StrengthTaxonomySummary
 
 
 @dataclass(frozen=True)
@@ -554,6 +639,112 @@ def _volume_exclusion_reason(strength_set: StrengthSet) -> str | None:
     return None
 
 
+@dataclass
+class _GroupTotals:
+    sets: list[SetRef] = field(default_factory=list)
+    source_ids: list[str] = field(default_factory=list)
+    origins: Counter[LabelOrigin] = field(default_factory=Counter)
+
+    def add(self, ref: SetRef, origin: LabelOrigin) -> None:
+        self.sets.append(ref)
+        if ref.source_activity_id not in self.source_ids:
+            self.source_ids.append(ref.source_activity_id)
+        self.origins[origin] += 1
+
+
+def _origin_counts(origins: Counter[LabelOrigin]) -> LabelOriginCounts:
+    return LabelOriginCounts(
+        confirmed=origins[LabelOrigin.CONFIRMED],
+        auto_detected=origins[LabelOrigin.AUTO_DETECTED],
+        unspecified=origins[LabelOrigin.UNSPECIFIED],
+    )
+
+
+def _taxonomy_groups(groups: Mapping[str, _GroupTotals]) -> tuple[TaxonomyGroup, ...]:
+    items = [
+        TaxonomyGroup(
+            key=key,
+            active_set_count=len(totals.sets),
+            label_origins=_origin_counts(totals.origins),
+            source_activity_ids=tuple(totals.source_ids),
+            sets=tuple(totals.sets),
+        )
+        for key, totals in groups.items()
+    ]
+    return tuple(sorted(items, key=lambda item: (-item.active_set_count, item.key)))
+
+
+@dataclass
+class _TaxonomyTotals:
+    active_set_count: int = 0
+    mapped_origins: Counter[LabelOrigin] = field(default_factory=Counter)
+    labels: dict[tuple[str | None, str | None], tuple[ExerciseClassification, _GroupTotals]] = field(
+        default_factory=dict
+    )
+    patterns: dict[str, _GroupTotals] = field(default_factory=dict)
+    primary: dict[str, _GroupTotals] = field(default_factory=dict)
+    secondary: dict[str, _GroupTotals] = field(default_factory=dict)
+
+    def add(self, ref: SetRef, origin: LabelOrigin, classification: ExerciseClassification) -> None:
+        """Add one ACTIVE set once to its label and, if mapped, once to its pattern and primary muscle."""
+        self.active_set_count += 1
+        label = (classification.source_category, classification.source_name)
+        if label not in self.labels:
+            self.labels[label] = (classification, _GroupTotals())
+        self.labels[label][1].add(ref, origin)
+        rule = classification.rule
+        if rule is None:
+            return
+        self.mapped_origins[origin] += 1
+        self.patterns.setdefault(rule.movement_pattern.value, _GroupTotals()).add(ref, origin)
+        self.primary.setdefault(rule.primary_muscle.value, _GroupTotals()).add(ref, origin)
+        for muscle in rule.secondary_muscles:
+            self.secondary.setdefault(muscle.value, _GroupTotals()).add(ref, origin)
+
+    def summary(self) -> StrengthTaxonomySummary:
+        exercises = [_exercise_group(classification, totals) for classification, totals in self.labels.values()]
+        exercises.sort(key=lambda item: (-item.active_set_count, item.category or "", item.exercise_name or ""))
+        unknown_ids: list[str] = []
+        unknown = no_rule = 0
+        for item in exercises:
+            if item.unmapped_reason == UnmappedReason.UNKNOWN_SOURCE_LABEL:
+                unknown += item.active_set_count
+                unknown_ids.extend(item.source_activity_ids)
+            elif item.unmapped_reason == UnmappedReason.NO_RULE:
+                no_rule += item.active_set_count
+        return StrengthTaxonomySummary(
+            taxonomy_version=TAXONOMY_VERSION,
+            active_set_count=self.active_set_count,
+            mapped_active_set_count=self.active_set_count - unknown - no_rule,
+            unmapped_active_set_count=unknown + no_rule,
+            unknown_active_set_count=unknown,
+            unknown_source_activity_ids=tuple(sorted(set(unknown_ids))),
+            no_rule_active_set_count=no_rule,
+            mapped_label_origins=_origin_counts(self.mapped_origins),
+            by_exercise=tuple(exercises),
+            by_movement_pattern=_taxonomy_groups(self.patterns),
+            by_primary_muscle=_taxonomy_groups(self.primary),
+            secondary_muscle_set_exposures=_taxonomy_groups(self.secondary),
+        )
+
+
+def _exercise_group(classification: ExerciseClassification, totals: _GroupTotals) -> TaxonomyExerciseGroup:
+    rule = classification.rule
+    return TaxonomyExerciseGroup(
+        category=classification.source_category,
+        exercise_name=classification.source_name,
+        movement_pattern=rule.movement_pattern.value if rule else None,
+        primary_muscle=rule.primary_muscle.value if rule else None,
+        secondary_muscles=tuple(muscle.value for muscle in rule.secondary_muscles) if rule else (),
+        mapping_basis=rule.basis.value if rule else None,
+        unmapped_reason=classification.unmapped_reason.value if classification.unmapped_reason else None,
+        active_set_count=len(totals.sets),
+        label_origins=_origin_counts(totals.origins),
+        source_activity_ids=tuple(totals.source_ids),
+        sets=tuple(totals.sets),
+    )
+
+
 def _strength_summary(
     activities: Sequence[tuple[date, NormalizedActivity]],
     load_values: Mapping[str, Mapping[str, float | None]],
@@ -562,6 +753,7 @@ def _strength_summary(
     window_totals = _SetTotals()
     exclusions = dict.fromkeys(("missing_reps", "zero_reps", "missing_weight", "negative_weight", "zero_weight"), 0)
     exercises: dict[tuple[str | None, str | None], tuple[_SetTotals, list[str], list[str | None], set[bool]]] = {}
+    taxonomy = _TaxonomyTotals()
     sessions: list[StrengthSessionSummary] = []
     set_row_count = rest_set_count = unclassified = 0
 
@@ -581,6 +773,7 @@ def _strength_summary(
         session_totals = _SetTotals()
         negative_weight_sequences: list[int] = []
         missing_reps_sequences: list[int] = []
+        no_rule_sequences: list[int] = []
         for strength_set in activity.strength_sets:
             set_row_count += 1
             if strength_set.set_type == "REST":
@@ -598,6 +791,15 @@ def _strength_summary(
             classified = strength_set.sequence not in unclassified_sequences
             if not classified:
                 unclassified += 1
+            # The taxonomy keys on the stored (category, name) label, never on a renamed exercise.
+            classification = classify_strength_set(strength_set)
+            if classification.unmapped_reason is UnmappedReason.NO_RULE:
+                no_rule_sequences.append(strength_set.sequence)
+            taxonomy.add(
+                SetRef(source_id, strength_set.sequence),
+                label_origin(strength_set.source_exercise_probability),
+                classification,
+            )
             key = (strength_set.source_exercise_key, strength_set.source_exercise_category)
             if key not in exercises:
                 exercises[key] = (_SetTotals(), [], [], set())
@@ -616,6 +818,16 @@ def _strength_summary(
                     source_id,
                     f"{len(unclassified_sequences)} ACTIVE sets have UNKNOWN/missing Garmin exercise classification",
                     set_sequences=tuple(sorted(unclassified_sequences)),
+                )
+            )
+        if no_rule_sequences:
+            issues.append(
+                QualityIssue(
+                    QualityIssueCode.STRENGTH_UNMAPPED_EXERCISE,
+                    source_id,
+                    f"{len(no_rule_sequences)} ACTIVE sets have a Garmin exercise label without an exercise "
+                    "taxonomy rule; reported as unmapped",
+                    set_sequences=tuple(no_rule_sequences),
                 )
             )
         if negative_weight_sequences:
@@ -686,6 +898,7 @@ def _strength_summary(
         exercises=tuple(exercise_aggregates),
         sessions=tuple(sessions),
         load_metrics=_load_aggregates(activities, load_values),
+        taxonomy=taxonomy.summary(),
     )
 
 

@@ -60,9 +60,13 @@ uv run muscle50 analytics snapshot --date 2026-09-28 --json     # provenance 포
 - Exercise aggregation key = (`source_exercise_key`, `source_exercise_category`). UNKNOWN/missing
   분류는 기존 `derive_activity_review()` 기준으로 `classified = false`로 따로 모으고
   `strength_unclassified_exercise` issue(set sequence 포함)를 낸다. 종목을 추측하지 않는다.
-- **Muscle-group aggregation은 v1에 없다.** Schema/domain에 muscle-group mapping이 없고 Garmin
-  `category`는 동작 패턴(BENCH_PRESS, PULL_UP, …)이다. Mapping을 만들면 데이터를 발명하는 것이므로
-  별도 결정이 필요하다(아래 "Gaps").
+- **Exercise taxonomy v1**(`docs/exercise-taxonomy.md`): `strength.taxonomy`가 ACTIVE set을 원본 Garmin
+  `(category, name)` label별(`by_exercise`, 이름 변경/병합 없음), movement pattern별, primary muscle별로 각각
+  정확히 한 번 센다(pattern/primary 합계 + unmapped = active set). Primary-muscle active set이 muscle-group
+  headline이고, secondary muscle은 별도 `secondary_muscle_set_exposures`로만 보고하며 primary 합계에 더하지
+  않는다. UNKNOWN set 수와 영향 activity, rule 없는 label 수를 따로 보고하고, rule 없는 label은
+  `strength_unmapped_exercise` issue를 낸다. 모든 group은 Garmin label origin(confirmed/auto-detected/
+  unspecified) 개수와 activity/set provenance를 가진다. 가중치·fractional set 없음.
 
 ## Swimming — summary vs detail, malformed detail 처리
 
@@ -122,7 +126,8 @@ data-quality bound다.
 
 ## Gaps (v1 범위 밖, 발명하지 않음)
 
-- Muscle-group mapping 없음(Garmin category는 동작 패턴). UNKNOWN 분류 ACTIVE set 276/1054.
+- UNKNOWN 분류 ACTIVE set 276/1054는 저장된 DB/RAW/FIT로 해소 불가(`docs/exercise-taxonomy.md`).
+  매핑된 777 set 중 683은 watch 자동 인식 label이다.
 - `swim_lengths.length_type` 전부 NULL → active/idle 구분은 distance 기준.
 - `pool_length` activity metric unit NULL(21건) → `swim_activities.pool_length_meters` 사용.
 - Activity/recovery sync coverage 기록 없음 → "활동 없음"과 "미동기화" 구분 불가.

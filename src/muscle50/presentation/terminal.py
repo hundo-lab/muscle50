@@ -15,8 +15,11 @@ from muscle50.application.sync_latest_garmin import SyncResult
 from muscle50.domain.activity import ActivityMetric, ActivityType, StrengthSet
 from muscle50.domain.analytics import (
     MAX_PLAUSIBLE_SWIM_SPEED_MPS,
+    LabelOriginCounts,
     MetricAggregate,
     RecoveryRule,
+    StrengthTaxonomySummary,
+    TaxonomyGroup,
     TrainingSnapshot,
 )
 from muscle50.domain.derivation import derive_summary
@@ -355,6 +358,7 @@ def render_training_snapshot(snapshot: TrainingSnapshot) -> str:
                 f"reps {_optional(exercise.reps)}, volume {_optional(exercise.volume_kg, ' kg')}, "
                 f"max {_optional(exercise.max_weight_kg, ' kg')}"
             )
+        _taxonomy_lines(lines, strength.taxonomy)
 
     swimming = snapshot.swimming
     lines.extend(("", f"Swimming: {swimming.session_count} sessions"))
@@ -427,6 +431,48 @@ def render_training_snapshot(snapshot: TrainingSnapshot) -> str:
         f"  {issue.code.value} {issue.source_activity_id or '-'}: {issue.detail}" for issue in snapshot.quality_issues
     )
     return "\n".join(lines)
+
+
+def _taxonomy_lines(lines: list[str], taxonomy: StrengthTaxonomySummary) -> None:
+    origins = taxonomy.mapped_label_origins
+    unknown_ids = ", ".join(taxonomy.unknown_source_activity_ids) or "none"
+    lines.extend(
+        (
+            f"  Exercise taxonomy v{taxonomy.taxonomy_version}: {taxonomy.mapped_active_set_count}/"
+            f"{taxonomy.active_set_count} ACTIVE sets mapped, {taxonomy.unmapped_active_set_count} unmapped "
+            f"(UNKNOWN {taxonomy.unknown_active_set_count}, no rule {taxonomy.no_rule_active_set_count})",
+            f"    Mapped Garmin labels: {_origins_text(origins)}",
+            f"    UNKNOWN activities ({len(taxonomy.unknown_source_activity_ids)}): {unknown_ids}",
+            "    Primary muscle (active sets, each set counted once):",
+        )
+    )
+    lines.extend(_group_lines(taxonomy.by_primary_muscle))
+    lines.append("    Movement pattern (active sets):")
+    lines.extend(_group_lines(taxonomy.by_movement_pattern))
+    lines.append("    Secondary muscle set exposures (not added to primary totals):")
+    lines.extend(_group_lines(taxonomy.secondary_muscle_set_exposures))
+    lines.append("    Garmin exercise label (active sets):")
+    for item in taxonomy.by_exercise:
+        label = f"{item.category or 'no category'}/{item.exercise_name or '-'}"
+        if item.primary_muscle is None:
+            mapping = f"unmapped: {item.unmapped_reason}"
+        else:
+            secondary = ", ".join(item.secondary_muscles) or "none"
+            mapping = f"{item.movement_pattern}, primary {item.primary_muscle}, secondary {secondary}"
+        lines.append(f"      {label}: {item.active_set_count} [{mapping}] ({_origins_text(item.label_origins)})")
+    if not taxonomy.by_exercise:
+        lines.append("      none")
+
+
+def _group_lines(groups: tuple[TaxonomyGroup, ...]) -> list[str]:
+    if not groups:
+        return ["      none"]
+    return [f"      {item.key}: {item.active_set_count} ({_origins_text(item.label_origins)})" for item in groups]
+
+
+def _origins_text(origins: LabelOriginCounts) -> str:
+    text = f"confirmed {origins.confirmed}, auto-detected {origins.auto_detected}"
+    return f"{text}, unspecified {origins.unspecified}" if origins.unspecified else text
 
 
 def _json_default(value: object) -> str:

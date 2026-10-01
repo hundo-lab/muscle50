@@ -1,8 +1,64 @@
 # Session Handoff
 
-Last updated: 2026-09-30
+Last updated: 2026-10-01
 
-## Current task: Analytics Engine v1 (2026-09-30)
+## Current task: Exercise Taxonomy v1 (2026-10-01)
+
+Branch `feature/exercise-taxonomy` (Paseo worktree `exercise-taxonomy`, base main = origin/main `2603b85`,
+Analytics Engine v1 포함). **구현, 테스트, production read-only 검증 완료. 사용자 승인으로 이 branch에
+commit했다. merge/push 하지 않았다.** 설계와 규칙 전체는 `docs/exercise-taxonomy.md`.
+
+### What was attempted / completed
+
+1. Read-only audit(`immutable=1`): ACTIVE 1054, label 39종 + UNKNOWN 276. UNKNOWN은 Garmin JSON 대체 후보,
+   FIT 원본(category 65534/65535), velocity/ROM, `wktStepIndex` 어디에도 정보가 없어 해소 0건. Garmin probability
+   < 100인 960 set은 FIT device 자동 인식과 100% 일치, probability 100인 94 set은 Connect 편집 activity 5개에만
+   존재(위치 비교 가능한 4 activity 76 set 중 49 set이 device label과 다름; `24524226596`은 Connect에서 set
+   1개 삭제로 비교 제외) → `LabelOrigin`(confirmed/auto_detected/unspecified)로 개수 보고.
+2. 순수 domain `exercise_taxonomy.py`: production label 38개 explicit rule, pattern 15, muscle 13, basis
+   (`exercise_name`/`category_only`/`category_override`), unmapped reason(`unknown_source_label`/`no_rule`).
+   Category fallback/fuzzy/추론 없음, 정확한 label 일치. UNKNOWN predicate는 `derive_activity_review`와 동일.
+3. 사용자 결정(2026-10-01)으로 초기 구현의 canonical exercise 이름/병합을 제거했다. 원본 Garmin
+   `(category, name)`이 identity이고 taxonomy는 pattern/primary/secondary/provenance만 붙인다.
+4. Analytics 연동(additive): `StrengthSummary.taxonomy`(`by_exercise` 원본 label별, pattern, primary, secondary
+   exposure, UNKNOWN 수·영향 activity, no-rule 수), quality issue `strength_unmapped_exercise`, text renderer 절.
+   `ExerciseAggregate`는 변경 없음. JSON은 기존 dataclass 직렬화로 자동 포함.
+5. Production 검증과 문서화.
+
+### Files changed
+
+- 신규: `src/muscle50/domain/exercise_taxonomy.py`, `tests/test_exercise_taxonomy.py`,
+  `tests/test_analytics_taxonomy.py`, `docs/exercise-taxonomy.md`
+- 수정: `src/muscle50/domain/analytics.py`, `src/muscle50/presentation/terminal.py`, `tests/analytics_builders.py`
+  (`probability` 인자), `docs/analytics-engine.md`, `docs/CURRENT_STATE.md`, `docs/HANDOFF.md`, `README.md`
+- Migration, ingestion/refresh/RAW/normalization 변경 없음. CLI 변경 없음(기존 `analytics snapshot`이 출력).
+
+### Tests / checks run
+
+`uv run --extra dev pytest` 445 passed, `uv run --extra dev ruff check .`, `uv run --extra dev mypy src tests`
+(87 files), `git diff --check` 통과. Production: 90일 snapshot JSON/text exit 0, 재실행 byte-identical, 독립 SQL
+cross-check 15/15(`crosscheck_v2.py`), before/after fingerprint 동일(`-shm` mtime 제외). Evidence(repo 밖):
+`C:	emp\muscle50-evidence-20261001-taxonomy\`(fingerprint.py, before/after.json, audit*.py, fit_sets.py,
+snapshot_v2_90d*.json/txt, crosscheck_v2.py/txt, after_v2.json, fit_profile.py = Garmin FIT SDK profile 사본).
+
+### Known risks / open decisions
+
+- Primary muscle 선택(close-grip bench → triceps, row → upper_back, deadlift → glutes, leg extension override)은
+  headline 합계를 움직이는 판단값이다. 사용자 검토 권장.
+- 매핑 777 set 중 683은 watch 자동 인식 label(SHRUG 55, 50 kg SIT_UP 등 오인식 포함). Taxonomy는 label 정확성을
+  판단하지 않는다 — 해석 시 `label_origins`를 같이 봐야 한다.
+- 새 Garmin label은 `no_rule`로 드러나며 rule을 추가해야 매핑된다.
+
+### Recommended next action
+
+1. main 통합 여부 결정(명시적 승인 필요). push 하지 않았다.
+2. UNKNOWN 276을 줄이려면 Garmin Connect에서 종목 지정 → `garmin refresh <id>`(사용자 작업, 별도 승인).
+3. 다음 slice 후보: 기간 비교(이번 주 vs 이전 주) by primary muscle/pattern. 추천, overload, 목표, 수영 목표,
+   Daily Recommendation, Training Goals/Profile은 taxonomy 범위 밖이며 별도 기능/branch에서 다룬다.
+
+## Previous task: Analytics Engine v1 (2026-09-30)
+
+이 작업은 이후 `2603b85`로 main/origin에 포함됐다.
 
 Branch `feature/analytics-engine` (worktree `C:\Users\hundo\Desktop\MyProjects\analytics-engine`, base
 local main `dc2c99f`). **구현과 production read-only 검증 완료. 미커밋 상태이며 commit/merge/push 하지

@@ -61,6 +61,7 @@ def strength_set(
     name: str | None = None,
     reps: int | None = 10,
     weight_kg: float | None = 50.0,
+    probability: float | None = None,
 ) -> StrengthSet:
     key = name or category
     return StrengthSet(
@@ -70,7 +71,7 @@ def strength_set(
         source_exercise_name=name,
         source_exercise_key=key,
         display_exercise_name=key.replace("_", " ").title() if key else None,
-        source_exercise_probability=None,
+        source_exercise_probability=probability,
         set_type=set_type,
         reps=reps,
         source_weight=weight_kg * 1000 if weight_kg is not None else None,

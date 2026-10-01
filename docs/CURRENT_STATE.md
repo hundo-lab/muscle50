@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-09-30
+Last updated: 2026-10-01
 
 ## Project goal
 
@@ -37,6 +37,9 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 - Analytics Engine v1은 canonical 데이터 위의 read-only computed read model이다(migration 없음).
   순수 domain(`domain/analytics.py`) + read-only reader(`mode=ro`, `query_only`, migrate/mkdir 없음)
   + CLI `muscle50 analytics snapshot`. 상세 규칙은 `docs/analytics-engine.md`.
+- Exercise Taxonomy v1(`domain/exercise_taxonomy.py`)은 저장된 Garmin `(category, name)` label을 그대로
+  identity로 두고 movement pattern / primary·secondary muscle만 붙이는 순수 lookup table이다(이름 변경·병합
+  없음, migration 없음, 저장하지 않음). Analytics snapshot이 계산 시 적용한다. 상세는 `docs/exercise-taxonomy.md`.
 
 ## Implemented
 
@@ -80,12 +83,18 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   distance와 lap-detail distance 분리, implausible lap 제외 plausible detail distance, pool length),
   recovery(daily field latest/mean/min/max, state field latest, categorical latest, row 없는 날짜와
   null field 구분), provenance(source activity ID/날짜), data-quality issue 목록.
-  추천/생리학적 점수 없음. muscle-group 집계 없음(mapping이 없음).
+  추천/생리학적 점수 없음.
+- Exercise Taxonomy v1: 검토된 production label 38개에 대한 명시적 rule(category fallback, fuzzy, 추론
+  없음), movement pattern 15 / muscle group 13. Snapshot `strength.taxonomy`가 원본 Garmin label별,
+  movement pattern별, primary muscle별 ACTIVE set(각 set 정확히 한 번), 별도 secondary muscle set exposure,
+  명시적 unmapped(`unknown_source_label`/`no_rule`)와 UNKNOWN 영향 activity, Garmin label origin(confirmed/
+  auto-detected) 개수, activity/set provenance를 보고한다. Rule 없는 label은 `strength_unmapped_exercise` issue.
 
 ## Pending merge
 
-- `feature/analytics-engine` (base main `dc2c99f`): Analytics Engine v1. 미커밋 working tree 상태이며
-  commit/merge/push 하지 않았다.
+- `feature/exercise-taxonomy` (base main/origin `2603b85`, Paseo worktree `exercise-taxonomy`): Exercise
+  Taxonomy v1. 사용자 승인으로 이 branch에 commit했다(`git log feature/exercise-taxonomy`). merge/push 하지 않았다.
+- Analytics Engine v1은 `2603b85`로 main/origin에 포함됐다.
 - `feature/garmin-analytics-prerequisites`는 main `dc2c99f`에 통합 완료.
 
 ## Garmin Analytics Prerequisites status
@@ -94,7 +103,7 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 - 완료: historical activity import(2026-07-01~08-02), recovery 28일 backfill(2026-09-01~28), recovery
   normalizer v2 re-normalization, activity load-metric backfill(78/78 activity).
 - 보류: `sync_runs` recovery coverage, 향후 import의 자동 load-metric enrichment.
-- Analytics Engine v1(rolling snapshot)은 `feature/analytics-engine`에서 구현·검증됨(미커밋).
+- Analytics Engine v1(rolling snapshot)은 `2603b85`로 main에 포함됐다.
 
 ## Data coverage (production, 2026-09-30)
 
@@ -118,6 +127,21 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 - `tests/test_refresh_activity.py`, `tests/test_swim_normalization.py`, `tests/test_sync_recovery.py`
 
 ## Verification
+
+2026-10-01 Exercise Taxonomy v1(`feature/exercise-taxonomy`, base `2603b85`). Production DB/RAW는
+`mode=ro&immutable=1` audit와 read-only CLI로만 사용했다.
+
+- Gates: `uv run --extra dev pytest` 445 passed(기존 390 + 신규 55), `ruff check .`, `mypy src tests`(87 files),
+  `git diff --check` 통과.
+- `muscle50 analytics snapshot --date 2026-09-28 --days 90 --json`(전체 데이터) exit 0, 재실행 byte-identical.
+  ACTIVE 1054, 매핑 777(73.7%; confirmed 94, auto-detected 683), unmapped 277(UNKNOWN 276, PLYO/BOX_JUMP 1).
+  독립 SQL 집계와 15/15 일치(total, mapped+unmapped, UNKNOWN 수와 50 activity, no-rule, 원본 label 40개 identity·
+  set 수·속성, pattern, primary, secondary, 각 합계 reconciliation, canonical 필드 없음).
+- UNKNOWN 276: Garmin JSON 대체 후보 없음, FIT category 65534(260)/65535(16), velocity/ROM/wktStepIndex 없음 →
+  해소 0건(276 → 276). Correction/overlay 추가 없음.
+- Fingerprint(`C:	emp\muscle50-evidence-20261001-taxonomyefore.json`/`after.json`): `muscle50.sqlite3`
+  sha256/size/mtime 동일, `-wal` 0 bytes 동일, 28 table digest 동일, RAW 868 files 동일. `-shm` mtime만 변경
+  (SQLite WAL reader mark).
 
 2026-09-30 Analytics Engine v1(`feature/analytics-engine`, base `dc2c99f`, 미커밋). Production DB/RAW는
 read-only로만 사용했다.
@@ -371,6 +395,11 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
   --from/--to`가 같은 코드를 공유하도록 했다. Swim이 필요로 하는 lap/length 계층은 이미
   모든 activity에서 무조건 가져오는 `splits` RAW로 충분해 새 RAW endpoint나 migration을
   추가하지 않았다.
+- Exercise taxonomy는 원본 Garmin label을 identity로 유지하고(이름 변경·canonical 병합 없음) 속성만 붙이는
+  명시적 rule table이다. UNKNOWN은 추측하지 않고, 이름이
+  없는 새 variant를 category rule로 떨어뜨리지 않으며, primary muscle만 headline set 수로 센다(secondary는
+  별도 exposure, 가중치 없음). `CRUNCH/LEG_EXTENSIONS`는 `category_override`로 knee extension에 매핑했다
+  (Garmin catalogue에 machine leg extension 없음, 사용자 지정 label).
 - Analytics는 schema를 추가하지 않는 computed read model이다. Garmin summary 값은 절대 보정하지 않고,
   swim detail은 lap 평균 속도 > 2.5 m/s(또는 distance가 있는데 duration 없음)이면 detail-derived distance
   에서만 제외하고 quality issue로 보고한다. Load metric은 metric별 명시적 rule(sum/max)만 쓰고 평균은
