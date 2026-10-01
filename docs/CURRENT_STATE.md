@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-10-01
+Last updated: 2026-10-02
 
 ## Project goal
 
@@ -114,7 +114,7 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   swim history D-28~D 정렬, 10일 이상 swim 공백 후 `return_easy` 재진입. 상세는 `docs/training-recommendation.md`.
   통합 수정: 조정 원인 표기 분리 — 48 h rest rule이 올린 reduce는 "48 h rest rule reduce"로, recovery는 자기 level로만
   표기(결정 불변). Text heading은 두 level이 다를 때 `Recovery adjustment: hold; session adjustment: reduce`.
-- (branch `feature/progression-hardening`, base main `4f26ec2`, main 미통합) Progression Hardening v1: 증량 시점(work
+- (`13d5ed2`, main/origin 포함; 2026-10-02 fast-forward 통합·push 완료) Progression Hardening v1: 증량 시점(work
   set 2개 상한)은 그대로, 정확한 +2.5 kg 목표는 2.5 kg ≤ work load × 15%(`MAX_EXACT_LOAD_INCREASE_RATIO`)일 때만.
   초과하면 `increase_load` + `load_kg: null` + `load_increase_from_kg`(마지막 work load) + `load_step:
   "smallest_available"`, text `@ next available step above 6 kg`. `PULL_UP/-`, `PUSH_UP/-`,
@@ -124,9 +124,10 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 
 ## Pending merge
 
-- Paseo worktree `progression-hardening`(branch `feature/progression-hardening`, base main = origin/main `4f26ec2`):
-  Progression Hardening v1 commit 1개. Gates·production read-only 검증 완료. main은 이 branch의 ancestor(fast-forward
-  가능). merge/push는 별도 승인 필요.
+- 현재 pending merge 없음.
+- Progression Hardening v1(`13d5ed2`)은 2026-10-02에 main으로 fast-forward(`4f26ec2` → `13d5ed2`, merge commit/rebase/
+  cherry-pick 없음)되고 origin에 일반 push됐다. main = origin/main = GitHub main `13d5ed2`(`git ls-remote` 확인).
+  Branch `feature/progression-hardening`(`13d5ed2`)과 Paseo worktree `progression-hardening`은 의도적으로 유지한다.
 
 - Recommendation Hardening v1 통합(`5fbdd56`/`38a23ae`/`4f26ec2`)과 Taxonomy coverage(`aba8cfe`)는 main = origin/main
   `4f26ec2`에 포함됐다(2026-10-01 `git rev-parse` 확인). 원본 `feature/recommendation-hardening`(`272761a`)은 reference로
@@ -167,6 +168,18 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 - `tests/test_refresh_activity.py`, `tests/test_swim_normalization.py`, `tests/test_sync_recovery.py`
 
 ## Verification
+
+2026-10-02 Progression Hardening v1 main 통합(`4f26ec2` → `13d5ed2` fast-forward, push 완료):
+
+- 통합 후 main gates: `uv run --extra dev pytest` 582 passed, `ruff check .`, `mypy src tests`(97 files),
+  `git diff --check 4f26ec2..HEAD` 통과.
+- Production read-only 검증 통과(`garmin refresh` 미실행), evidence `C:\temp\muscle50-evidence-20261002-progression-integration\`:
+  progression smoke(6/14/15 kg → 숫자 없는 step, 20 → 22.5, 50 → 52.5, `PULL_UP/-` direction-unknown, hold/reduce/
+  48 h rest rule/regression → 숫자 maintain, 재실행 동일)와 2026-10-01 auto/push/pull/legs/shoulders를 `4f26ec2` 출력과
+  비교 — focus/label/role/set/recovery·session level/hinge/coverage/notice/swim 차이 0. 바뀐 것은 push/shoulders의
+  `LATERAL_RAISE/ONE_ARM_CABLE_LATERAL_RAISE` basis 한 줄뿐(recovery hold라 처방은 6 kg maintain 그대로).
+  JSON 재실행 byte-identical.
+- Production DB/RAW 불변: fingerprint before = after(DB/WAL, 28 table, RAW 954 files).
 
 2026-10-01 Progression Hardening v1(worktree `progression-hardening`, base `4f26ec2`):
 
@@ -415,10 +428,12 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
 
 ## Known issues
 
-- (Progression Hardening v1, `feature/progression-hardening`에서 수정, main 미통합) 고정 +2.5 kg step이 가벼운
+- (Progression Hardening v1 `13d5ed2`에서 수정, main/origin 포함) 고정 +2.5 kg step이 가벼운
   isolation에 과했다(`LATERAL_RAISE/ONE_ARM_CABLE_LATERAL_RAISE` 6 → 8.5 kg, 42%). 이제 15% 초과면 숫자 없이 "next
   available step above 6 kg". 남은 한계: 장비별 실제 증량 단위는 모름(추론 안 함), 증량 후 reps 재시작(상한 - 4)은
-  작은 무게에서도 그대로, 15% 경계 근거는 소수 사례이고 16.7-20 kg trigger는 production에 없다.
+  작은 무게에서도 그대로, 15%는 숫자 목표 신뢰 기준이지 생리학적 최적값이 아니며 근거는 소수 사례이고 16.7-20 kg
+  trigger는 production에 없다. Progression v2(정확한 label별 장비 증량 단위 학습)는 충분한 데이터가 쌓인 뒤의 향후
+  작업이다.
 - `PLYO/BOX_JUMP`(1 set, 자동 인식 37.5%)는 의도적으로 rule 없음(사용자 결정 2026-10-01; plyometric은 v1 범위
   밖). 유일한 non-UNKNOWN ACTIVE `no_rule` label.
 - (Hardening v1 `5dd2af7`에서 수정, integration branch에 포함, main 미통합) Recommendation swim history가 D-27~D로 strength(D-28~D-1)보다 하루 짧았다. 이제

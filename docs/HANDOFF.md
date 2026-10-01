@@ -1,11 +1,20 @@
 # Session Handoff
 
-Last updated: 2026-10-01
+Last updated: 2026-10-02
 
 ## Current task: Progression Hardening v1 (2026-10-01)
 
 Paseo worktree `progression-hardening`(branch `feature/progression-hardening`, base main = origin/main `4f26ec2`).
-**이 branch에 commit 1개. main merge/push 안 함.**
+**완료: 2026-10-02에 main으로 fast-forward 통합(`4f26ec2` → `13d5ed2`)하고 origin에 일반 push했다. main = origin/main =
+GitHub main `13d5ed2`.** Branch `feature/progression-hardening`(`13d5ed2`)과 worktree는 의도적으로 유지한다.
+
+### Integration (2026-10-02)
+
+- `git merge --ff-only feature/progression-hardening`(merge commit/rebase/cherry-pick/force 없음), 이후 `git push origin
+  main`(일반 push). ahead/behind 0/0, working tree clean.
+- 통합 후 main gates: pytest 582 passed, `ruff check .`, `mypy src tests`(97 files), `git diff --check` 통과.
+- Production read-only 검증 통과(`garmin refresh` 미실행): progression smoke와 2026-10-01 auto/push/pull/legs/shoulders
+  회귀 비교(`CURRENT_STATE.md` Verification 2026-10-02). Production DB/RAW fingerprint before = after.
 
 ### What was attempted / completed
 
@@ -41,10 +50,13 @@ Paseo worktree `progression-hardening`(branch `feature/progression-hardening`, b
 - 증량 후 reps 재시작(상한 - 4)은 작은 무게에서도 그대로(6 kg × 20 → 다음 step × 16). 별도 검토 후보.
 - `load_kg: null`을 숫자로 가정하던 외부 consumer가 있다면 `action`/`load_step`을 봐야 한다(repo 안 consumer는
   terminal뿐이며 갱신됨).
+- 장비별 실제 증량 단위는 모른다. 15%를 넘는 증량은 숫자 없이 "next available step" 안내만 한다. 15%는 숫자 목표 신뢰
+  기준이지 생리학적 최적값이 아니다.
+- Progression v2(정확한 label별 장비 증량 단위 학습)는 충분한 데이터가 쌓인 뒤에만 검토할 향후 작업이다.
 
 ### Recommended next action
 
-1. 사용자: `feature/progression-hardening`으로 main fast-forward 여부 결정(main은 ancestor). Push는 별도 승인.
+1. 통합·push는 완료됐다(위 Integration). 남은 결정 없음.
 2. 이후 후보: 작은 무게 증량 후 reps 재시작 규칙 검토.
 
 ## Previous task: Recommendation Hardening v1 integration on local main (2026-10-01)
