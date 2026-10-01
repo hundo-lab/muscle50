@@ -219,12 +219,19 @@ class RunDailySync:
             problems.append("activity list page limit reached; the range may be incomplete")
         if problems:
             return result, StageReport(STAGE_ACTIVITIES, StageStatus.FAILED, "; ".join(problems))
-        warnings = (
-            (f"{result.undated_count} listed activities had no readable start date or ID and were not imported",)
-            if result.undated_count
-            else ()
-        )
-        return result, StageReport(STAGE_ACTIVITIES, StageStatus.OK, warnings=warnings)
+        # An activity stored despite an optional endpoint failure (for example no exercise sets) is skipped
+        # by later range runs, so the warning names the explicit repair.
+        warnings = [
+            f"activity {item.source_activity_id} ({item.source_type_key}) imported with Garmin warning: {warning}; "
+            f"to re-fetch it: muscle50 garmin refresh {item.source_activity_id}"
+            for item in result.outcomes
+            for warning in item.warnings
+        ]
+        if result.undated_count:
+            warnings.append(
+                f"{result.undated_count} listed activities had no readable start date or ID and were not imported"
+            )
+        return result, StageReport(STAGE_ACTIVITIES, StageStatus.OK, warnings=tuple(warnings))
 
     def _load_metrics(
         self, activities: RangeIngestResult | None

@@ -686,6 +686,7 @@ def render_daily_sync_json(result: DailySyncResult) -> str:
                     "source_type_key": item.source_type_key,
                     "status": item.status,
                     "error": item.error,
+                    "warnings": list(item.warnings),
                 }
                 for item in activities.outcomes
             ],

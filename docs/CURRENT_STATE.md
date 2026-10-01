@@ -129,8 +129,9 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   `skipped`). Normalization/저장/recovery/추천 규칙은 새로 만들지 않았고 idempotency와 RAW snapshot 의미는 그대로다.
   실패 규칙: 세 sync 단계는 서로 독립이라 한 단계가 실패해도 나머지는 실행해 유효한 작업을 보존한다. Activity
   discovery 실패 시 load_metrics는 `not_run`. 개별 activity 실패, page limit, 이번 실행에서 저장한 activity의 RAW summary
-  누락, recovery 날짜 실패/미시도는 해당 단계 `failed`. 이전부터 있던 activity의 RAW 누락과 recovery endpoint 경고는
-  `warning`. 어느 단계든 `failed`/`not_run`이면 추천은 만들지 않고(`not_run`) exit 1이며, read-only
+  누락, recovery 날짜 실패/미시도는 해당 단계 `failed`. 이전부터 있던 activity의 RAW 누락, recovery endpoint 경고, 이번에
+  저장한 activity의 선택 endpoint 경고(splits/exercise sets/original 실패; `RangeIngestOutcome.warnings`로 새로 전달,
+  `garmin activities` 출력은 불변)는 `warning`이며 activity 경고에는 `muscle50 garmin refresh <id>` 복구 안내가 붙는다. 어느 단계든 `failed`/`not_run`이면 추천은 만들지 않고(`not_run`) exit 1이며, read-only
   `muscle50 recommend --date D` 명령을 안내한다. 알려진 오류 계열만 잡고 그 밖의 오류(예: range ingest가 일부러 전파하는
   local 무결성 오류)는 명령 전체를 중단한다. 출력: ASCII 단계 블록 + `Stored data now` freshness 줄 + 기존
   `recommend` text 그대로. `--json`은 단계 요약 + `"recommendation"`에 standalone `recommend --json` 문서를 그대로 넣고
@@ -187,12 +188,13 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 
 2026-10-02 Daily orchestration(worktree `daily-sync`, base `c06a36c`, feature branch commit):
 
-- Gates: `uv run --extra dev pytest` 613 passed(582 + 신규 31, `tests/test_daily_sync.py`), `ruff check .`,
+- Gates: `uv run --extra dev pytest` 614 passed(582 + 신규 32, `tests/test_daily_sync.py`), `ruff check .`,
   `mypy src tests`(99 files), `git diff --check` 통과. 새 파일은 `ruff format` clean, `cli.py`도 clean 유지
   (`terminal.py`는 main부터 미포맷이라 전체 reformat 하지 않음).
 - 테스트는 stub collaborator(단계별 실패 규칙)와 fake Garmin 하나(activity + recovery) + 임시 `MUSCLE50_HOME`의 CLI
   end-to-end로 나눴다: 기본 날짜(오늘)와 D-1~D 범위, 명시 날짜, load metric 채움, `--focus`/`--avoid` 전달,
-  `--after-workout`, 같은 날 2회 실행 시 row 수·RAW 파일 동일(신규 0, metric unchanged, recovery unchanged), 단계별 실패와
+  `--after-workout`, activity endpoint 경고 + refresh 안내, 같은 날 2회 실행 시 row 수·RAW 파일 동일(신규 0, metric
+  unchanged, recovery unchanged), 단계별 실패와
   exit 1, 로그인 실패, 인증 전 입력 거부, standalone `recommend`와 JSON/text 동일, 같은 입력 JSON byte-identical.
 - 실제 Garmin 계정은 호출하지 않았다(live 검증은 별도 승인 필요). Production DB/RAW는 구현·테스트 중 사용하지 않았고
   fingerprint 전후 동일(DB/WAL, 28 table, RAW 954 files), evidence `C:\temp\muscle50-evidence-20261002-daily-sync\`.
@@ -463,7 +465,10 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
   "미동기화"를 구분하지 못한다. 기본 날짜는 이 컴퓨터의 날짜라 자정 직후 실행이나 다른 시간대 기록은 `--date`로 지정해야
   한다. 오늘 recovery row는 시계가 아침 데이터를 올린 뒤에야 sleep/readiness가 채워진다(partial row는 실패가 아니라
   데이터로 보고). `--json`은 저장된 Garmin 로그인이 유효할 때 stdout이 JSON만이다(재로그인 prompt는 stderr). Load metric
-  backfill은 기존 use case 그대로 저장된 전체 activity를 다시 확인한다(idempotent, Garmin 호출 없음).
+  backfill은 기존 use case 그대로 저장된 전체 activity를 다시 확인한다(idempotent, Garmin 호출 없음). Activity endpoint
+  경고(예: exercise sets 없이 저장)는 그 activity를 처음 저장한 실행에서만 보인다 — 이후 실행은 이미 저장된 activity를
+  건너뛰므로 `garmin refresh <id>`로 직접 복구해야 한다. PowerShell 5.1에서 `*>`/`2>&1`로 출력을 돌리면 stderr 진행 줄이
+  빨간 NativeCommandError로 보이지만 표시 문제일 뿐이고 결과는 exit code로 판단한다.
 - (Progression Hardening v1 `13d5ed2`에서 수정, main/origin 포함) 고정 +2.5 kg step이 가벼운
   isolation에 과했다(`LATERAL_RAISE/ONE_ARM_CABLE_LATERAL_RAISE` 6 → 8.5 kg, 42%). 이제 15% 초과면 숫자 없이 "next
   available step above 6 kg". 남은 한계: 장비별 실제 증량 단위는 모름(추론 안 함), 증량 후 reps 재시작(상한 - 4)은

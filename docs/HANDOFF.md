@@ -33,19 +33,24 @@ uv run muscle50 daily --date 2026-10-02       # 날짜 직접 지정
 ### Files changed
 
 `src/muscle50/application/daily_sync.py`(신규), `src/muscle50/cli.py`(`daily` parser/handler, `_today`, stderr prompt),
-`src/muscle50/presentation/terminal.py`(`render_daily_sync`, `render_daily_sync_json`), `tests/test_daily_sync.py`(신규, 31),
-`README.md`, `docs/CURRENT_STATE.md`, 이 파일.
+`src/muscle50/presentation/terminal.py`(`render_daily_sync`, `render_daily_sync_json`),
+`src/muscle50/application/ingest_activity_range.py`(`RangeIngestOutcome.warnings` 기본값 `()` 추가 — 이미 있던 activity별
+Garmin endpoint 경고를 버리지 않고 전달; `garmin activities` 출력 불변), `tests/test_daily_sync.py`(신규, 32), `README.md`,
+`docs/CURRENT_STATE.md`, 이 파일.
 
 ### Checks run
 
-- `uv run --extra dev pytest` 613 passed, `ruff check .`, `mypy src tests`(99 files), `git diff --check` 통과.
+- `uv run --extra dev pytest` 614 passed, `ruff check .`, `mypy src tests`(99 files), `git diff --check` 통과.
 - Production DB/RAW fingerprint before = after(구현·테스트는 임시 home과 fake Garmin만 사용).
 
 ### Known failures or risks / still manual
 
 - `garmin refresh`(Connect 수정 후), InBody import, Garmin 첫 로그인/재로그인(MFA), 예약 실행은 여전히 수동.
 - Sync coverage 미기록, 기본 날짜는 이 컴퓨터 날짜, 오늘 recovery는 시계 아침 sync 전에는 partial.
+- Activity endpoint 경고(예: exercise sets 없이 저장)는 처음 저장한 실행에서만 보이고 이후 실행은 그 activity를 건너뛴다 —
+  경고에 나온 `garmin refresh <id>`로 복구.
 - Live Garmin 계정으로 `daily`를 아직 실행하지 않았다.
+- Main 통합 시 `CURRENT_STATE.md`의 "main 미통합" 표기(Implemented, Pending merge, Known issues)를 같은 commit에서 갱신할 것.
 
 ### Recommended next action
 

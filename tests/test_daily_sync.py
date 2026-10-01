@@ -393,10 +393,12 @@ class FakeGarmin:
         summaries: Sequence[Mapping[str, Any]],
         *,
         fail_activity_ids: frozenset[str] = frozenset(),
+        no_exercise_set_ids: frozenset[str] = frozenset(),
         recovery_warnings: tuple[str, ...] = (),
     ):
         self._summaries = list(summaries)
         self._fail_activity_ids = fail_activity_ids
+        self._no_exercise_set_ids = no_exercise_set_ids
         self._recovery_warnings = recovery_warnings
         self.list_calls: list[tuple[int, int]] = []
         self.activity_calls: list[str] = []
@@ -413,14 +415,16 @@ class FakeGarmin:
         self.activity_calls.append(activity_id)
         if activity_id in self._fail_activity_ids:
             raise GarminConnectorError("synthetic activity failure")
+        # Like PythonGarminConnector: an optional endpoint failure is a warning, not an error.
+        missing_sets = activity_id in self._no_exercise_set_ids
         return GarminRawActivity(
             summary={},
             activity={"activityId": int(activity_id)},
             details={"activityId": int(activity_id), "metricDescriptors": []},
             splits={"lapDTOs": []},
-            exercise_sets=_strength_sets() if source_type_key == "strength_training" else None,
+            exercise_sets=_strength_sets() if source_type_key == "strength_training" and not missing_sets else None,
             original_archive=b"synthetic-original-archive",
-            warnings=(),
+            warnings=("exercise sets 원본을 가져오지 못했습니다.",) if missing_sets else (),
         )
 
     def fetch_raw_recovery(self, calendar_date: str) -> GarminRawRecovery:
@@ -628,6 +632,31 @@ def test_recovery_endpoint_warnings_stay_warnings(
     assert code == 0
     assert "warning: 2026-10-01: hrv endpoint unavailable" in output
     assert "Training recommendation for 2026-10-02" in output
+
+
+def test_activity_endpoint_warnings_are_surfaced_with_the_refresh_repair(
+    home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A strength activity stored without its sets is skipped by later runs, so only refresh repairs it.
+    _use(monkeypatch, _account(no_exercise_set_ids=frozenset({"222"})))
+
+    code, output = _run(capsys, "daily", "--json")
+
+    assert code == 0
+    document = json.loads(output)
+    activities_stage = next(stage for stage in document["stages"] if stage["stage"] == "activities")
+    assert activities_stage["status"] == "ok"
+    (warning,) = activities_stage["warnings"]
+    assert warning.startswith("activity 222 (strength_training) imported with Garmin warning: exercise sets")
+    assert warning.endswith("to re-fetch it: muscle50 garmin refresh 222")
+    outcome = next(item for item in document["activities"]["outcomes"] if item["source_activity_id"] == "222")
+    assert outcome["warnings"] == ["exercise sets 원본을 가져오지 못했습니다."]
+    assert document["recommendation"] is not None
+
+    _use(monkeypatch, _account(no_exercise_set_ids=frozenset({"222"})))
+    code, text = _run(capsys, "daily")
+    assert code == 0
+    assert "muscle50 garmin refresh 222" not in text  # already stored now: the range skips it, no repeat warning
 
 
 def test_failed_activity_exits_nonzero_and_builds_no_recommendation(

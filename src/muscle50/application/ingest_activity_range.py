@@ -41,6 +41,8 @@ class RangeIngestOutcome:
     source_type_key: str
     status: Literal["inserted", "skipped", "failed"]
     error: str | None = None
+    warnings: tuple[str, ...] = ()
+    """Optional Garmin endpoint warnings (for example missing exercise sets) for an inserted activity."""
 
 
 @dataclass(frozen=True)
@@ -104,7 +106,9 @@ class IngestGarminActivityRange:
         except _KNOWN_INGEST_ERRORS as exc:
             return RangeIngestOutcome(activity_id, source_type_key, "failed", str(exc))
         status: Literal["inserted", "skipped"] = "inserted" if result.created else "skipped"
-        return RangeIngestOutcome(result.activity.source_activity_id, result.activity.source_type_key, status)
+        return RangeIngestOutcome(
+            result.activity.source_activity_id, result.activity.source_type_key, status, warnings=result.warnings
+        )
 
     def _discover(self, from_date: date, to_date: date) -> tuple[list[Mapping[str, Any]], int, bool]:
         seen_ids: set[str] = set()
