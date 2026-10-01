@@ -5,8 +5,8 @@ Last updated: 2026-10-01
 ## Current task: Recommendation Hardening v1 (2026-10-01)
 
 Paseo worktree `recommendation-hardening`(branch `feature/recommendation-hardening`, base main = origin/main `8b259e7`).
-**구현, 테스트, production read-only 검증 완료. 미커밋** — 사용자가 audit, 규칙 변경, production 결과를 확인한 뒤 commit
-여부를 결정한다. Merge/push 없음. 규칙 전체는 `docs/training-recommendation.md`(Hardening v1 표시 절).
+**사용자 승인으로 commit `5dd2af7`(branch `feature/recommendation-hardening`, parent `8b259e7`), 구현·테스트·production read-only 검증 완료. main merge/push 안 함 — main과 origin/main은 `8b259e7` 그대로.** Final gates: pytest 555 passed, ruff clean, mypy clean,
+`git diff --check` clean. 규칙 전체는 `docs/training-recommendation.md`(Hardening v1 표시 절).
 
 ### What was attempted / completed
 
@@ -47,7 +47,7 @@ extension+press 복합), `PLYO/BOX_JUMP`(category rule 없음). Rule 추가는 a
 In-memory preview(`preview_rules.py`, repo 변경 없음): 10-01 shoulders = SEATED_BARBELL 40 kg + DUMBBELL 16 kg
 (anterior) + ONE_ARM_CABLE_LATERAL_RAISE 6 kg(lateral), 32분, posterior 누락; pull은 어제 15 set → resting.
 
-### Files changed (미커밋)
+### Files changed (commit `5dd2af7`)
 
 `src/muscle50/domain/{strength_recommendation,recovery_assessment,swim_recommendation,training_recommendation}.py`,
 `src/muscle50/presentation/terminal.py`, `tests/test_{strength_recommendation,recovery_assessment,swim_recommendation,
@@ -79,7 +79,7 @@ taxonomy/migration 변경 없음.
 
 ### Recommended next action
 
-1. 사용자: audit/규칙/결과 확인 후 commit 승인(또는 수정 지시). 승인 시 이 branch에 commit, merge/push는 별도 승인.
+1. `5dd2af7`의 main 통합/push 여부 결정(명시적 승인 필요). 이 branch는 main보다 앞서 있고 merge/push 하지 않았다.
 2. Taxonomy mirror rule 6개 채택 여부 결정(별도 작은 변경 권장, analytics snapshot 영향 확인).
 3. Rear-delt 운동을 한다면 Garmin Connect에서 지정 → `garmin refresh` → posterior-primary rule 추가 검토.
 

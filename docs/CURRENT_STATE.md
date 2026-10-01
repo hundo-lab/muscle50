@@ -105,7 +105,7 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   자동 순위 대신 요청한 focus로 세션을 만들고 바꾸지 않는다. Recovery, swim overlap, `--avoid`, progression,
   UNKNOWN/data-quality 안내는 그대로 적용. 요청 focus의 어제 primary set ≥ 6이면 reduce. `shoulders`는 primary
   anterior/lateral/posterior deltoid 종목만. JSON `focus_source`(`auto`/`user`)와 `auto_focus`.
-- (미커밋, branch `feature/recommendation-hardening`, 아래 Pending merge) Recommendation Hardening v1: focus 안 muscle
+- (commit `5dd2af7`, branch `feature/recommendation-hardening`, main 미통합, 아래 Pending merge) Recommendation Hardening v1: focus 안 muscle
   balance(미커버 primary muscle 우선, 한 muscle 3종목 금지, heavy hinge(`DEADLIFT` category) 세션당 1개), 1 key + 2 accessory + 1 isolation 구조로 40분 목표,
   `focus_coverage`와 시간 부족분 이유 보고(채우지 않음), low-confidence 부하 범위/확인 안내, `no_rule` label 경고
   (category 힌트는 표시 전용), recovery D-1/D-2 lookback(최대 hold), `data_freshness`와 stale/partial notice,
@@ -114,8 +114,7 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 ## Pending merge
 
 - Paseo worktree `recommendation-hardening`(branch `feature/recommendation-hardening`, base main = origin/main
-  `8b259e7`): Recommendation Hardening v1 구현·테스트·production read-only 검증 완료, **미커밋**(사용자가 audit/규칙/
-  결과 확인 후 commit 승인 예정). Merge/push 없음.
+  `8b259e7`): Recommendation Hardening v1을 commit `5dd2af7`(branch `feature/recommendation-hardening`, parent `8b259e7`), 구현·테스트·production read-only 검증 완료. main merge/push 안 함 — main과 origin/main은 `8b259e7` 그대로. Merge/push는 별도 승인 필요.
 - Paseo worktree `taxonomy-coverage`(branch `feature/taxonomy-coverage`, base `8b259e7`): taxonomy rule 7개 추가.
   사용자 승인(2026-10-01)으로 commit. merge/rebase/push 없음(별도 승인 필요).
 - 사용자 지정 focus override(`--focus`)는 `8b259e7`로 main/origin에 포함됐다(2026-10-01 `git branch -vv` 확인).
@@ -166,7 +165,7 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 - Fingerprint(`C:\temp\muscle50-evidence-20261001-coverage\before.json`/`after.json`/`final.json`/`precommit.json`): DB/WAL sha256/size/mtime,
   28 table digest, RAW 954 files 동일.
 
-2026-10-01 Recommendation Hardening v1(worktree `recommendation-hardening`, base `8b259e7`, 미커밋):
+2026-10-01 Recommendation Hardening v1(worktree `recommendation-hardening`, commit `5dd2af7`, parent `8b259e7`, main 미통합/미push):
 
 - Gates: `uv run --extra dev pytest` 555 passed, `ruff check .`, `mypy src tests`(97 files), `git diff --check` 통과.
 - Production read-only: 8개 실행 exit 0, JSON 재실행 byte-identical, text ASCII. 작업 중 다른 프로세스의 `garmin
@@ -382,7 +381,7 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
   2026-10-01 `LATERAL_RAISE/ONE_ARM_CABLE_LATERAL_RAISE` 6 kg → 8.5 kg(약 42%). Taxonomy coverage 작업 범위 밖.
 - `PLYO/BOX_JUMP`(1 set, 자동 인식 37.5%)는 의도적으로 rule 없음(사용자 결정 2026-10-01; plyometric은 v1 범위
   밖). 유일한 non-UNKNOWN ACTIVE `no_rule` label.
-- (Hardening v1에서 수정, 미커밋) Recommendation swim history가 D-27~D로 strength(D-28~D-1)보다 하루 짧았다. 이제
+- (Hardening v1 `5dd2af7`에서 수정, main 미통합) Recommendation swim history가 D-27~D로 strength(D-28~D-1)보다 하루 짧았다. 이제
   D-28~D. 2026-10-01에는 09-03 swim이 다시 포함되어 best freestyle pace baseline이 200 m 2:22/100 m에서 550 m
   1:53/100 m(09-03 lap 2)로 바뀐다(이전 기록의 "영향 없음"은 연속 거리만 본 판단이었다).
 - `--focus shoulders`는 여전히 얇다: posterior deltoid primary rule/label이 없고, 2026-10-01 현재 28일 안의 매핑된
