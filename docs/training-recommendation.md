@@ -157,9 +157,25 @@ Focus region에 28일 내 익숙한 종목이 없으면 다음 region으로 넘�
   `no_familiar_history`, `excluded_after_hard_swim`, `not_selected`.
 - 추정 시간 + 5분 < 목표면 reason 한 줄: 몇 분/몇 종목인지, 빠진 component와 이유, 고려했지만 넣지 않은 익숙한
   종목과 이유(이미 다룬 muscle이고 1 session뿐 / 이미 2종목 / 세션 크기 한도 / 강한 swim 후 overhead press), 다른
-  익숙한 종목이 없음, recovery reduce, 강한 swim set 감소. 끝은 항상 "nothing was added to fill the time".
-  History 원인이 있으면 "history is limited:"로 시작한다. 4종목을 다 채웠는데 짧은 경우(reduce)는 종목 목록 없이
-  set 감소만 원인으로 적는다.
+  익숙한 종목이 없음, reduce의 set 감소(원인별 표기, 아래), 강한 swim set 감소. 끝은 항상 "nothing was added to fill
+  the time". History 원인이 있으면 "history is limited:"로 시작한다. 4종목을 다 채웠는데 짧은 경우(reduce)는 종목 목록
+  없이 set 감소만 원인으로 적는다.
+
+### 조정 원인 표기 (통합 수정, 2026-10-01)
+
+세션 level(`adjustment_level`)은 recovery level과 48 h rest rule(요청 focus의 어제 primary set ≥ 6, 또는 자동 경로에서
+모든 region이 어제 heavy) 중 강한 쪽이다. 결정은 그대로이고 설명만 원인을 나눈다.
+
+- Recovery 줄(`adjustments` 첫 줄)은 recovery 자신의 level로만 쓴다(`recovery hold: ...`). Recovery가 normal이면
+  recovery 줄이 없고(row가 없으면 "no recovery data ... no recovery adjustment"), rest rule 줄이 reduce를 설명한다.
+- Set 감소: recovery만 → `recovery reduce: one set fewer`(기존 문구), rest rule만 → `48 h rest rule reduce: one set
+  fewer`, 둘 다 reduce → `recovery reduce and 48 h rest rule reduce: one set fewer`. 시간 부족분 reason도 같은 원인.
+- Progression "no load or rep increase": rest rule이 관여하면 증량을 막는 원인을 모두 적는다(예 recovery hold +
+  rest rule → `recovery hold, 48 h rest rule reduce: ...`). Recovery만이면 기존 `recovery <level>: ...`.
+- Text heading: 두 level이 같으면 `== Recovery adjustment: <level> ==`(기존과 동일), 다르면
+  `== Recovery adjustment: hold; session adjustment: reduce ==`.
+- 예: 2026-10-01 `--focus pull`은 recovery hold(09-30 lookback carry)이고 09-30 pull 15 set 때문에 rest rule로 reduce다.
+  이전 출력은 이것을 "recovery reduce"로 표기했다.
 
 ### Progression (double progression)
 
@@ -266,9 +282,12 @@ UNKNOWN과 별개다. 알려진 Garmin label인데 taxonomy rule이 없으면 �
   (`category_hint_muscle`/`category_hint_region`, region별 `no_rule_hint_sets_last_7_days/previous_day`). 힌트는
   set 수, 순위, eligibility, 48 h rest 판단에 절대 쓰지 않는다(매핑이 아님). Category rule도 없으면(`PLYO/BOX_JUMP`)
   "region unknown".
-- 요청 focus의 어제 no-rule 힌트 set이 있으면 "48 h rest 판단이 놓쳤을 수 있음" 조정 줄(예: 2026-09-30 pull 15 set이
-  모두 no-rule이라 10-01 pull은 "yesterday 0"으로 보인다).
-- Rule은 이 기능에서 자동으로 만들지 않는다. 제안 목록과 근거는 `docs/HANDOFF.md`.
+- 요청 focus의 어제 no-rule 힌트 set이 있으면 "48 h rest 판단이 놓쳤을 수 있음" 조정 줄(Hardening v1 작성 당시 예:
+  2026-09-30 pull 15 set이 모두 no-rule이라 10-01 pull이 "yesterday 0"으로 보였다. Taxonomy coverage `aba8cfe` 이후 그
+  label들은 매핑되어 10-01 pull은 어제 15 set → 48 h rest rule reduce다).
+- Rule은 이 기능에서 자동으로 만들지 않는다. Hardening v1이 제안한 label 6개와 보류했던 `TRICEPS_EXTENSION/
+  LYING_TRICEPS_EXTENSION_TO_CLOSE_GRIP_BENCH_PRESS`는 Taxonomy coverage `aba8cfe`에서 rule이 추가됐다
+  (`docs/exercise-taxonomy.md`). 2026-10-01 28일 기준 남은 non-UNKNOWN no-rule label은 `PLYO/BOX_JUMP`뿐이다.
 
 ## 데이터 신선도 (Hardening v1)
 
@@ -319,7 +338,30 @@ anchor = max(설정 baseline 1000 m, 28일 최장 연속 구간). Effort = 최�
 Strength 맥락: 어제 shoulder/back/triceps primary set ≥ 8이면 intervals → easy. 오늘 focus가 push/pull이면
 "no butterfly/paddles, 몇 시간 간격" caution, legs면 "kick/fins easy".
 
+## Production read-only 검증 — Hardening v1 + Taxonomy coverage 통합 (2026-10-01)
+
+Evidence(repo 밖): `C:\temp\muscle50-evidence-20261001-integration-hardening\`(`compare62.py`, `c62_reference.json`
+(승인 reference `272761a`), `c62_combined_prefix.json`(cherry-pick 직후 `38a23ae`), `c62_integration.json`,
+`analyze62.py/txt`, `analyze_fix.py/txt`, `pre_fix_*`/`post_fix_*` text/JSON, `check0922.py/txt`, `fingerprint.py`,
+`before.json`/`after.json`). `garmin refresh`는 실행하지 않았다.
+
+- 62일(08-01~10-01) × (auto + focus 4) 310 run, reference 대비: 자동 focus 62/62 동일, heavy hinge 2개 plan 0, recovery
+  level/carry 변경 0. 결정 차이 26 run은 모두 Taxonomy coverage로 세지는 label 효과다: shoulders/push의
+  `LATERAL_RAISE/-` → `LATERAL_RAISE/ONE_ARM_CABLE_LATERAL_RAISE`, `SHOULDER_PRESS/SEATED_BARBELL_SHOULDER_PRESS`
+  등 추가(shoulders 23 → 32분), 09-24 auto의 lateral raise 교체, 10-01 pull hold → reduce(09-30 15 set), 09-23/09-30/
+  10-01 auto·legs swim에 "no butterfly or paddles" caution 추가(session type/main set 불변).
+- 한 primary muscle 3종목: 자동 plan 0. 사용자 지정 legs 09-17/09-18(SQUAT, LUNGE, LEG_EXTENSIONS = quad 3)은 reference와
+  동일하며 glutes에 익숙한 후보가 없어 규칙상 허용된다.
+- 원인 표기 수정은 `38a23ae` 대비 결정 차이 0, text 차이는 rest rule이 reduce를 만든 사용자 지정 focus 37 run의 원인
+  문구뿐이다(자동 run 0). 수정 후 recovery가 reduce가 아닌데 "recovery reduce"를 쓰는 run은 0(reference 30).
+- 10-01: auto legs(LUNGE/BARBELL_DEADLIFT/SQUAT), shoulders = SEATED_BARBELL 40 kg + DUMBBELL 16 kg + ONE_ARM_CABLE 6 kg
+  약 32분, posterior_deltoid `no_taxonomy_rule`(대체 없음), push = BENCH/SEATED_BARBELL/CLOSE_GRIP/ONE_ARM_CABLE,
+  pull = ROW/LAT_PULLDOWN/PULL_UP/CURL 2 set씩 29분(48 h rest rule reduce, recovery hold). 09-22 `24451010022`의
+  shoulder 17 set(8 + 6 + 3)은 저장 label 그대로 매핑된다.
+
 ## Production read-only 검증 — Recommendation Hardening v1 (2026-10-01)
+
+(Taxonomy coverage 이전 tree의 기록. 통합 tree 결과는 위 절.)
 
 Evidence(repo 밖): `C:\temp\muscle50-evidence-20261001-hardening\`(`audit_*.py/txt`, `calibrate.py`, `compare.py/txt`,
 `calib_old.json`(HEAD `8b259e7`)/`calib_new.json`, `rec_<case>.txt/json/_rerun.json`, `preview_rules.py`,
@@ -328,7 +370,7 @@ Evidence(repo 밖): `C:\temp\muscle50-evidence-20261001-hardening\`(`audit_*.py/
 - 작업 중 production DB가 **다른 프로세스의 `garmin refresh` 6회**(2026-10-01 16:12-16:23 KST, 09-17/09-18/09-21/09-22×2/
   09-23 activity)로 바뀌었다. 09-22 `24451010022`는 Garmin Connect에서 종목이 지정되어 `SHOULDER_PRESS/
   SEATED_BARBELL_SHOULDER_PRESS` 8, `SHOULDER_PRESS/DUMBBELL_SHOULDER_PRESS` 6, `LATERAL_RAISE/
-  ONE_ARM_CABLE_LATERAL_RAISE` 3 set이 됐다(모두 no-rule). 이 작업은 refresh를 실행하지 않았다(reader는 `mode=ro`).
+  ONE_ARM_CABLE_LATERAL_RAISE` 3 set이 됐다(당시 모두 no-rule; `aba8cfe`에서 rule 추가). 이 작업은 refresh를 실행하지 않았다(reader는 `mode=ro`).
   최종 검증은 그 이후 상태에서 before/after fingerprint 동일(DB sha/size/mtime, `-wal` 0 bytes, 28 table, RAW 954)로
   다시 했다.
 - 8개 실행(10-01 auto/`--focus shoulders`/`--focus legs`, 09-28 `--focus legs`, 09-18, 09-21, 09-25, 09-13) text/JSON
@@ -398,8 +440,8 @@ Bias 확인(counterfactual, 2026-08-01~10-01 62일 매일 실행, `distribution.
   FACE_PULL/REVERSE 없음, UNKNOWN 276 set은 display name도 "Unknown"). Lateral raise 옆 UNKNOWN set(09-17 seq 35,
   09-22 seq 33 — 09-22는 이후 relabel)은 rear-delt일 수도 있지만 추측하지 않는다. Garmin Connect에서 지정해도
   posterior-primary rule을 추가해야 세진다. 그래서 shoulders 세션은 posterior 없이 짧을 수 있고 그렇게 보고한다.
-- Garmin Connect에서 새로 지정한 구체적 label(예: `SHOULDER_PRESS/SEATED_BARBELL_SHOULDER_PRESS`)은 rule 추가 전까지
-  no-rule로 빠져 그 muscle이 과소평가된다(notice로 표시).
+- Garmin Connect에서 새로 지정한 구체적 label은 rule 추가 전까지 no-rule로 빠져 그 muscle이 과소평가된다(notice로
+  표시). 2026-10-01 지정 label 7개는 `aba8cfe`에서 rule이 추가됐고, 남은 no-rule은 `PLYO/BOX_JUMP`(의도적)뿐이다.
 - Recovery lookback은 저장 field만 본다(`validSleep` 등 RAW 전용 field는 미사용). D-1 하나만 hold 수준이면 carry 안 함.
 - 2.5 kg 증량 단위와 시간 추정(3분/set)은 고정 상수다.
 - Focus 정렬은 매일 독립적으로 계산된다(사용자가 실제로 무엇을 했는지만 반영; 이전 추천을 기억하지 않음).

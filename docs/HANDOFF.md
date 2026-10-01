@@ -2,7 +2,58 @@
 
 Last updated: 2026-10-01
 
-## Current task: Recommendation Hardening v1 (2026-10-01)
+## Current task: Recommendation Hardening v1 integration on local main (2026-10-01)
+
+Paseo worktree `integration-recommendation-hardening`(branch `integration/recommendation-hardening`, base local main
+`aba8cfe` = Taxonomy coverage; origin/main `8b259e7`). **통합 후보 commit 완료. main merge/fast-forward/push 안 함.**
+원본 `feature/recommendation-hardening`(`272761a`)과 `feature/taxonomy-coverage`(`aba8cfe`)는 건드리지 않았다.
+
+### What was attempted / completed
+
+1. `5dd2af7`, `272761a`를 순서대로 cherry-pick(이 branch에서 `5fbdd56`, `38a23ae`). 충돌은 `docs/CURRENT_STATE.md`, `docs/HANDOFF.md`뿐이었고 두 기능의
+   상태/이력을 모두 남겨 해소했다(Hardening = 그 당시 current task, Taxonomy coverage = previous task).
+2. 통합 수정 commit 1개:
+   - 테스트 3개(`test_no_rule_sets_are_warned_about_but_never_counted`, `test_requested_focus_warns_when_no_rule_work_
+     yesterday_may_hide_the_rest_rule`, `test_focus_names_no_rule_work_that_its_category_puts_in_the_focus`)가 쓰던 실제
+     Garmin label(`PULL_UP/WIDE_GRIP_LAT_PULLDOWN`, `ROW/BENT_OVER_ROW_WITH_BARBELL`)이 `aba8cfe`로 매핑되어 실패 →
+     test-only 미매핑 label `PULL_UP/TEST_ONLY_UNMAPPED_PULLDOWN`, `ROW/TEST_ONLY_UNMAPPED_ROW`(category rule이 있어
+     힌트가 유지됨)로 교체. Taxonomy rule 변경 없음.
+   - 조정 원인 표기 버그 수정(`strength_recommendation.py`, `terminal.py`): 48 h rest rule이 올린 reduce를 "recovery
+     reduce"로 쓰던 문제. Recovery 줄은 recovery 자신의 level, set 감소/부족분/progression 문구는 실제 원인
+     (`48 h rest rule reduce`, 둘 다면 둘 다), heading은 두 level이 다를 때만 `Recovery adjustment: hold; session
+     adjustment: reduce`. 결정(level, set, load, focus, recovery, swim)은 불변. 규칙은
+     `docs/training-recommendation.md` "조정 원인 표기".
+   - 회귀 테스트 5개(요청 focus에서 recovery hold/normal/reduce + rest rule, 자동 경로 "every region" reduce, CLI heading).
+   - Stale 문서: no-rule label 목록, shoulders 23분, 10-01 pull "yesterday 0" 예시, 제안 rule 상태.
+
+### Files changed (통합 수정 commit)
+
+`src/muscle50/domain/strength_recommendation.py`, `src/muscle50/presentation/terminal.py`,
+`tests/test_strength_recommendation.py`, `tests/test_recommend_cli.py`, `docs/training-recommendation.md`,
+`docs/CURRENT_STATE.md`, 이 파일.
+
+### Checks run
+
+- `uv run --extra dev pytest` 574 passed, `ruff check .`, `mypy src tests`(97 files), `git diff --check` 통과.
+- 새 strength 회귀 테스트 3개(요청 focus + rest rule)는 수정 전 코드에서 실패함을 확인. 자동 경로 "every region"
+  reduce는 62일 production에서 발생하지 않아 단위 테스트로만 확인된다.
+- Production read-only(`garmin refresh` 미실행), evidence `C:\temp\muscle50-evidence-20261001-integration-hardening\`:
+  10-01 auto/shoulders/push/pull/legs, 09-22 exit 0, JSON 재실행 byte-identical, ASCII. 수정 전/후 출력 차이는 10-01
+  pull의 원인 문구뿐. 62일 × 5 = 310 run 비교 결과는 `docs/training-recommendation.md` 통합 검증 절과
+  `CURRENT_STATE.md` Verification. Fingerprint before = after(DB/WAL, 28 table, RAW 954).
+
+### Known failures or risks
+
+- 사용자 지정 legs 09-17/09-18은 quad 3종목(reference와 동일, glutes 후보 없음으로 규칙상 허용). 자동 plan은 0.
+- Lateral raise +2.5 kg step(6 → 8.5 kg) 미수정(progression 규칙 불변).
+- 원인 표기 수정으로 rest rule reduce인 사용자 지정 focus 37 run(62일 중)의 text가 바뀐다(결정 불변).
+
+### Recommended next action
+
+1. 사용자: 이 branch로 local main fast-forward 여부 결정(main `aba8cfe`은 이 branch의 ancestor). Push는 별도 승인.
+2. 이후 isolation 증량 step(+2.5 kg) 검토.
+
+## Previous task: Recommendation Hardening v1 (2026-10-01)
 
 Paseo worktree `recommendation-hardening`(branch `feature/recommendation-hardening`, base main = origin/main `8b259e7`).
 **사용자 승인으로 commit `5dd2af7`(branch `feature/recommendation-hardening`, parent `8b259e7`), 구현·테스트·production read-only 검증 완료. main merge/push 안 함 — main과 origin/main은 `8b259e7` 그대로.** Final gates: pytest 555 passed, ruff clean, mypy clean,
@@ -30,6 +81,9 @@ Paseo worktree `recommendation-hardening`(branch `feature/recommendation-hardeni
    Data freshness 절, low-confidence `@ ~X kg (low confidence: recorded A-B kg; ...)`.
 
 ### Proposed taxonomy rules (구현하지 않음, 사용자 결정 필요)
+
+(이후 상태: 아래 6개와 보류한 `LYING_TRICEPS_EXTENSION_TO_CLOSE_GRIP_BENCH_PRESS`는 Taxonomy coverage `aba8cfe`에서 rule이
+추가됐다. `PLYO/BOX_JUMP`는 의도적으로 rule 없음.)
 
 같은 category의 기존 rule을 그대로 복제하는 mirror(모두 Garmin Connect confirmed label, probability 100):
 

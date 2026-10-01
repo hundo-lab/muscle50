@@ -135,6 +135,21 @@ def test_recommend_reports_coverage_gap_and_missing_recovery_row(
     assert "Recovery adjustment: normal" in output
 
 
+def test_recommend_heading_separates_recovery_from_a_rest_rule_reduce(
+    home: Path, database: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _save(database, _bench("8004", "2026-03-16"))  # 6 chest sets on 2026-03-16 with 8003
+    _save_recovery(database, "2026-03-17", training_readiness_level="LOW")  # recovery hold
+
+    assert main(["recommend", "--date", "2026-03-17", "--focus", "push"]) == 0
+
+    output = capsys.readouterr().out
+    assert "== Recovery adjustment: hold; session adjustment: reduce ==" in output
+    assert "-> recovery hold: " in output
+    assert "48 h rest rule reduce: one set fewer" in output
+    assert "recovery reduce" not in output
+
+
 def test_recommend_avoid_option(home: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["recommend", "--date", "2026-03-16", "--avoid", "chest", "--json"]) == 0
 

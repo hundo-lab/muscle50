@@ -16,6 +16,7 @@ from muscle50.domain.strength_recommendation import (
     REPS_BELOW_TOP_AFTER_LOAD_INCREASE,
     ExerciseLabel,
     ExerciseOccurrence,
+    ExerciseRole,
     PerformedSet,
     ProgressionAction,
     StrengthFocus,
@@ -904,15 +905,21 @@ def test_consistent_load_has_no_guidance() -> None:
     assert target.recorded_load_range_kg == (50.0, 50.0)
 
 
+# Test-only names: real Garmin categories that have a category rule (so the display hint
+# resolves), with exercise names that no taxonomy rule will ever cover.
+NO_RULE_PULLDOWN = ExerciseLabel("PULL_UP", "TEST_ONLY_UNMAPPED_PULLDOWN")
+NO_RULE_ROW = ExerciseLabel("ROW", "TEST_ONLY_UNMAPPED_ROW")
+
+
 def _no_rule_history() -> list[NormalizedActivity]:
-    """2026-09-30 shape: a confirmed pull session whose labels have no taxonomy rule yet."""
+    """2026-09-30 shape: a confirmed pull session whose labels have no taxonomy rule."""
     history = _push_pull_legs_history()
     history.append(
         _strength(
             "nr1",
             _days_ago(1),
-            _sets("PULL_UP", "WIDE_GRIP_LAT_PULLDOWN", (12, 30.0), (10, 30.0), (20, 20.0), (17, 20.0))
-            + _sets("ROW", "BENT_OVER_ROW_WITH_BARBELL", (12, 50.0), (10, 50.0), (8, 60.0), start=4)
+            _sets(NO_RULE_PULLDOWN.category, NO_RULE_PULLDOWN.name, (12, 30.0), (10, 30.0), (20, 20.0), (17, 20.0))
+            + _sets(NO_RULE_ROW.category, NO_RULE_ROW.name, (12, 50.0), (10, 50.0), (8, 60.0), start=4)
             + _sets("PLYO", "BOX_JUMP", (3, 10.0), start=7),
         )
     )
@@ -929,9 +936,9 @@ def test_no_rule_sets_are_warned_about_but_never_counted() -> None:
     assert any("may be underestimated" in text for text in pull.notes)
     assert plan.focus == baseline.focus
     notices = {item.label: item for item in plan.no_rule_notices}
-    assert set(notices) == {"PULL_UP/WIDE_GRIP_LAT_PULLDOWN", "ROW/BENT_OVER_ROW_WITH_BARBELL", "PLYO/BOX_JUMP"}
-    assert notices["PULL_UP/WIDE_GRIP_LAT_PULLDOWN"].category_hint_region == "pull"
-    assert notices["PULL_UP/WIDE_GRIP_LAT_PULLDOWN"].set_count == 4
+    assert set(notices) == {NO_RULE_PULLDOWN.text, NO_RULE_ROW.text, "PLYO/BOX_JUMP"}
+    assert notices[NO_RULE_PULLDOWN.text].category_hint_region == "pull"
+    assert notices[NO_RULE_PULLDOWN.text].set_count == 4
     assert notices["PLYO/BOX_JUMP"].category_hint_muscle is None  # no category rule: region unknown
     assert notices["PLYO/BOX_JUMP"].category_hint_region is None
     assert plan.no_rule_active_sets_last_7_days == 8
@@ -961,6 +968,81 @@ def test_carried_recovery_hold_names_its_source_dates() -> None:
     assert "carried from earlier mornings" in plan.adjustments[0]
     assert _days_ago(1).isoformat() in plan.adjustments[0]
     assert all(item.progression.action is not ProgressionAction.INCREASE_LOAD for item in plan.exercises)
+
+
+def _heavy_pull_yesterday_history() -> list[NormalizedActivity]:
+    """2026-10-01 pull shape: 6 mapped pull sets yesterday, so a requested pull triggers the ~48 h rest rule."""
+    return _push_pull_legs_history() + [
+        _strength(
+            "u3", _days_ago(1), _sets("ROW", None, (10, 40.0), (10, 40.0), (10, 40.0), (10, 40.0), (9, 40.0), (9, 40.0))
+        )
+    ]
+
+
+def _all_texts(plan: StrengthRecommendation) -> list[str]:
+    return [
+        *plan.reasons,
+        *plan.adjustments,
+        *(text for item in plan.exercises for text in item.adjustments),
+        *(text for item in plan.exercises for text in item.progression.basis),
+    ]
+
+
+def test_rest_rule_reduce_is_not_attributed_to_recovery_hold() -> None:
+    hold = (recovery(AS_OF.isoformat(), training_readiness_level="LOW"),)
+
+    plan = _recommend(_heavy_pull_yesterday_history(), recoveries=hold, focus=StrengthFocus.PULL)
+
+    assert assess_recovery(AS_OF, hold).level is AdjustmentLevel.HOLD
+    assert plan.adjustment_level == "reduce"  # decision unchanged: the rest rule still reduces
+    assert all(item.sets == 2 for item in plan.exercises if item.role is ExerciseRole.KEY)
+    assert not any("recovery reduce" in text for text in _all_texts(plan))
+    assert plan.adjustments[0].startswith("recovery hold: ")
+    assert any(text.startswith("requested pull had 6 primary sets yesterday") for text in plan.adjustments)
+    assert all("48 h rest rule reduce: one set fewer" in item.adjustments for item in plan.exercises)
+    assert any(
+        text.startswith("recovery hold, 48 h rest rule reduce: no load or rep increase")
+        for item in plan.exercises
+        for text in item.progression.basis
+    )
+
+
+def test_rest_rule_reduce_with_normal_recovery_reports_no_recovery_adjustment() -> None:
+    plan = _recommend(_heavy_pull_yesterday_history(), focus=StrengthFocus.PULL)
+
+    assert plan.adjustment_level == "reduce"
+    assert not any(text.startswith("recovery ") for text in _all_texts(plan))
+    assert all("48 h rest rule reduce: one set fewer" in item.adjustments for item in plan.exercises)
+
+
+def test_automatic_every_region_rested_reduce_is_not_attributed_to_recovery() -> None:
+    six = ((10, 40.0),) * 6
+    history = _push_pull_legs_history() + [
+        _strength(
+            "all",
+            _days_ago(1),
+            _sets("BENCH_PRESS", None, *six) + _sets("ROW", None, *six, start=6) + _sets("SQUAT", None, *six, start=12),
+        )
+    ]
+
+    plan = _recommend(history)
+
+    assert plan.adjustment_level == "reduce"
+    assert "every region was trained substantially yesterday: reduced session" in plan.adjustments
+    assert not any(text.startswith("recovery ") for text in _all_texts(plan))
+    assert all("48 h rest rule reduce: one set fewer" in item.adjustments for item in plan.exercises)
+
+
+def test_recovery_reduce_and_rest_rule_name_both_causes() -> None:
+    poor = (recovery(AS_OF.isoformat(), training_readiness_level="POOR"),)
+
+    plan = _recommend(_heavy_pull_yesterday_history(), recoveries=poor, focus=StrengthFocus.PULL)
+
+    assert plan.adjustment_level == "reduce"
+    assert plan.adjustments[0].startswith("recovery reduce: ")
+    assert all(
+        "recovery reduce and 48 h rest rule reduce: one set fewer" in item.adjustments for item in plan.exercises
+    )
 
 
 def test_uncovered_muscles_win_the_last_slots_over_a_second_chest_compound() -> None:
@@ -1004,5 +1086,5 @@ def test_focus_names_no_rule_work_that_its_category_puts_in_the_focus() -> None:
 
     line = next(text for text in plan.reasons if text.startswith("pull counts may be underestimated"))
     assert "7 sets in the last 28 days" in line
-    assert "PULL_UP/WIDE_GRIP_LAT_PULLDOWN" in line and "ROW/BENT_OVER_ROW_WITH_BARBELL" in line
+    assert NO_RULE_PULLDOWN.text in line and NO_RULE_ROW.text in line
     assert "PLYO/BOX_JUMP" not in line

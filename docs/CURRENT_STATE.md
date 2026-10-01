@@ -105,18 +105,25 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   자동 순위 대신 요청한 focus로 세션을 만들고 바꾸지 않는다. Recovery, swim overlap, `--avoid`, progression,
   UNKNOWN/data-quality 안내는 그대로 적용. 요청 focus의 어제 primary set ≥ 6이면 reduce. `shoulders`는 primary
   anterior/lateral/posterior deltoid 종목만. JSON `focus_source`(`auto`/`user`)와 `auto_focus`.
-- (commit `5dd2af7`, branch `feature/recommendation-hardening`, main 미통합, 아래 Pending merge) Recommendation Hardening v1: focus 안 muscle
+- (branch `integration/recommendation-hardening` = local main `aba8cfe` + `5dd2af7`/`272761a` cherry-pick + 통합 수정, main 미통합,
+  아래 Pending merge) Recommendation Hardening v1: focus 안 muscle
   balance(미커버 primary muscle 우선, 한 muscle 3종목 금지, heavy hinge(`DEADLIFT` category) 세션당 1개), 1 key + 2 accessory + 1 isolation 구조로 40분 목표,
   `focus_coverage`와 시간 부족분 이유 보고(채우지 않음), low-confidence 부하 범위/확인 안내, `no_rule` label 경고
   (category 힌트는 표시 전용), recovery D-1/D-2 lookback(최대 hold), `data_freshness`와 stale/partial notice,
   swim history D-28~D 정렬, 10일 이상 swim 공백 후 `return_easy` 재진입. 상세는 `docs/training-recommendation.md`.
+  통합 수정: 조정 원인 표기 분리 — 48 h rest rule이 올린 reduce는 "48 h rest rule reduce"로, recovery는 자기 level로만
+  표기(결정 불변). Text heading은 두 level이 다를 때 `Recovery adjustment: hold; session adjustment: reduce`.
 
 ## Pending merge
 
-- Paseo worktree `recommendation-hardening`(branch `feature/recommendation-hardening`, base main = origin/main
-  `8b259e7`): Recommendation Hardening v1을 commit `5dd2af7`(branch `feature/recommendation-hardening`, parent `8b259e7`), 구현·테스트·production read-only 검증 완료. main merge/push 안 함 — main과 origin/main은 `8b259e7` 그대로. Merge/push는 별도 승인 필요.
-- Paseo worktree `taxonomy-coverage`(branch `feature/taxonomy-coverage`, base `8b259e7`): taxonomy rule 7개 추가.
-  사용자 승인(2026-10-01)으로 commit. merge/rebase/push 없음(별도 승인 필요).
+- Paseo worktree `integration-recommendation-hardening`(branch `integration/recommendation-hardening`, base local main
+  `aba8cfe`): Recommendation Hardening v1 `5dd2af7`/`272761a`를 cherry-pick(docs 충돌만 해소; 이 branch에서
+  `5dd2af7` → `5fbdd56`, `272761a` → `38a23ae`)하고 통합 수정 commit 1개
+  (Taxonomy coverage로 매핑된 label을 쓰던 테스트 3개를 test-only 미매핑 label로 교체, stale 문서, 조정 원인 표기 수정)를
+  더한 후보. Gates·production read-only 검증 완료. local main fast-forward 가능(main은 이 branch의 ancestor), merge/push는
+  별도 승인 필요. 원본 `feature/recommendation-hardening`(`272761a`)은 승인된 reference로 그대로 둔다.
+- Taxonomy coverage(`aba8cfe`, branch `feature/taxonomy-coverage`)는 local main에 포함됐다. origin/main은 `8b259e7`
+  그대로(push 안 함).
 - 사용자 지정 focus override(`--focus`)는 `8b259e7`로 main/origin에 포함됐다(2026-10-01 `git branch -vv` 확인).
 - Training Recommendation v1은 `7740d7d`로 main/origin에 포함됐다(push 완료).
 - Exercise Taxonomy v1은 `a92404b`로 main/origin에 포함됐다.
@@ -153,6 +160,20 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 - `tests/test_refresh_activity.py`, `tests/test_swim_normalization.py`, `tests/test_sync_recovery.py`
 
 ## Verification
+
+2026-10-01 Recommendation Hardening v1 통합(worktree `integration-recommendation-hardening`, base local main `aba8cfe`):
+
+- Gates: `uv run --extra dev pytest` 574 passed(538 + hardening 31 + 통합 회귀 5), `ruff check .`, `mypy src tests`
+  (97 files), `git diff --check` 통과.
+- Production read-only(`garmin refresh` 미실행): 10-01 auto/`--focus shoulders|push|pull|legs`, 09-22 text/JSON exit 0,
+  JSON 재실행 byte-identical, text ASCII. 62일(08-01~10-01) × (auto + focus 4) 310 run을 승인 reference(`272761a`
+  src)와 비교: 자동 focus 62/62 동일, heavy hinge 2개 plan 0, 자동 plan 중 한 primary muscle 3종목 0(사용자 지정 legs
+  09-17/09-18의 quad 3종목은 reference와 동일 — glutes에 익숙한 후보가 없어 규칙상 허용), recovery level/carry 변경 0.
+  결정 차이 26 run은 모두 Taxonomy coverage 데이터 효과(shoulder/lateral raise label 교체, 10-01 pull hold → reduce,
+  09-23/09-30/10-01 auto·legs swim caution 추가; swim session type/main set 변경 0). 원인 표기 수정은 pre-fix 통합
+  tree(`38a23ae`) 대비 결정 차이 0, text 차이는 사용자 지정 focus 37 run의 원인 문구뿐(자동 run 0).
+- Fingerprint(`C:\temp\muscle50-evidence-20261001-integration-hardening\before.json`/`after.json`): DB/WAL sha256/size/
+  mtime, 28 table digest, RAW 954 files 동일(coverage `final.json`과도 동일).
 
 2026-10-01 Taxonomy coverage update(worktree `taxonomy-coverage`, base `8b259e7`, feature branch commit):
 
@@ -377,22 +398,22 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
 
 ## Known issues
 
-- Recommendation hardening 후보(미수정): double progression의 고정 +2.5 kg step이 가벼운 isolation에 과하다.
-  2026-10-01 `LATERAL_RAISE/ONE_ARM_CABLE_LATERAL_RAISE` 6 kg → 8.5 kg(약 42%). Taxonomy coverage 작업 범위 밖.
+- Recommendation 후보(미수정): double progression의 고정 +2.5 kg step이 가벼운 isolation에 과하다.
+  `LATERAL_RAISE/ONE_ARM_CABLE_LATERAL_RAISE` 6 kg → 8.5 kg(약 42%; 통합 tree 62일 중 09-24 auto와 09-24/26/28 push·shoulders).
+  Hardening v1은 progression 규칙을 바꾸지 않았다.
 - `PLYO/BOX_JUMP`(1 set, 자동 인식 37.5%)는 의도적으로 rule 없음(사용자 결정 2026-10-01; plyometric은 v1 범위
   밖). 유일한 non-UNKNOWN ACTIVE `no_rule` label.
-- (Hardening v1 `5dd2af7`에서 수정, main 미통합) Recommendation swim history가 D-27~D로 strength(D-28~D-1)보다 하루 짧았다. 이제
+- (Hardening v1 `5dd2af7`에서 수정, integration branch에 포함, main 미통합) Recommendation swim history가 D-27~D로 strength(D-28~D-1)보다 하루 짧았다. 이제
   D-28~D. 2026-10-01에는 09-03 swim이 다시 포함되어 best freestyle pace baseline이 200 m 2:22/100 m에서 550 m
   1:53/100 m(09-03 lap 2)로 바뀐다(이전 기록의 "영향 없음"은 연속 거리만 본 판단이었다).
-- `--focus shoulders`는 여전히 얇다: posterior deltoid primary rule/label이 없고, 2026-10-01 현재 28일 안의 매핑된
-  shoulder 종목은 SHOULDER_PRESS/- 1 session(09-10), LATERAL_RAISE/- 1 session(09-17), SHRUG/UPRIGHT_ROW 1 set뿐이다.
-  09-22 실제 shoulder session(Connect에서 relabel된 SEATED_BARBELL/DUMBBELL_SHOULDER_PRESS, ONE_ARM_CABLE_LATERAL_RAISE)은
-  no-rule이라 세지 않는다. 출력은 23분, posterior 누락, 채우지 않음을 명시한다. 해결은 taxonomy rule 추가(사용자
-  결정, `docs/HANDOFF.md` 제안) 후.
-- No-rule label(2026-10-01, 28일): `PULL_UP/CLOSE_GRIP_LAT_PULLDOWN`, `PULL_UP/WIDE_GRIP_LAT_PULLDOWN`,
-  `ROW/BENT_OVER_ROW_WITH_BARBELL`(09-30, 15 set → pull "yesterday 0"), `TRICEPS_EXTENSION/
-  LYING_TRICEPS_EXTENSION_TO_CLOSE_GRIP_BENCH_PRESS`(09-29), 09-22 shoulder 3종, `PLYO/BOX_JUMP`(09-10). 추천은 경고만
-  하고 세지 않는다.
+- `--focus shoulders`는 posterior deltoid primary rule/label이 없어 여전히 짧다. Taxonomy coverage(`aba8cfe`) 이후
+  09-22 relabel 3종(SEATED_BARBELL/DUMBBELL_SHOULDER_PRESS, ONE_ARM_CABLE_LATERAL_RAISE, 17 set)이 매핑되어 통합
+  tree의 10-01 shoulders는 그 3종목 약 32분이다. Posterior는 `no_taxonomy_rule`로 누락을 명시하고 채우지 않는다.
+- No-rule label(2026-10-01, 28일, 통합 tree): `PLYO/BOX_JUMP`(09-10, 1 set)뿐. Hardening v1 작성 당시의 나머지 7개
+  (`PULL_UP/CLOSE_GRIP_LAT_PULLDOWN`, `PULL_UP/WIDE_GRIP_LAT_PULLDOWN`, `ROW/BENT_OVER_ROW_WITH_BARBELL`,
+  `TRICEPS_EXTENSION/LYING_TRICEPS_EXTENSION_TO_CLOSE_GRIP_BENCH_PRESS`, 09-22 shoulder 3종)는 `aba8cfe`에서 rule이
+  추가됐다. 그래서 10-01 pull은 09-30 15 set이 세져 48 h rest rule로 reduce된다(recovery 자체는 hold). 추천은 no-rule
+  label을 경고만 하고 세지 않는다.
 - Refresh는 매 실행마다 새 RAW capture를 append한다. "동일 payload면 같은 capture 재사용"이라는
   설계 의도는 실제 Garmin 응답에서는 성립하지 않는다 — `get_activity_details`가 의미상 동일한
   데이터를 호출마다 다른 column 순서로 돌려주고(`metricDescriptors`의 `metricsIndex` 배정이

@@ -51,6 +51,8 @@ NEGLECTED_AFTER_DAYS = 7
 MIN_PERSONAL_INTERVAL_DAYS = 2.0
 # Under recovery "reduce", regions trained within this many days yield to more rested ones.
 REDUCE_REST_DAYS = 2
+# Names a reduce that comes from yesterday's training load rather than from recovery data.
+REST_RULE_REDUCE = "48 h rest rule reduce"
 LOAD_INCREMENT_KG = 2.5
 # After a load increase the rep target restarts this far below the top of the range.
 REPS_BELOW_TOP_AFTER_LOAD_INCREASE = 4
@@ -488,7 +490,9 @@ def plan_progression(
     occurrences: Sequence[ExerciseOccurrence],
     rep_range: RepRange,
     level: AdjustmentLevel,
+    level_cause: str | None = None,
 ) -> ProgressionTarget:
+    """``level_cause`` names what set ``level``; it defaults to recovery."""
     summaries = [summarize_occurrence(item, rep_range) for item in occurrences]
     usable = [item for item in summaries if item.usable_set_count]
     recent = tuple(usable[-4:])
@@ -560,7 +564,7 @@ def plan_progression(
         )
     if level is not AdjustmentLevel.NORMAL and action in (ProgressionAction.INCREASE_LOAD, ProgressionAction.ADD_REPS):
         action, load, target_reps = _maintain(last, rep_range)
-        basis.append(f"recovery {level.value}: no load or rep increase; repeat the last work sets")
+        basis.append(f"{level_cause or f'recovery {level.value}'}: no load or rep increase; repeat the last work sets")
 
     trend = _trend_text(usable)
     if trend:
@@ -1001,6 +1005,7 @@ def build_strength_recommendation(
     reasons: list[str] = []
     adjustments: list[str] = []
     level = recovery.level
+    rest_reduced = False  # yesterday's training load (the ~48 h rest rule) reduced the session
     avoided_patterns = SWIM_AVOIDED_KEY_PATTERNS if strong_swim else frozenset()
     # Always computed: the decision without a request, evidence alongside one.
     auto_status, auto_plan, auto_notes, auto_skipped = _auto_selection(ranked, occurrences, avoided, avoided_patterns)
@@ -1009,6 +1014,7 @@ def build_strength_recommendation(
     if requested_focus is None:
         if not any(item.eligible for item in statuses):
             level = stronger(level, AdjustmentLevel.REDUCE)
+            rest_reduced = True
             adjustments.append("every region was trained substantially yesterday: reduced session")
         plan = auto_plan
         adjustments.extend(auto_notes)
@@ -1030,6 +1036,7 @@ def build_strength_recommendation(
         sets_yesterday = sum(muscle_sets[muscle].get(previous_day, 0) for muscle in requested_muscles)
         if sets_yesterday >= REGION_RECENT_WORK_MIN_SETS:
             level = stronger(level, AdjustmentLevel.REDUCE)
+            rest_reduced = True
             adjustments.append(
                 f"requested {requested_focus.value} had {sets_yesterday} primary sets yesterday (about 48 h rest "
                 "is usual): reduced session, focus kept"
@@ -1064,15 +1071,16 @@ def build_strength_recommendation(
         focus_muscles = tuple(muscle.value for muscle in requested_muscles)
         focus_source = FocusSource.USER
 
+    reduce_cause, level_cause = _level_causes(recovery.level, rest_reduced)
     exercises: list[PlannedExercise] = []
     for role, candidate in plan:
         rep_range = goals.compound_rep_range if candidate.compound else goals.isolation_rep_range
-        progression = plan_progression(candidate.label, candidate.occurrences, rep_range, level)
+        progression = plan_progression(candidate.label, candidate.occurrences, rep_range, level, level_cause)
         sets = {ExerciseRole.KEY: KEY_SETS, ExerciseRole.ACCESSORY: ACCESSORY_SETS}.get(role, ISOLATION_SETS)
         exercise_adjustments = []
         if level is AdjustmentLevel.REDUCE:
             sets -= 1
-            exercise_adjustments.append("recovery reduce: one set fewer")
+            exercise_adjustments.append(f"{reduce_cause}: one set fewer")
         if strong_swim and candidate.rule.primary_muscle in SWIM_SET_REDUCTION_MUSCLES:
             sets -= 1
             exercise_adjustments.append("hard swim overlap: one set fewer for shoulders/lats")
@@ -1115,17 +1123,20 @@ def build_strength_recommendation(
                 _candidates(focus_muscle_groups, occurrences, avoided),
                 avoided_patterns,
                 level,
+                reduce_cause,
                 strong_swim,
                 goals,
             )
         )
 
-    if level is not AdjustmentLevel.NORMAL:
+    # Only recovery's own level is reported as a recovery adjustment; a reduce from the rest
+    # rule is explained by its own line above.
+    if recovery.level is not AdjustmentLevel.NORMAL:
         fired = ", ".join(f"{item.rule or item.field} [{item.source_date.isoformat()}]" for item in recovery.fired)
         if recovery.carried and recovery.lookback is not None:
             carried = f"carried from earlier mornings: {recovery.lookback.explanation}"
             fired = ", ".join(part for part in (fired, carried) if part)
-        adjustments.insert(0, f"recovery {level.value}: {fired or 'no other region rested'}")
+        adjustments.insert(0, f"recovery {recovery.level.value}: {fired}")
     elif not recovery.data_available:
         adjustments.insert(0, "no recovery data for this date: no recovery adjustment (missing is not poor)")
     if recovery.lookback is not None and not recovery.carried:
@@ -1182,6 +1193,21 @@ def build_strength_recommendation(
         no_rule_active_sets_last_28_days=sum(daily.no_rule.values()),
         no_rule_notices=no_rule_notices,
     )
+
+
+def _level_causes(recovery_level: AdjustmentLevel, rest_reduced: bool) -> tuple[str, str | None]:
+    """(cause of one set fewer, cause of no load/rep increase) for the session level.
+
+    Recovery alone keeps the plain ``recovery <level>`` wording. When the rest rule reduced the
+    session, the set reduction is credited to it and recovery is named only for its own level.
+    """
+    if not rest_reduced:
+        return f"recovery {recovery_level.value}", None
+    if recovery_level is AdjustmentLevel.REDUCE:
+        return f"recovery reduce and {REST_RULE_REDUCE}", f"recovery reduce, {REST_RULE_REDUCE}"
+    if recovery_level is AdjustmentLevel.HOLD:
+        return REST_RULE_REDUCE, f"recovery hold, {REST_RULE_REDUCE}"
+    return REST_RULE_REDUCE, REST_RULE_REDUCE
 
 
 def _region_text(status: RegionStatus) -> str:
@@ -1424,6 +1450,7 @@ def _shortfall_reason(
     candidates: Sequence[_Candidate],
     avoided_patterns: frozenset[MovementPattern],
     level: AdjustmentLevel,
+    reduce_cause: str,
     strong_swim: bool,
     goals: TrainingGoals,
 ) -> str:
@@ -1459,7 +1486,7 @@ def _shortfall_reason(
         causes.append(f"no other familiar {focus} exercise in the last {HISTORY_DAYS} days")
         history_limited = True
     if level is AdjustmentLevel.REDUCE:
-        causes.append("recovery reduce: one set fewer per exercise")
+        causes.append(f"{reduce_cause}: one set fewer per exercise")
     if strong_swim:
         causes.append("hard swim overlap: fewer shoulder/lat sets")
     prefix = "history is limited: " if history_limited else ""

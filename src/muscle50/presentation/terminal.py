@@ -556,7 +556,11 @@ def render_training_recommendation(recommendation: TrainingRecommendation) -> st
             lines.append(f"    > load: {progression.load_guidance}")
 
     recovery = recommendation.recovery
-    lines.extend(("", f"== Recovery adjustment: {strength.adjustment_level} =="))
+    heading = f"Recovery adjustment: {recovery.level.value}"
+    if strength.adjustment_level != recovery.level.value:
+        # The session level was raised by a non-recovery rule (yesterday's training load).
+        heading += f"; session adjustment: {strength.adjustment_level}"
+    lines.extend(("", f"== {heading} =="))
     lines.extend(f"  {_observation_text(item)}" for item in recovery.observations)
     if recovery.lookback is not None:
         lines.append(f"  Lookback ({recovery.lookback.reason}):")
