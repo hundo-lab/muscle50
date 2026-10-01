@@ -15,7 +15,7 @@ uv run muscle50 recommend --date 2026-09-24 --focus shoulders  # 오늘 할 focu
 | 계층 | 파일 | 역할 |
 | --- | --- | --- |
 | domain | `domain/training_goals.py` | `TrainingGoals` frozen dataclass(code default, 저장 없음) |
-| domain | `domain/recovery_assessment.py` | 필드별 투명 규칙 → `normal` / `hold` / `reduce` |
+| domain | `domain/recovery_assessment.py` | 필드별 투명 규칙 → `normal` / `hold` / `reduce`, D-1/D-2 lookback |
 | domain | `domain/strength_recommendation.py` | focus 선택, 종목 선택, double progression, swim overlap, UNKNOWN 안내 |
 | domain | `domain/swim_recommendation.py` | swim 분석(연속 구간, pace, 강도), 다음 수영 목표 |
 | domain | `domain/training_recommendation.py` | 날짜 의미 정의, 위 모듈 조합, notice |
@@ -37,9 +37,11 @@ plausibility(implausible lap, summary 오염 판정), `classify_strength_set`/`c
 - Reader는 D-28 ~ D를 한 번 읽는다.
 - **Strength history = D-28 ~ D-1.** D에 이미 저장된 strength activity는 history에서 빼고
   `same_day_strength_excluded` notice로 보고한다(backtest 시 이미 한 운동을 "추천"하지 않기 위해).
-- **D와 D-1의 swim**은 strength overlap 입력. 다음 수영 목표는 D까지의 swim을 history로 쓴다(이미 한 수영).
+- **D와 D-1의 swim**은 strength overlap 입력. 다음 수영 목표의 swim history는 **D-28 ~ D**다(strength와 같은
+  "D 이전 28일" + 이미 한 D의 수영). Hardening v1 이전에는 Analytics snapshot window(D-27 ~ D)를 그대로 써서
+  D-28 swim이 빠지는 하루 차이가 있었다(`analyze_swims`가 snapshot에 29일을 넘겨 시작일을 D-28로 맞춤, 회귀 테스트).
 - Recovery 필드별 출처는 아래 표. 가장 최근 activity가 D-2 이전이면 `activity_coverage_gap`(미동기화일 수 있음,
-  휴식으로 간주하지 않음).
+  휴식으로 간주하지 않음). 데이터 신선도 전체는 아래 "데이터 신선도" 절.
 
 ## Goal/Profile 모델
 
@@ -112,23 +114,52 @@ Focus region에 28일 내 익숙한 종목이 없으면 다음 region으로 넘�
   deltoid인 종목만 후보다. Secondary muscle로 deltoid가 있는 종목(bench press, row 등)은 shoulders 종목이 되지
   않는다. v1 taxonomy에는 posterior deltoid가 primary인 rule이 없으므로 출력에 "never counted"로 표시한다
   (0 set을 방치로 읽지 않도록).
-- "history is limited"는 요청한 focus에서만, 세 경우에 알린다. 부하 목표는 항상 기록된 부하에서만 나오고 세션을
-  다른 종목으로 채우지 않는다.
+- 요청한 focus에서만 알리는 "history is limited" 두 경우(부하 목표는 항상 기록된 부하에서만 나오고 세션을 다른
+  종목으로 채우지 않는다):
   1. 28일 내 익숙한 종목이 없음 → 종목/부하 추천 없음, 다른 focus로 넘어가지 않음.
   2. 계획한 종목이 모두 1회 세션뿐 → 목표가 그 한 세션에만 근거함.
-  3. 쓸 수 있는 compound가 1개 이하라 accessory slot을 못 채우고 세션이 목표 시간보다 5분 넘게 짧음(예:
-     shoulders는 v1에서 compound가 overhead press뿐이고, 강한 swim 후에는 그것도 빠진다).
+- 세션이 목표 시간보다 짧은 경우는 자동/요청 focus 모두 아래 "시간 목표와 부족분 보고"로 알린다(Hardening v1에서
+  기존 3번째 조건 "compound 1개 이하로 accessory slot이 빔"을 대체).
 
-### 종목 선택 (약 40분)
+### 종목 선택 (약 40분, Hardening v1)
 
-- 후보: focus region에 primary muscle이 있는 매핑된 label 중 28일 안에 한 것. `--avoid` muscle이 primary나
-  secondary면 제외.
-- 익숙함 순서: session 수 → set 수 → 최근 날짜 → label 문자열.
-- Key 1개: 가장 익숙한 compound(pattern: horizontal/vertical push/pull, squat, hinge, lunge).
-- Accessory 1-2개: 첫째는 key와 다른 movement pattern 우선, 둘째는 남은 compound 중 가장 익숙하고 28일 ≥ 2 session.
-- Isolation 1개: compound가 이미 primary로 다루지 않는 muscle 우선, 그다음 익숙함.
-- 기본 3 set씩. 추정 시간 = 5분 + 3분 × working set. 목표 + 5분을 넘으면 둘째 accessory를 뺀다.
-- 무작위 variety 없음. 선택적 대안은 아래 조건일 때만 최대 1개.
+- 후보: focus의 primary muscle을 가진 매핑된 label 중 28일 안에 한 것(원본 Garmin label 그대로). `--avoid` muscle이
+  primary나 secondary면 제외. 익숙함 순서: session 수 → set 수 → 최근 날짜 → label 문자열.
+- 크기: key 1 + accessory 최대 2 + isolation 1 = 최대 4종목(3 set씩이면 41분). 세션 시간 목표(40분)는 이 구조를
+  채우는 계획 목표이며, set을 늘려 시간을 채우지 않는다(종목별 세션당 set 수는 자동 인식 label 때문에 부풀려져 있어
+  근거로 쓰지 않음).
+- Key 1개: 가장 익숙한 compound(pattern: horizontal/vertical push/pull, squat, hinge, lunge). 강한 swim 후에는
+  vertical push 제외(없으면 가장 익숙한 isolation).
+- **Muscle balance**(taxonomy primary muscle과 실제 history만 사용, 보편 템플릿 없음): key 다음 모든 slot은
+  (1) plan이 아직 다루지 않은 focus primary muscle → (2) plan에서 덜 다룬 muscle → (3) key와 다른 movement pattern →
+  (4) 익숙함 순으로 고른다. 한 primary muscle은 다른 focus muscle의 익숙한 후보가 남아 있는 동안 세 번째 종목을 받지
+  않는다(`MAX_EXERCISES_PER_PRIMARY_MUSCLE = 2`).
+- **Heavy hinge 1개**: Garmin category `DEADLIFT`이면서 hinge pattern인 label(예: `DEADLIFT/BARBELL_DEADLIFT`,
+  `DEADLIFT/STRAIGHT_LEG_DEADLIFT`)은 한 세션에 하나만 둔다(`HEAVY_HINGE_CATEGORIES`). 둘은 posterior chain/허리 부하가
+  크게 겹치므로 muscle coverage나 시간 채우기를 위해 두 번째를 넣지 않는다. 어느 것을 둘지는 기존 순서(위 balance →
+  익숙함)가 정하고, 다음 slot은 겹치지 않는 익숙한 종목을 고른다. 없으면 세션을 짧게 두고 "one heavy hinge per
+  session (X is planned)"로 이유를 적는다. 일부러 좁은 규칙이다: `HIP_RAISE/BARBELL_HIP_THRUST_ON_FLOOR`(hinge
+  pattern, category HIP_RAISE)는 deadlift 변형이 아니라서 대상이 아니며, label은 이름 변경/병합하지 않는다.
+- Accessory 1: 남은 compound 중 위 순서 첫 번째(이미 heavy hinge가 있으면 다른 heavy hinge 제외).
+- Accessory 2: 아직 다루지 않은 muscle의 compound(1 session이어도), 또는 28일 ≥ 2 session인 compound — 단 후자는
+  익숙한 isolation이 있는 미커버 muscle이 2개 이상 남아 있으면 쓰지 않는다(남은 slot을 그 muscle들에 쓰기 위해).
+- Isolation 1개: 위 순서 첫 번째. 그 뒤 4종목이 안 됐으면 아직 다루지 않은 focus muscle의 isolation을 1개 더 둘 수
+  있다(완성도; 예: compound가 더 없는 focus).
+- 결과(production 62일 counterfactual, HEAD `8b259e7` 대비): 같은 primary muscle 3종목 이상인 plan 6 → 0, heavy hinge
+  2개인 plan 2 → 0(hinge 규칙 전 hardening 초안은 17), push는 chest 2개 대신 lateral deltoid 포함, legs는 quad 2 + hinge 1
+  (+ hip thrust가 익숙하면 그것)로 3종목 32분이 많고 부족분을 보고한다. 자동 focus 선택은 62일 모두 동일.
+- 목표 + 5분을 넘으면 둘째 accessory를 뺀다. 무작위 variety 없음. 선택적 대안은 아래 조건일 때만 최대 1개.
+
+### Focus coverage와 시간 부족분 보고
+
+- `focus_coverage`(JSON, text "Focus coverage"): focus의 primary muscle마다 `covered`(계획 종목), `avoided`,
+  `no_taxonomy_rule`(어떤 rule도 그 muscle을 primary로 쓰지 않음; 예 posterior deltoid, forearms),
+  `no_familiar_history`, `excluded_after_hard_swim`, `not_selected`.
+- 추정 시간 + 5분 < 목표면 reason 한 줄: 몇 분/몇 종목인지, 빠진 component와 이유, 고려했지만 넣지 않은 익숙한
+  종목과 이유(이미 다룬 muscle이고 1 session뿐 / 이미 2종목 / 세션 크기 한도 / 강한 swim 후 overhead press), 다른
+  익숙한 종목이 없음, recovery reduce, 강한 swim set 감소. 끝은 항상 "nothing was added to fill the time".
+  History 원인이 있으면 "history is limited:"로 시작한다. 4종목을 다 채웠는데 짧은 경우(reduce)는 종목 목록 없이
+  set 감소만 원인으로 적는다.
 
 ### Progression (double progression)
 
@@ -154,6 +185,12 @@ Focus region에 28일 내 익숙한 종목이 없으면 다음 region으로 넘�
 - **Load confidence**: 28일 work load의 최대/최소 > 1.5배이거나 `PULL_UP/-`, `PUSH_UP/-`,
   `TRICEPS_EXTENSION/BENCH_DIP`(추가 중량인지 assist인지 Garmin이 구분하지 않음)이면 `low` + 사유.
   마지막 occurrence label이 자동 인식만이면 "auto-detected" caveat.
+- **Low confidence 부하 표시**(Hardening v1, progression 규칙/목표값은 그대로): `recorded_load_range_kg`(window의
+  work load 최소-최대), `same_load_evidence`(마지막 work load를 쓴 이전 session이 있음), `load_guidance`. 범위가 넓고
+  마지막 부하가 반복된 적 있으면 "그 부하가 비교 가능한 시작점", 아니면 "한 label 아래 X-Y kg가 기록됐고 마지막
+  부하가 반복되지 않음: 지난번 장비/부하를 확인, 모르면 낮은 쪽에서 시작". Text는 `@ ~16 kg (low confidence:
+  recorded 16-30 kg; confirm equipment/load used last time)`처럼 정확한 값으로 보이지 않게 쓴다. Label은 병합/
+  이름 변경하지 않는다.
 - **Stagnation**: 최근 3번이 같은 work load이고 best reps가 늘지 않음 → 같은 movement pattern(없으면 같은 primary
   muscle)의 다른 익숙한 label을 **선택적 대안**으로 1개 제시(기본 계획은 바꾸지 않음).
 - 근거(`basis`)에는 마지막 session, 판단 이유, 2-4주 trend(날짜별 work load × best reps)가 들어간다.
@@ -161,7 +198,7 @@ Focus region에 28일 내 익숙한 종목이 없으면 다음 region으로 넘�
 ## Recovery 조정
 
 합성 점수 없이 필드별 규칙. 가장 강한 규칙이 level을 정한다. **값이 없으면 규칙이 발동하지 않는다**(missing ≠ poor).
-Row가 없으면 level `normal` + "no recovery adjustment" 표시와 `recovery_row_missing` notice.
+Row가 없고 아래 lookback도 발동하지 않으면 level `normal` + "no recovery adjustment" 표시와 `recovery_row_missing` notice.
 
 | field (출처 row) | hold | reduce |
 | --- | --- | --- |
@@ -182,6 +219,26 @@ Body battery, stress, resting HR은 사용하지 않는다(저장 값이 D의 �
 
 효과: `hold` = 증량·증rep 없음(마지막 수행 반복). `reduce` = hold + 종목당 1 set 감소(최소 2).
 
+### Recovery lookback (Hardening v1)
+
+D의 부분 row가 최근의 분명히 나쁜 회복을 지우지 않게 하는 투명한 규칙. 합성 점수 없음.
+
+- **발동 조건**: D row가 없거나 D의 `sleep_seconds`가 NULL(밤 측정이 없음). D의 readiness 값이 있어도 그것은 수면
+  측정 없이 저장된 값이다(2026-10-01 RAW: readiness `validSleep: false`, `sleepScore: null` — 이 field는 저장되지
+  않으므로 규칙은 저장된 `sleep_seconds` NULL만 본다).
+- **확인 대상**: D-1, D-2 row의 아침 field(`sleep_seconds`, `sleep_score`, `training_readiness_level`,
+  `recovery_time_minutes`)를 위 표와 같은 임계값으로. HRV status는 주간 rolling 값이라 제외. 값이 없으면 발동 안 함.
+- **Carry**: D-1에서 reduce 수준 규칙이 발동했거나, D-1과 D-2 둘 다 어떤 규칙이 발동했으면 `hold`를 가져온다.
+  가져온 근거는 D의 측정이 아니므로 **최대 `hold`**(reduce로 올리지 않음; region 순위는 reduce에만 반응하므로 자동
+  focus도 바뀌지 않는다). D 자신의 발동 규칙(예: D readiness POOR → reduce)은 그대로 더 강하게 적용된다.
+- D-1 하나만 hold 수준이면 근거로 보고만 하고 carry하지 않는다.
+- 출력: `recovery.lookback`(reason, D-1/D-2 observation, poor_dates, carried_level, explanation). Text에 "Lookback"
+  절, 조정 줄에 날짜가 붙은 근거("2026-09-30 fired a reduce-level rule (sleep_seconds 3h49m ...)"). D의
+  observation/`missing_fields`/`fired`에는 D-1/D-2 값이 섞이지 않는다.
+- Calibration(2026-08-01~10-01): lookback 평가는 8월 전체(recovery row 없음, 발동 0)와 09-13, 10-01. Carry는 2일:
+  09-13(D-1 09-12 sleep 1h41m, score 29)과 10-01(D-1 09-30 sleep 3h49m + LOW 39, D-2 09-29 LOW 44). 둘 다 이전에는
+  `normal`이었다.
+
 ## Swimming ↔ strength 간섭
 
 - D 또는 D-1 swim → overlap으로 표시(shoulders/back/triceps). 약한 overlap이면 swim 관련 muscle 종목에
@@ -198,6 +255,34 @@ Body battery, stress, resting HR은 사용하지 않는다(저장 값이 D의 �
 최근 14일 strength activity에 UNKNOWN ACTIVE set이 있으면 activity별 `strength_unknown_exercise` notice:
 날짜, activity ID, set sequence, "Garmin Connect에서 종목 지정 후 `muscle50 garmin refresh <id>`". 추측하지 않고,
 추천은 막지 않는다. 7일/28일 UNKNOWN set 수도 함께 보고한다.
+
+## Taxonomy rule 없는(`no_rule`) 종목 안내 (Hardening v1)
+
+UNKNOWN과 별개다. 알려진 Garmin label인데 taxonomy rule이 없으면 그 set은 어떤 muscle에도 세지 않는다.
+
+- 28일 history의 activity × label마다 `strength_no_rule_exercise` notice: 날짜, activity ID, label, set 수/sequence,
+  "그 muscle/region이 focus·volume에서 과소평가될 수 있음". 7일 합계는 strength reason에도 나온다.
+- 같은 Garmin category에 category-only rule이 있으면 그 primary muscle/region을 **경고 문구용 힌트로만** 보여준다
+  (`category_hint_muscle`/`category_hint_region`, region별 `no_rule_hint_sets_last_7_days/previous_day`). 힌트는
+  set 수, 순위, eligibility, 48 h rest 판단에 절대 쓰지 않는다(매핑이 아님). Category rule도 없으면(`PLYO/BOX_JUMP`)
+  "region unknown".
+- 요청 focus의 어제 no-rule 힌트 set이 있으면 "48 h rest 판단이 놓쳤을 수 있음" 조정 줄(예: 2026-09-30 pull 15 set이
+  모두 no-rule이라 10-01 pull은 "yesterday 0"으로 보인다).
+- Rule은 이 기능에서 자동으로 만들지 않는다. 제안 목록과 근거는 `docs/HANDOFF.md`.
+
+## 데이터 신선도 (Hardening v1)
+
+`data_freshness`(JSON)와 text "Data freshness" 절: 최신 저장 activity/strength/swim/recovery 날짜, D recovery row
+존재와 수면 기록 여부, `sync_coverage_recorded = false`와 문장 "sync completeness is not recorded: a day without a
+stored activity is 'no recorded activity', not a confirmed rest day ...". 스키마가 sync coverage를 기록하지 않으므로
+"활동 없음"을 휴식으로 확정하지 않는다. Notice:
+
+- `activity_coverage_gap`(기존): 최신 activity가 D-2 이전.
+- `recovery_row_missing`: D row 없음(아직 미동기화일 수 있음) + lookback 결과.
+- `recovery_row_partial`: D row에 수면 없음 — 기록 안 됨인지 미동기화인지 알 수 없음, readiness는 수면 측정 없이
+  저장됨 + lookback 결과.
+- `recovery_coverage_gap`: 최신 recovery row가 D-2 이전.
+- `swim_gap`: 최신 swim이 10일 이상 전이거나 28일 내 없음 — 실제 휴식과 미동기화를 구분할 수 없음.
 
 ## 다음 수영 목표
 
@@ -218,16 +303,51 @@ Body battery, stress, resting HR은 사용하지 않는다(저장 값이 D의 �
 anchor = max(설정 baseline 1000 m, 28일 최장 연속 구간). Effort = 최장 연속 구간 ≥ 0.6 × anchor.
 
 1. Recovery `reduce`, 또는 마지막 swim이 D/D-1이고 high intensity → `recovery_technique`(600 m 쉬운 혼합/드릴, no fly/paddles)
-2. 14일 안에 effort 없음 → `distance_progression`: min(1500, anchor + 100 m, 2×pool 단위) 연속
-3. 마지막 swim이 effort → `pace_intervals`(pace baseline이 있을 때): 8 × 100 m freestyle, 현재 pace보다
+2. (Hardening v1) 마지막 저장 swim이 10일 이상 전이거나 28일 내 swim 없음 → `return_easy`: 0.8 × anchor(현재 800 m)
+   "easy in total, continuous or with short rests as needed; no pace target". 거리도 강도도 올리지 않는다
+   (anchor 아래, pace 목표 없음, warm-up/cool-down 추가 없음, 영법/paddle/fin 언급 없음). 다음 swim부터 아래 규칙이
+   다시 적용되며(distance와 pace는 한 번에 하나씩), 1500 m 장기 목표와 anomaly-safe baseline은 그대로다. 공백이
+   미동기화일 수도 있다고 명시한다(어느 쪽이든 쉬운 재진입은 안전). 임계값 10일: 2026-07~09 swim 간격 최대 8일
+   이라 과거에는 한 번도 발동하지 않았고, 2026-09-27~10-01(09-17 이후 10-14일) 중 recovery reduce가 아닌 날
+   (09-27, 09-28, 09-29, 10-01)에 발동한다.
+3. 14일 안에 effort 없음 → `distance_progression`: min(1500, anchor + 100 m, 2×pool 단위) 연속
+4. 마지막 swim이 effort → `pace_intervals`(pace baseline이 있을 때): 8 × 100 m freestyle, 현재 pace보다
    4 s~1 s 빠르게(목표 하한 1:36/100 m 이상), 20-30 s 휴식. pace baseline이 없으면 `easy_continuous`
-4. 마지막 effort가 7일 넘음 → `distance_progression`, 아니면 `easy_continuous`(0.8 × anchor)
+5. 마지막 effort가 7일 넘음 → `distance_progression`, 아니면 `easy_continuous`(0.8 × anchor)
 
 목표 거리가 1500 m에 닿으면 distance progression은 "1500 m timed, 24:00-27:30"이 된다.
 Strength 맥락: 어제 shoulder/back/triceps primary set ≥ 8이면 intervals → easy. 오늘 focus가 push/pull이면
 "no butterfly/paddles, 몇 시간 간격" caution, legs면 "kick/fins easy".
 
-## Production read-only 검증 (2026-10-01)
+## Production read-only 검증 — Recommendation Hardening v1 (2026-10-01)
+
+Evidence(repo 밖): `C:\temp\muscle50-evidence-20261001-hardening\`(`audit_*.py/txt`, `calibrate.py`, `compare.py/txt`,
+`calib_old.json`(HEAD `8b259e7`)/`calib_new.json`, `rec_<case>.txt/json/_rerun.json`, `preview_rules.py`,
+`preview_1001_*.txt`, `fingerprint.py`, `before_v5.json`/`after_v5.json`/`after_preview.json`, `hinge_compare.py/txt`).
+
+- 작업 중 production DB가 **다른 프로세스의 `garmin refresh` 6회**(2026-10-01 16:12-16:23 KST, 09-17/09-18/09-21/09-22×2/
+  09-23 activity)로 바뀌었다. 09-22 `24451010022`는 Garmin Connect에서 종목이 지정되어 `SHOULDER_PRESS/
+  SEATED_BARBELL_SHOULDER_PRESS` 8, `SHOULDER_PRESS/DUMBBELL_SHOULDER_PRESS` 6, `LATERAL_RAISE/
+  ONE_ARM_CABLE_LATERAL_RAISE` 3 set이 됐다(모두 no-rule). 이 작업은 refresh를 실행하지 않았다(reader는 `mode=ro`).
+  최종 검증은 그 이후 상태에서 before/after fingerprint 동일(DB sha/size/mtime, `-wal` 0 bytes, 28 table, RAW 954)로
+  다시 했다.
+- 8개 실행(10-01 auto/`--focus shoulders`/`--focus legs`, 09-28 `--focus legs`, 09-18, 09-21, 09-25, 09-13) text/JSON
+  exit 0, JSON 재실행 byte-identical, text ASCII.
+- 62일(08-01~10-01) HEAD 대비: 자동 focus 62/62 동일(pull 26/legs 22/push 14), 같은 primary muscle 3종목 이상 plan 6 → 0,
+  heavy hinge 2개 plan 2 → 0, 4종목 plan 39 → 39(push는 늘고 legs는 줄었다), recovery level 변경 2일(09-13, 10-01: normal → hold, lookback), swim goal 변경 4일
+  (09-27/28/29, 10-01: distance_progression → return_easy).
+
+| case | strength | recovery | 다음 수영 |
+| --- | --- | --- | --- |
+| 10-01 auto (legs) | LUNGE/- (quad), BARBELL_DEADLIFT (glutes), SQUAT/- (quad), 32분; hamstrings는 SLDL뿐이라 not_selected(one heavy hinge), leg extension은 quad 3번째라 미추가; 이전: LUNGE/SQUAT/LEG_EXTENSIONS 3 quad 32분 | hold(lookback: 09-30 sleep 3h49m + LOW, 09-29 LOW) | return_easy 800 m |
+| 10-01 shoulders | SHOULDER_PRESS/- 30 kg (anterior), LATERAL_RAISE/- 10 kg (lateral), 23분, posterior 누락 명시, UPRIGHT_ROW 고려·미추가 | hold | return_easy 800 m |
+| 09-28 `--focus legs` | SQUAT/-, STRAIGHT_LEG_DEADLIFT, LUNGE/- 32분(BARBELL_DEADLIFT는 one heavy hinge로 미추가) | normal | return_easy 800 m |
+| 09-18 (09-17 swim 다음 날) | pull 4종목 41분, swim overlap 표시 | normal | distance 1100 m(09-17 phantom summary 제외) |
+| 09-21 (sleep 3h01m, POOR) | push: BENCH/OHP/TRICEPS_EXT/LATERAL_RAISE 2 set씩 29분(이전: chest 2개) | reduce | recovery 600 m |
+| 09-25 (POOR, 1500 min) | legs SQUAT/SLDL/LUNGE 2 set씩 23분 | reduce | recovery 600 m |
+| 09-13 (sleep NULL) | pull 41분, 증량 없음 | hold(lookback: 09-12 sleep 1h41m) | pace intervals |
+
+## Production read-only 검증 (2026-10-01, v1)
 
 Evidence(repo 밖): `C:\temp\muscle50-evidence-20261001-recommend\`(`rec_<date>.txt/json`, `_rerun.json`,
 `summarize.py`, `calibration.py/txt`, `fingerprint.py`, `before.json`/`after.json`, `audit*.py/txt`).
@@ -272,7 +392,15 @@ Bias 확인(counterfactual, 2026-08-01~10-01 62일 매일 실행, `distribution.
 - RIR, 통증, 장비 가용성, paddle/fin, lap intensity는 데이터에 없다. 통증은 `--avoid` 명시 입력으로만 반영한다.
 - Garmin이 idle length로 기록하지 않은 벽 휴식은 감지할 수 없고, length timing이 이상한 lap이 많아(예: 09-03
   600 m lap) 연속 거리 baseline이 보수적으로 낮게 나온다. 그래서 anchor는 설정 baseline(1000 m)과의 max다.
-- Activity/recovery sync coverage가 기록되지 않아 "활동 없음"과 "미동기화"를 구분할 수 없다(notice로만 표시).
+- Activity/recovery sync coverage가 기록되지 않아 "활동 없음"과 "미동기화"를 구분할 수 없다(Data freshness 절과
+  notice로만 표시).
+- Posterior deltoid를 primary로 쓰는 taxonomy rule도, 그런 저장 label도 없다(2026-10-01 audit: label 이름에 REAR/
+  FACE_PULL/REVERSE 없음, UNKNOWN 276 set은 display name도 "Unknown"). Lateral raise 옆 UNKNOWN set(09-17 seq 35,
+  09-22 seq 33 — 09-22는 이후 relabel)은 rear-delt일 수도 있지만 추측하지 않는다. Garmin Connect에서 지정해도
+  posterior-primary rule을 추가해야 세진다. 그래서 shoulders 세션은 posterior 없이 짧을 수 있고 그렇게 보고한다.
+- Garmin Connect에서 새로 지정한 구체적 label(예: `SHOULDER_PRESS/SEATED_BARBELL_SHOULDER_PRESS`)은 rule 추가 전까지
+  no-rule로 빠져 그 muscle이 과소평가된다(notice로 표시).
+- Recovery lookback은 저장 field만 본다(`validSleep` 등 RAW 전용 field는 미사용). D-1 하나만 hold 수준이면 carry 안 함.
 - 2.5 kg 증량 단위와 시간 추정(3분/set)은 고정 상수다.
 - Focus 정렬은 매일 독립적으로 계산된다(사용자가 실제로 무엇을 했는지만 반영; 이전 추천을 기억하지 않음).
   사용자가 upper body를 거의 매일 무겁게 하므로 push/pull이 "resting"이 되는 날이 많고, 그날은 legs가 된다.

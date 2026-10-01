@@ -35,8 +35,13 @@ from muscle50.domain.recovery_assessment import AdjustmentLevel
 from muscle50.domain.swimming import SwimLap, derive_lap_metrics, derive_length_metrics
 from muscle50.domain.training_goals import TrainingGoals
 
+# The same 28 days before the requested date as strength history, plus the requested date
+# itself (a swim already done that day happened before the next swim).
 SWIM_HISTORY_DAYS = 28
 CONTINUITY_BREAK_IDLE_SECONDS = 10.0
+# Return-to-swim: with no stored swim for this many days (account maximum gap in 2026-07..09
+# was 8 days) the next swim is an easy re-entry before distance or pace progresses again.
+RETURN_AFTER_GAP_DAYS = 10
 # Account-calibrated (2026-07..09 swims: anaerobic TE 0.6-2.6, zone 5 0-551 s).
 HIGH_INTENSITY_ZONE5_SECONDS = 120.0
 HIGH_INTENSITY_ANAEROBIC_TE = 2.5
@@ -65,6 +70,8 @@ class SwimSessionType(StrEnum):
     DISTANCE_PROGRESSION = "distance_progression"
     PACE_INTERVALS = "pace_intervals"
     RECOVERY_TECHNIQUE = "recovery_technique"
+    RETURN_EASY = "return_easy"
+    """Easy re-entry after a long gap: neither distance nor intensity is raised."""
 
 
 @dataclass(frozen=True)
@@ -124,6 +131,9 @@ class SwimBaseline:
     target_continuous_meters: float
     target_pace_seconds_per_100m: tuple[float, float]
     """Fastest and slowest pace that meet the configured 1500 m time range."""
+    long_term_target_meters: float
+    days_since_last_swim: int | None
+    """None when no swim is stored in the history window."""
 
 
 @dataclass(frozen=True)
@@ -167,14 +177,19 @@ def pace_text(seconds_per_100m: float) -> str:
 
 
 def analyze_swims(as_of: date, activities: Sequence[NormalizedActivity]) -> tuple[SwimSessionAnalysis, ...]:
-    """Swims dated in the 28 days ending on ``as_of`` (inclusive), oldest first."""
+    """Swims dated from ``as_of`` - 28 days through ``as_of`` (inclusive), oldest first.
+
+    The window starts on the same day as strength history (D-28), so both use the same
+    "28 days before D" lookback; swims on D are included as already done.
+    """
     swims = [
         activity
         for activity in activities
         if activity.canonical_type is ActivityType.SWIMMING and activity_local_date(activity) is not None
     ]
-    # Reuse the Analytics Engine's implausible-lap and summary-contamination rules.
-    snapshot = build_training_snapshot(as_of, SWIM_HISTORY_DAYS, swims, ())
+    # Reuse the Analytics Engine's implausible-lap and summary-contamination rules. Its window
+    # of N days ends on as_of and starts on as_of - (N - 1), so N = 28 + 1 starts on D-28.
+    snapshot = build_training_snapshot(as_of, SWIM_HISTORY_DAYS + 1, swims, ())
     by_id = {activity.source_activity_id: activity for activity in swims}
     return tuple(_analyze(session, by_id[session.source_activity_id]) for session in snapshot.swimming.sessions)
 
@@ -360,6 +375,8 @@ def build_swim_recommendation(
         progression_anchor_meters=anchor,
         target_continuous_meters=target_continuous,
         target_pace_seconds_per_100m=pace_range,
+        long_term_target_meters=goals.continuous_swim_target_meters,
+        days_since_last_swim=(as_of - sessions[-1].local_date).days if sessions else None,
     )
     recent_start = as_of - timedelta(days=6)
     sessions_7 = sum(1 for item in sessions if item.local_date >= recent_start)
@@ -403,6 +420,21 @@ def _select_goal(
         session_type = SwimSessionType.RECOVERY_TECHNIQUE
         reasons.append(
             f"last swim {last.local_date.isoformat()} was high intensity ({'; '.join(last.high_intensity_reasons)})"
+        )
+    elif last is None or (as_of - last.local_date).days >= RETURN_AFTER_GAP_DAYS:
+        session_type = SwimSessionType.RETURN_EASY
+        gap = (
+            f"no swim stored in the last {SWIM_HISTORY_DAYS} days"
+            if last is None
+            else f"last stored swim {last.local_date.isoformat()} was {(as_of - last.local_date).days} days ago"
+        )
+        reasons.append(
+            f"{gap} (>= {RETURN_AFTER_GAP_DAYS} days): easy re-entry first; distance and pace progress again "
+            "after it, one at a time"
+        )
+        reasons.append(
+            "the gap may include swims that were not synced (sync coverage is not recorded); an easy re-entry "
+            "is safe either way"
         )
     elif last_effort is None or (as_of - last_effort.local_date).days > DISTANCE_EFFORT_LOOKBACK_DAYS:
         session_type = SwimSessionType.DISTANCE_PROGRESSION
@@ -474,6 +506,24 @@ def _goal(
             RECOVERY_SWIM_METERS,
             f"{_meters(RECOVERY_SWIM_METERS)} easy: mixed strokes and drills, no butterfly, no paddles",
             None,
+            None,
+            tuple(reasons),
+            tuple(cautions),
+        )
+    if session_type is SwimSessionType.RETURN_EASY:
+        # Below the anchor (no distance increase) and no pace target (no intensity increase).
+        distance = _round_to_pool(EASY_CONTINUOUS_FRACTION * baseline.progression_anchor_meters, pool)
+        reasons.append(
+            f"re-entry {_meters(distance)} = {EASY_CONTINUOUS_FRACTION:g} x anchor "
+            f"{_meters(baseline.progression_anchor_meters)}; the {_meters(baseline.target_continuous_meters)} "
+            f"step resumes after it; long-term target {_meters(baseline.long_term_target_meters)} is unchanged"
+        )
+        # The whole session is easy, so no separate warm-up/cool-down is added on top.
+        return SwimGoal(
+            session_type.value,
+            distance,
+            f"{_meters(distance)} easy in total, continuous or with short rests as needed; no pace target",
+            distance,
             None,
             tuple(reasons),
             tuple(cautions),

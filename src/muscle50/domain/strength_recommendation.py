@@ -60,7 +60,14 @@ KEY_SETS = 3
 ACCESSORY_SETS = 3
 ISOLATION_SETS = 3
 MAX_ACCESSORIES = 2
+# 1 key + 2 accessories + 1 isolation: about 40 minutes at 3 sets each.
+MAX_EXERCISES = 1 + MAX_ACCESSORIES + 1
+# A primary muscle gets no third exercise while an uncovered focus muscle has a familiar candidate.
+MAX_EXERCISES_PER_PRIMARY_MUSCLE = 2
 SECOND_ACCESSORY_MIN_SESSIONS = 2
+# Heavy hinge variants overlap substantially (posterior chain, lower back): at most one per
+# session. Narrow on purpose: exact Garmin category with the hinge pattern, labels unchanged.
+HEAVY_HINGE_CATEGORIES = frozenset({"DEADLIFT"})
 MIN_SETS_PER_EXERCISE = 2
 MINUTES_PER_WORKING_SET = 3
 WARM_UP_MINUTES = 5
@@ -240,6 +247,12 @@ class ProgressionTarget:
     stagnant: bool
     regression: bool
     recent: tuple[WorkSetSummary, ...]
+    recorded_load_range_kg: tuple[float, float] | None = None
+    """Lowest and highest work load of this label in the history window (None without loads)."""
+    same_load_evidence: bool = False
+    """An earlier session used the same work load as the last one (the target load is comparable)."""
+    load_guidance: str | None = None
+    """How to treat a ``low`` confidence load target; the target is never presented as exact."""
 
 
 @dataclass(frozen=True)
@@ -301,6 +314,38 @@ class RegionStatus:
     swim_demoted: bool
     muscle_detail: tuple[MuscleStatus, ...]
     notes: tuple[str, ...]
+    no_rule_hint_sets_last_7_days: int
+    """ACTIVE sets of rule-less labels whose Garmin category rule points at this region.
+    Display only: never counted, ranked, or used for eligibility (the label itself has no rule)."""
+    no_rule_hint_sets_previous_day: int
+
+
+@dataclass(frozen=True)
+class FocusMuscleCoverage:
+    """Whether today's plan covers one primary muscle of the focus, and why not."""
+
+    muscle: str
+    status: str
+    """``covered``, ``avoided``, ``no_taxonomy_rule``, ``no_familiar_history``,
+    ``excluded_after_hard_swim``, or ``not_selected``."""
+    exercises: tuple[str, ...]
+    """Planned labels with this primary muscle (or, for ``not_selected``, the familiar ones left out)."""
+    note: str
+
+
+@dataclass(frozen=True)
+class NoRuleExerciseNotice:
+    """ACTIVE sets of a known Garmin label without a taxonomy rule (never counted, never guessed)."""
+
+    source_activity_id: str
+    local_date: date
+    label: str
+    set_count: int
+    set_sequences: tuple[int, ...]
+    category_hint_muscle: str | None
+    """Primary muscle of the category-only rule for the same Garmin category, if one exists.
+    A hint for the warning only; the label is not mapped."""
+    category_hint_region: str | None
 
 
 @dataclass(frozen=True)
@@ -351,6 +396,10 @@ class StrengthRecommendation:
     unknown_active_sets_last_7_days: int
     unknown_active_sets_last_28_days: int
     unknown_notices: tuple[UnknownExerciseNotice, ...]
+    focus_coverage: tuple[FocusMuscleCoverage, ...]
+    no_rule_active_sets_last_7_days: int
+    no_rule_active_sets_last_28_days: int
+    no_rule_notices: tuple[NoRuleExerciseNotice, ...]
 
 
 def kg_text(value: float) -> str:
@@ -524,15 +573,29 @@ def plan_progression(
 
     load_confidence = "none" if load is None else "normal"
     loads = [item.work_load_kg for item in usable if item.work_load_kg is not None]
+    load_range = (min(loads), max(loads)) if loads else None
+    same_load = comparable is not None
+    guidance: list[str] = []
     if load is not None and len(loads) >= 2 and max(loads) > min(loads) * LOAD_SPREAD_RATIO:
         load_confidence = "low"
         caveats.append(
             f"work loads ranged {kg_text(min(loads))}-{kg_text(max(loads))} over {len(loads)} sessions; "
             "this Garmin label may cover different equipment, so treat the load as approximate"
         )
+        if comparable is not None:
+            guidance.append(
+                f"last work load {kg_text(last.work_load_kg or 0.0)} was also used on "
+                f"{comparable.local_date.isoformat()}, so it is the comparable starting point"
+            )
+        else:
+            guidance.append(
+                f"recorded {kg_text(min(loads))}-{kg_text(max(loads))} under this one label and the last load was "
+                "not repeated: confirm the equipment and load used last time; if unsure, start at the low end"
+            )
     if load is not None and (label.category, label.name) in AMBIGUOUS_LOAD_LABELS:
         load_confidence = "low"
         caveats.append("stored weight may be added load or machine assistance; Garmin does not say which")
+        guidance.append("confirm whether the stored weight was added load or machine assistance")
     last_origins = occurrences[-1].label_origins
     if last_origins.auto_detected and not last_origins.confirmed:
         caveats.append("label auto-detected by the watch (not confirmed in Garmin Connect)")
@@ -548,6 +611,9 @@ def plan_progression(
         stagnant,
         regression,
         recent,
+        load_range,
+        same_load,
+        "; ".join(guidance) if guidance else None,
     )
 
 
@@ -599,37 +665,59 @@ def _trend_text(usable: Sequence[WorkSetSummary]) -> str | None:
     return f"{len(loaded)}-session trend (work load x best reps): {points}"
 
 
-def _region_sets_by_day(
-    history: Sequence[tuple[date, NormalizedActivity]],
-) -> tuple[dict[Region, Counter[date]], dict[MuscleGroup, Counter[date]], Counter[date]]:
-    region_sets: dict[Region, Counter[date]] = {region: Counter() for region in REGION_MUSCLES}
-    muscle_sets: dict[MuscleGroup, Counter[date]] = {muscle: Counter() for muscle in MuscleGroup}
-    unknown_sets: Counter[date] = Counter()
+@dataclass(frozen=True)
+class _DailySets:
+    region: dict[Region, Counter[date]]
+    muscle: dict[MuscleGroup, Counter[date]]
+    unknown: Counter[date]
+    no_rule: Counter[date]
+    no_rule_region_hint: dict[Region, Counter[date]]
+    """Display only: rule-less sets by the region their category rule would suggest."""
+
+
+def _category_hint(category: str | None) -> ExerciseRule | None:
+    """The category-only rule of a Garmin category; a warning hint, never a mapping."""
+    return classify_exercise(category, None).rule if category else None
+
+
+def _region_sets_by_day(history: Sequence[tuple[date, NormalizedActivity]]) -> _DailySets:
+    sets = _DailySets(
+        {region: Counter() for region in REGION_MUSCLES},
+        {muscle: Counter() for muscle in MuscleGroup},
+        Counter(),
+        Counter(),
+        {region: Counter() for region in REGION_MUSCLES},
+    )
     for day, activity in history:
         for strength_set in activity.strength_sets:
             if strength_set.set_type != "ACTIVE":
                 continue
             classification = classify_strength_set(strength_set)
             if classification.unmapped_reason is UnmappedReason.UNKNOWN_SOURCE_LABEL:
-                unknown_sets[day] += 1
+                sets.unknown[day] += 1
+            elif classification.unmapped_reason is UnmappedReason.NO_RULE:
+                sets.no_rule[day] += 1
+                hint = _category_hint(classification.source_category)
+                if hint is not None and hint.primary_muscle in _REGION_OF_MUSCLE:
+                    sets.no_rule_region_hint[_REGION_OF_MUSCLE[hint.primary_muscle]][day] += 1
             rule = classification.rule
             if rule is None:
                 continue
-            muscle_sets[rule.primary_muscle][day] += 1
+            sets.muscle[rule.primary_muscle][day] += 1
             if rule.primary_muscle in _REGION_OF_MUSCLE:
-                region_sets[_REGION_OF_MUSCLE[rule.primary_muscle]][day] += 1
-    return region_sets, muscle_sets, unknown_sets
+                sets.region[_REGION_OF_MUSCLE[rule.primary_muscle]][day] += 1
+    return sets
 
 
 def _region_statuses(
     as_of: date,
-    region_sets: Mapping[Region, Counter[date]],
-    muscle_sets: Mapping[MuscleGroup, Counter[date]],
+    daily: _DailySets,
     goals: TrainingGoals,
     strong_swim: bool,
     level: AdjustmentLevel,
     avoided: frozenset[MuscleGroup],
 ) -> list[RegionStatus]:
+    region_sets, muscle_sets = daily.region, daily.muscle
     recent_start = as_of - timedelta(days=RECENT_DAYS)
     previous_day = as_of - timedelta(days=1)
     # The weekly goal bounds the personal interval: a rarely trained region still becomes
@@ -670,6 +758,14 @@ def _region_statuses(
             notes.append("hard swim overlap: shoulders/back/triceps deprioritised")
         if recent_under_reduce:
             notes.append(f"recovery reduce: trained in the last {REDUCE_REST_DAYS} days; more rested regions first")
+        hint_by_day = daily.no_rule_region_hint[region]
+        hint_7 = sum(count for day, count in hint_by_day.items() if day >= recent_start)
+        hint_previous = hint_by_day.get(previous_day, 0)
+        if hint_7:
+            notes.append(
+                f"{hint_7} sets in 7 d ({hint_previous} yesterday) of labels without a taxonomy rule whose Garmin "
+                f"category suggests {region.value} are not counted; {region.value} may be underestimated"
+            )
         statuses.append(
             RegionStatus(
                 region=region.value,
@@ -689,6 +785,8 @@ def _region_statuses(
                 swim_demoted=swim_demoted,
                 muscle_detail=tuple(_muscle_status(muscle, muscle_sets[muscle], recent_start) for muscle in muscles),
                 notes=tuple(notes),
+                no_rule_hint_sets_last_7_days=hint_7,
+                no_rule_hint_sets_previous_day=hint_previous,
             )
         )
     return statuses
@@ -773,6 +871,12 @@ def _rule_of(label: ExerciseLabel) -> ExerciseRule | None:
 def _select_slots(
     candidates: Sequence[_Candidate], avoided_key_patterns: frozenset[MovementPattern]
 ) -> tuple[list[tuple[ExerciseRole, _Candidate]], list[str]]:
+    """1 key, up to 2 accessories, 1 isolation (plus 1 for an uncovered focus muscle), from history only.
+
+    Muscle balance: after the key exercise every slot prefers a primary muscle the plan does
+    not cover yet, then the least covered one, and a primary muscle never gets a third
+    exercise while a familiar candidate for an uncovered focus muscle remains.
+    """
     notes: list[str] = []
     compounds = [item for item in candidates if item.compound]
     isolations = [item for item in candidates if not item.compound]
@@ -785,27 +889,72 @@ def _select_slots(
     if key is None:
         return [], notes
     plan: list[tuple[ExerciseRole, _Candidate]] = [(ExerciseRole.KEY, key)]
-    remaining = [
-        item for item in compounds if item is not key and item.rule.movement_pattern not in avoided_key_patterns
+    pool = [
+        item
+        for item in candidates
+        if item is not key and not (item.compound and item.rule.movement_pattern in avoided_key_patterns)
     ]
-    # First accessory: prefer a movement pattern different from the key exercise.
-    remaining.sort(key=lambda item: (item.rule.movement_pattern == key.rule.movement_pattern, _familiarity_key(item)))
-    if remaining:
-        plan.append((ExerciseRole.ACCESSORY, remaining.pop(0)))
-    # Second accessory: the most familiar remaining compound, only if it is a regular one.
-    remaining.sort(key=_familiarity_key)
-    second = next((item for item in remaining if item.sessions >= SECOND_ACCESSORY_MIN_SESSIONS), None)
+
+    def planned_count(item: _Candidate) -> int:
+        return sum(1 for _role, planned in plan if planned.rule.primary_muscle is item.rule.primary_muscle)
+
+    def balance_key(item: _Candidate) -> tuple[int, bool, tuple[int, int, int, str]]:
+        same_pattern = item.rule.movement_pattern == key.rule.movement_pattern
+        return (planned_count(item), same_pattern, _familiarity_key(item))
+
+    def hinge_taken(item: _Candidate) -> bool:
+        return _heavy_hinge(item) and any(_heavy_hinge(planned) for _role, planned in plan)
+
+    def over_cap(item: _Candidate) -> bool:
+        unused = [other for other in pool if all(other is not planned for _role, planned in plan)]
+        return planned_count(item) >= MAX_EXERCISES_PER_PRIMARY_MUSCLE and any(
+            planned_count(other) == 0 for other in unused
+        )
+
+    remaining = sorted((item for item in pool if item.compound), key=balance_key)
+    # First accessory: an uncovered primary muscle first, then a pattern different from the key.
+    first = next((item for item in remaining if not hinge_taken(item)), None)
+    if first is not None:
+        remaining.remove(first)
+        plan.append((ExerciseRole.ACCESSORY, first))
+    # Second accessory: one that covers an uncovered muscle, or a regular compound (2+ sessions)
+    # unless the two remaining slots are needed for 2+ uncovered muscles with familiar isolations.
+    remaining.sort(key=balance_key)
+    uncovered_isolation_muscles = {
+        item.rule.primary_muscle for item in pool if not item.compound and planned_count(item) == 0
+    }
+    second = next(
+        (
+            item
+            for item in remaining
+            if not over_cap(item)
+            and not hinge_taken(item)
+            and (
+                planned_count(item) == 0
+                or (item.sessions >= SECOND_ACCESSORY_MIN_SESSIONS and len(uncovered_isolation_muscles) <= 1)
+            )
+        ),
+        None,
+    )
     if second is not None and MAX_ACCESSORIES >= 2:
         plan.append((ExerciseRole.ACCESSORY, second))
-    # Isolation: prefer a primary muscle the compounds do not already target, then familiarity.
-    covered = {candidate.rule.primary_muscle for _role, candidate in plan}
-    options = sorted(
-        (item for item in isolations if item is not key),
-        key=lambda item: (item.rule.primary_muscle in covered, _familiarity_key(item)),
-    )
-    if options:
-        plan.append((ExerciseRole.ISOLATION, options[0]))
+    # Isolation: an uncovered primary muscle first, then the least covered, then familiarity.
+    options = sorted((item for item in pool if not item.compound), key=balance_key)
+    first_isolation = next((item for item in options if not over_cap(item)), None)
+    if first_isolation is not None:
+        plan.append((ExerciseRole.ISOLATION, first_isolation))
+    # Completeness: one more isolation only for a focus muscle still uncovered, within the
+    # 1 key + 2 accessory + 1 isolation size (for example when no further compound exists).
+    for item in sorted(options, key=balance_key):
+        if len(plan) >= MAX_EXERCISES:
+            break
+        if all(item is not planned for _role, planned in plan) and planned_count(item) == 0:
+            plan.append((ExerciseRole.ISOLATION, item))
     return plan, notes
+
+
+def _heavy_hinge(item: _Candidate) -> bool:
+    return item.label.category in HEAVY_HINGE_CATEGORIES and item.rule.movement_pattern is MovementPattern.HINGE
 
 
 def _auto_selection(
@@ -842,9 +991,11 @@ def build_strength_recommendation(
     avoided = frozenset(avoid_muscles)
     history = strength_history(activities, as_of - timedelta(days=HISTORY_DAYS), as_of - timedelta(days=1))
     occurrences = exercise_occurrences(history)
-    region_sets, muscle_sets, unknown_by_day = _region_sets_by_day(history)
+    daily = _region_sets_by_day(history)
+    muscle_sets, unknown_by_day = daily.muscle, daily.unknown
+    no_rule_notices = _no_rule_notices(history)
     strong_swim = any(item.strong for item in swim_overlaps)
-    statuses = _region_statuses(as_of, region_sets, muscle_sets, goals, strong_swim, recovery.level, avoided)
+    statuses = _region_statuses(as_of, daily, goals, strong_swim, recovery.level, avoided)
     ranked = sorted(statuses, key=_region_rank)
 
     reasons: list[str] = []
@@ -882,6 +1033,18 @@ def build_strength_recommendation(
             adjustments.append(
                 f"requested {requested_focus.value} had {sets_yesterday} primary sets yesterday (about 48 h rest "
                 "is usual): reduced session, focus kept"
+            )
+        hinted_yesterday = [
+            item
+            for item in no_rule_notices
+            if item.local_date == previous_day
+            and item.category_hint_muscle in {muscle.value for muscle in requested_muscles}
+        ]
+        if hinted_yesterday:
+            adjustments.append(
+                f"{sum(item.set_count for item in hinted_yesterday)} sets yesterday under labels without a taxonomy "
+                f"rule ({', '.join(sorted({item.label for item in hinted_yesterday}))}) may be "
+                f"{requested_focus.value} work but are not counted, so the ~48 h rest check above may have missed it"
             )
         plan, notes = _select_slots(_candidates(requested_muscles, occurrences, avoided), avoided_patterns)
         adjustments.extend(notes)
@@ -939,28 +1102,34 @@ def build_strength_recommendation(
         exercises
     ):
         adjustments.append(f"second accessory dropped to stay near {goals.strength_session_minutes} minutes")
-    if (
-        requested_focus is not None
-        and exercises
-        and not any(item.role is ExerciseRole.ACCESSORY for item in exercises)
-        and _minutes(exercises) + SESSION_MINUTES_TOLERANCE < goals.strength_session_minutes
-    ):
-        # Reported only: a requested focus is never padded with exercises outside its history.
-        familiar = _candidates(FOCUS_MUSCLES[requested_focus], occurrences, avoided)
-        usable = sum(1 for item in familiar if item.compound and item.rule.movement_pattern not in avoided_patterns)
-        swim_rule = any(item.compound and item.rule.movement_pattern in avoided_patterns for item in familiar)
+
+    focus_muscle_groups = tuple(MuscleGroup(muscle) for muscle in focus_muscles)
+    coverage = _focus_coverage(focus_muscle_groups, exercises, occurrences, avoided, avoided_patterns)
+    if exercises and _minutes(exercises) + SESSION_MINUTES_TOLERANCE < goals.strength_session_minutes:
+        # Reported only: a session is never padded with exercises outside the user's history.
         reasons.append(
-            f"history is limited: {usable} usable familiar compound {requested_focus.value} exercises in the last "
-            f"{HISTORY_DAYS} days{' after the hard-swim overhead-press rule' if swim_rule else ''}, so no "
-            f"accessory slot was filled; the session is about {_minutes(exercises)} min against the "
-            f"{goals.strength_session_minutes}-minute goal and nothing was added to fill it"
+            _shortfall_reason(
+                focus_name or "",
+                exercises,
+                coverage,
+                _candidates(focus_muscle_groups, occurrences, avoided),
+                avoided_patterns,
+                level,
+                strong_swim,
+                goals,
+            )
         )
 
     if level is not AdjustmentLevel.NORMAL:
-        fired = ", ".join(item.rule or item.field for item in recovery.fired) or "no other region rested"
-        adjustments.insert(0, f"recovery {level.value}: {fired}")
+        fired = ", ".join(f"{item.rule or item.field} [{item.source_date.isoformat()}]" for item in recovery.fired)
+        if recovery.carried and recovery.lookback is not None:
+            carried = f"carried from earlier mornings: {recovery.lookback.explanation}"
+            fired = ", ".join(part for part in (fired, carried) if part)
+        adjustments.insert(0, f"recovery {level.value}: {fired or 'no other region rested'}")
     elif not recovery.data_available:
         adjustments.insert(0, "no recovery data for this date: no recovery adjustment (missing is not poor)")
+    if recovery.lookback is not None and not recovery.carried:
+        adjustments.append(f"recovery lookback: {recovery.lookback.explanation}")
     for overlap in swim_overlaps:
         when = "earlier today" if overlap.same_day else "yesterday"
         detail = "; ".join(overlap.reasons) if overlap.reasons else "no high-intensity signal"
@@ -972,6 +1141,22 @@ def build_strength_recommendation(
         reasons.append(
             f"{unknown_recent} UNKNOWN sets in the last 7 days are not attributed to any muscle; "
             "region set counts are lower bounds"
+        )
+    focus_hinted = [item for item in no_rule_notices if item.category_hint_muscle in focus_muscles]
+    if focus_hinted:
+        reasons.append(
+            f"{focus_name} counts may be underestimated: {sum(item.set_count for item in focus_hinted)} sets in the "
+            f"last {HISTORY_DAYS} days under labels without a taxonomy rule whose Garmin category suggests a "
+            f"{focus_name} muscle ("
+            + ", ".join(f"{item.label} {item.local_date.isoformat()} x{item.set_count}" for item in focus_hinted)
+            + "); they are not counted or planned"
+        )
+    no_rule_recent = sum(count for day, count in daily.no_rule.items() if day >= recent_start)
+    if no_rule_recent:
+        labels = sorted({item.label for item in no_rule_notices if item.local_date >= recent_start})
+        reasons.append(
+            f"{no_rule_recent} sets in the last 7 days use labels without a taxonomy rule ({', '.join(labels)}); "
+            "they are not attributed to any muscle, so the muscles they train may be underestimated"
         )
     return StrengthRecommendation(
         focus=focus_name,
@@ -992,6 +1177,10 @@ def build_strength_recommendation(
         unknown_active_sets_last_7_days=unknown_recent,
         unknown_active_sets_last_28_days=sum(unknown_by_day.values()),
         unknown_notices=_unknown_notices(as_of, history),
+        focus_coverage=coverage,
+        no_rule_active_sets_last_7_days=no_rule_recent,
+        no_rule_active_sets_last_28_days=sum(daily.no_rule.values()),
+        no_rule_notices=no_rule_notices,
     )
 
 
@@ -1141,6 +1330,144 @@ def _unknown_notices(
                 )
             )
     return tuple(sorted(notices, key=lambda item: (item.local_date, item.source_activity_id), reverse=True))
+
+
+def _no_rule_notices(history: Sequence[tuple[date, NormalizedActivity]]) -> tuple[NoRuleExerciseNotice, ...]:
+    notices = []
+    for day, activity in history:
+        per_label: dict[ExerciseLabel, list[int]] = {}
+        for item in activity.strength_sets:
+            if item.set_type != "ACTIVE":
+                continue
+            classification = classify_strength_set(item)
+            if classification.unmapped_reason is not UnmappedReason.NO_RULE or classification.source_category is None:
+                continue
+            label = ExerciseLabel(classification.source_category, classification.source_name)
+            per_label.setdefault(label, []).append(item.sequence)
+        for label, sequences in per_label.items():
+            hint = _category_hint(label.category)
+            notices.append(
+                NoRuleExerciseNotice(
+                    source_activity_id=activity.source_activity_id,
+                    local_date=day,
+                    label=label.text,
+                    set_count=len(sequences),
+                    set_sequences=tuple(sequences),
+                    category_hint_muscle=hint.primary_muscle.value if hint else None,
+                    category_hint_region=(
+                        _REGION_OF_MUSCLE[hint.primary_muscle].value
+                        if hint and hint.primary_muscle in _REGION_OF_MUSCLE
+                        else None
+                    ),
+                )
+            )
+    return tuple(sorted(notices, key=lambda item: (item.local_date, item.source_activity_id, item.label), reverse=True))
+
+
+def _focus_coverage(
+    focus_muscles: Sequence[MuscleGroup],
+    exercises: Sequence[PlannedExercise],
+    occurrences: Mapping[ExerciseLabel, list[ExerciseOccurrence]],
+    avoided: frozenset[MuscleGroup],
+    avoided_patterns: frozenset[MovementPattern],
+) -> tuple[FocusMuscleCoverage, ...]:
+    result = []
+    for muscle in focus_muscles:
+        planned = tuple(item.label for item in exercises if item.primary_muscle == muscle.value)
+        familiar = _candidates((muscle,), occurrences, frozenset())
+        usable = _candidates((muscle,), occurrences, avoided)
+        if planned:
+            status, labels, note = "covered", planned, f"covered by {', '.join(planned)}"
+        elif muscle in avoided or (familiar and not usable):
+            status, labels, note = "avoided", (), "excluded by --avoid"
+        elif muscle.value not in _RULE_PRIMARY_MUSCLES:
+            status, labels, note = (
+                "no_taxonomy_rule",
+                (),
+                "no taxonomy rule uses it as a primary muscle, so no stored Garmin label counts for it; "
+                "nothing is substituted",
+            )
+        elif not usable:
+            status, labels, note = (
+                "no_familiar_history",
+                (),
+                f"no familiar exercise with this primary muscle in the last {HISTORY_DAYS} days; "
+                "nothing is substituted",
+            )
+        elif all(item.compound and item.rule.movement_pattern in avoided_patterns for item in usable):
+            status, labels, note = (
+                "excluded_after_hard_swim",
+                tuple(item.label.text for item in usable),
+                "its only familiar exercises are overhead presses, excluded after a hard swim",
+            )
+        else:
+            status, labels = "not_selected", tuple(item.label.text for item in usable)
+            note = "familiar exercises exist but other muscles took the slots or the time limit"
+            planned_hinges = [item.label for item in exercises if _is_heavy_hinge_exercise(item)]
+            if planned_hinges and all(_heavy_hinge(item) for item in usable):
+                note = (
+                    f"its only familiar exercises are heavy hinge variants and {', '.join(planned_hinges)} is already "
+                    "planned (one heavy hinge per session)"
+                )
+        result.append(FocusMuscleCoverage(muscle.value, status, labels, note))
+    return tuple(result)
+
+
+def _is_heavy_hinge_exercise(item: PlannedExercise) -> bool:
+    return item.category in HEAVY_HINGE_CATEGORIES and item.movement_pattern == MovementPattern.HINGE.value
+
+
+def _shortfall_reason(
+    focus: str,
+    exercises: Sequence[PlannedExercise],
+    coverage: Sequence[FocusMuscleCoverage],
+    candidates: Sequence[_Candidate],
+    avoided_patterns: frozenset[MovementPattern],
+    level: AdjustmentLevel,
+    strong_swim: bool,
+    goals: TrainingGoals,
+) -> str:
+    """Why the session is shorter than the time goal; the session is never padded."""
+    causes = []
+    history_limited = False
+    for item in coverage:
+        if item.status in ("no_taxonomy_rule", "no_familiar_history"):
+            causes.append(f"{item.muscle} missing ({item.note})")
+            history_limited = True
+        elif item.status == "excluded_after_hard_swim":
+            causes.append(f"{item.muscle} missing ({item.note})")
+    planned = {item.label for item in exercises}
+    covered = Counter(item.primary_muscle for item in exercises)
+    # With a full-size plan the shortfall comes from fewer sets, not from unused exercises.
+    for candidate in candidates if len(exercises) < MAX_EXERCISES else ():
+        if candidate.label.text in planned:
+            continue
+        muscle = candidate.rule.primary_muscle.value
+        planned_hinge = next((item.label for item in exercises if _is_heavy_hinge_exercise(item)), None)
+        if candidate.compound and candidate.rule.movement_pattern in avoided_patterns:
+            why = "overhead pressing excluded after a hard swim"
+        elif planned_hinge is not None and _heavy_hinge(candidate):
+            why = f"one heavy hinge per session ({planned_hinge} is planned)"
+        elif covered[muscle] >= MAX_EXERCISES_PER_PRIMARY_MUSCLE:
+            why = f"{muscle} already has {covered[muscle]} exercises"
+        elif covered[muscle] and candidate.sessions < SECOND_ACCESSORY_MIN_SESSIONS:
+            why = f"{muscle} already covered and only {candidate.sessions} session in {HISTORY_DAYS} days"
+        else:
+            why = f"session size limit (1 key, {MAX_ACCESSORIES} accessories, 1 isolation)"
+        causes.append(f"{candidate.label.text} considered, not added: {why}")
+    if len(exercises) < MAX_EXERCISES and all(item.label.text in planned for item in candidates):
+        causes.append(f"no other familiar {focus} exercise in the last {HISTORY_DAYS} days")
+        history_limited = True
+    if level is AdjustmentLevel.REDUCE:
+        causes.append("recovery reduce: one set fewer per exercise")
+    if strong_swim:
+        causes.append("hard swim overlap: fewer shoulder/lat sets")
+    prefix = "history is limited: " if history_limited else ""
+    return (
+        f"{prefix}{focus} session is about {_minutes(exercises)} min with {len(exercises)} exercises against the "
+        f"{goals.strength_session_minutes}-minute goal; {'; '.join(causes) or 'no further familiar exercise fits'}; "
+        "nothing was added to fill the time"
+    )
 
 
 def primary_muscle_sets_on(day: date, activities: Sequence[NormalizedActivity]) -> Counter[MuscleGroup]:

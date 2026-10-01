@@ -90,7 +90,8 @@ def test_recommend_prints_ascii_sections_and_never_writes(
         "== Progression targets ==",
         "== Recovery adjustment",
         "== Next swim goal",
-        "== Data quality / UNKNOWN notices ==",
+        "== Data freshness ==",
+        "== Data quality / UNKNOWN / no-rule notices ==",
     ):
         assert heading in output
     assert "BENCH_PRESS/-" in output
@@ -195,3 +196,35 @@ def test_recommend_reports_missing_database(
     assert main(["recommend", "--date", "2026-03-16"]) == 1
     assert "not found" in capsys.readouterr().err
     assert not (tmp_path / "empty-home").exists()
+
+
+def test_recommend_reports_freshness_and_a_partial_recovery_row(home: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["recommend", "--date", "2026-03-16", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert main(["recommend", "--date", "2026-03-16"]) == 0
+    output = capsys.readouterr().out
+
+    freshness = payload["data_freshness"]
+    assert freshness["latest_swim_date"] == "2026-03-16"
+    assert freshness["latest_strength_date"] == "2026-03-16"
+    assert (freshness["requested_date_recovery_row"], freshness["requested_date_sleep_recorded"]) == (True, False)
+    assert freshness["sync_coverage_recorded"] is False
+    codes = [item["code"] for item in payload["notices"]]
+    assert "recovery_row_partial" in codes
+    assert "swim_gap" not in codes
+    assert payload["recovery"]["lookback"]["reason"] == "no sleep recorded for 2026-03-16 (row is partial)"
+    assert "== Data freshness ==" in output
+    assert "2026-03-16 recovery row: present, no sleep (partial)" in output
+    assert "not a confirmed rest day" in output
+
+
+def test_recommend_after_a_long_gap_warns_and_plans_an_easy_swim(
+    home: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["recommend", "--date", "2026-03-30", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    codes = [item["code"] for item in payload["notices"]]
+    assert {"activity_coverage_gap", "recovery_row_missing", "recovery_coverage_gap", "swim_gap"} <= set(codes)
+    assert payload["swimming"]["goal"]["session_type"] == "return_easy"
+    assert payload["swimming"]["baseline"]["days_since_last_swim"] == 14

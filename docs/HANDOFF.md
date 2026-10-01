@@ -2,7 +2,88 @@
 
 Last updated: 2026-10-01
 
-## Current task: Exercise Taxonomy coverage update (2026-10-01)
+## Current task: Recommendation Hardening v1 (2026-10-01)
+
+Paseo worktree `recommendation-hardening`(branch `feature/recommendation-hardening`, base main = origin/main `8b259e7`).
+**구현, 테스트, production read-only 검증 완료. 미커밋** — 사용자가 audit, 규칙 변경, production 결과를 확인한 뒤 commit
+여부를 결정한다. Merge/push 없음. 규칙 전체는 `docs/training-recommendation.md`(Hardening v1 표시 절).
+
+### What was attempted / completed
+
+1. Audit(read-only, `immutable=1`, 스크립트는 evidence 폴더): Garmin label 43종 + UNKNOWN 276 set(09-22 relabel 이전; 이후 46종 + UNKNOWN 271). Rear-delt 계열
+   label 없음(REAR/FACE_PULL/REVERSE 0), UNKNOWN display name은 전부 "Unknown". Lateral raise 옆 UNKNOWN(09-17 seq 35,
+   09-22 seq 29/33)은 rear-delt일 수 있지만 추측 안 함. 2026-10-01 recovery RAW: readiness `AFTER_WAKEUP_RESET`
+   MODERATE 63이지만 `validSleep: false`, `sleepScore: null`, HRV `lastNightAvg: null`(수면 없이 계산된 값).
+   Swim 간격 최대 8일(2026-07~09), 마지막 swim 09-17.
+2. Strength(`strength_recommendation.py`): muscle balance slot 선택, `MAX_EXERCISES`=4, 한 primary muscle 3종목 금지,
+   heavy hinge(category `DEADLIFT` + hinge pattern) 세션당 1개(사용자 요청 2026-10-01; 두 번째 hinge 대신 겹치지 않는
+   익숙한 종목, 없으면 짧게 두고 이유),
+   둘째 accessory 규칙, 완성도용 isolation, `focus_coverage`, 시간 부족분 reason(채우지 않음; 기존 "compound 1개 이하"
+   조건 대체), low-confidence 부하 `recorded_load_range_kg`/`same_load_evidence`/`load_guidance`(progression 규칙 불변),
+   `no_rule_notices`와 region 힌트(표시 전용), 요청 focus 어제 no-rule 힌트 경고, 날짜가 붙은 recovery 근거.
+3. Recovery(`recovery_assessment.py`): D row 없음 또는 `sleep_seconds` NULL이면 D-1/D-2 아침 field 확인, D-1 reduce
+   또는 둘 다 poor면 `hold` carry(최대 hold). `RecoveryAssessment.lookback`.
+4. Swim(`swim_recommendation.py`): history D-28~D(off-by-one 수정), `return_easy`(마지막 swim ≥ 10일 전 또는 없음,
+   0.8 × anchor easy, pace 없음), baseline `long_term_target_meters`/`days_since_last_swim`.
+5. `training_recommendation.py`: `DataFreshness`, notice `recovery_row_partial`/`recovery_coverage_gap`/`swim_gap`/
+   `strength_no_rule_exercise`, `recovery_row_missing` 문구 수정. Renderer: Focus coverage, load 안내, Lookback,
+   Data freshness 절, low-confidence `@ ~X kg (low confidence: recorded A-B kg; ...)`.
+
+### Proposed taxonomy rules (구현하지 않음, 사용자 결정 필요)
+
+같은 category의 기존 rule을 그대로 복제하는 mirror(모두 Garmin Connect confirmed label, probability 100):
+
+| label | mirror of | 근거 |
+| --- | --- | --- |
+| `PULL_UP/CLOSE_GRIP_LAT_PULLDOWN` | `PULL_UP/LAT_PULLDOWN` | grip 변형, 09-30 5 set |
+| `PULL_UP/WIDE_GRIP_LAT_PULLDOWN` | `PULL_UP/LAT_PULLDOWN` | grip 변형, 09-30 4 set |
+| `ROW/BENT_OVER_ROW_WITH_BARBELL` | `ROW/-` | barbell row, 09-30 6 set |
+| `SHOULDER_PRESS/SEATED_BARBELL_SHOULDER_PRESS` | `SHOULDER_PRESS/-` | 09-22 relabel, 8 set |
+| `SHOULDER_PRESS/DUMBBELL_SHOULDER_PRESS` | `SHOULDER_PRESS/-` | 09-22 relabel, 6 set |
+| `LATERAL_RAISE/ONE_ARM_CABLE_LATERAL_RAISE` | `LATERAL_RAISE/-` | 09-22 relabel, 3 set |
+
+보류: `TRICEPS_EXTENSION/LYING_TRICEPS_EXTENSION_TO_CLOSE_GRIP_BENCH_PRESS`(triceps primary는 분명하지만 pattern이
+extension+press 복합), `PLYO/BOX_JUMP`(category rule 없음). Rule 추가는 analytics snapshot 출력도 바꾸므로 별도 승인.
+In-memory preview(`preview_rules.py`, repo 변경 없음): 10-01 shoulders = SEATED_BARBELL 40 kg + DUMBBELL 16 kg
+(anterior) + ONE_ARM_CABLE_LATERAL_RAISE 6 kg(lateral), 32분, posterior 누락; pull은 어제 15 set → resting.
+
+### Files changed (미커밋)
+
+`src/muscle50/domain/{strength_recommendation,recovery_assessment,swim_recommendation,training_recommendation}.py`,
+`src/muscle50/presentation/terminal.py`, `tests/test_{strength_recommendation,recovery_assessment,swim_recommendation,
+recommend_cli}.py`, `docs/training-recommendation.md`, `docs/CURRENT_STATE.md`, 이 파일. Ingestion/normalization/
+taxonomy/migration 변경 없음.
+
+### Checks run
+
+- `uv run --extra dev pytest` 555 passed(기존 524 중 4개 기대값을 의도적으로 갱신: shoulders 부족분 문구, 강한 swim
+  shoulders 문구, full pull session fixture, CLI heading), `ruff check .`, `mypy src tests`, `git diff --check` 통과.
+  수정 파일만 `ruff format`(terminal.py는 main부터 미포맷이라 기존 줄 유지).
+- Production read-only: 10-01 auto/shoulders/legs, 09-28 `--focus legs`, 09-18, 09-21, 09-25, 09-13 exit 0, JSON 재실행
+  byte-identical, ASCII. 62일 HEAD 대비 비교(`compare.txt`). Fingerprint 전후 동일(아래 위험 참고).
+
+### Known failures or risks
+
+- **작업 중 production 변경(이 세션이 한 것 아님)**: 16:12-16:23 KST에 다른 프로세스가 `garmin refresh`를 6회 실행했다
+  (09-17 `24391187334`, 09-18 `24403245957`, 09-21 `24438715022`, 09-22 `24451010022` ×2, 09-23 `24464300822`), RAW
+  912 → 954. 처음 fingerprint(`before.json`)와 다르다. 최종 검증은 그 이후 상태(`before_v5.json` = `after_v5.json`, v4 이후 외부 변경 없음)에서 했다.
+  그 전 실행 결과는 `run1_mixed_state/`, `run2_pre_refine/`, `run3_v3/`, `run4_v4_prehinge/`에 보관(근거로 쓰지 않음).
+- 09-22 relabel 때문에 사용자가 지적한 `SHOULDER_PRESS/- 16-30 kg`, `LATERAL_RAISE/- 6-10 kg` 사례는 production에서 더
+  이상 재현되지 않는다(두 label 모두 28일 1 session). Low-confidence 표시는 단위 테스트(같은 16/30 kg 모양)와
+  production LUNGE/- 20-40 kg, PULL_UP/- 등에서 확인.
+- Shoulders는 posterior deltoid rule/label이 없어 23분이다. 위 rule 제안을 채택해도 32분이다.
+- Heavy hinge 규칙 후 legs는 대개 3종목 32분이다(hamstrings 익숙한 종목이 SLDL뿐이고 leg extension은 quad 3번째라
+  안 넣음). 62일: heavy hinge 2개 plan 17(규칙 전 초안) → 0, HEAD 2 → 0. `HIP_RAISE/BARBELL_HIP_THRUST_ON_FLOOR`는
+  deadlift 변형이 아니라 SLDL과 같이 나올 수 있다(08-20~08-31 8일).
+- Lookback은 8월(recovery row 없음)에도 평가되지만 발동하지 않는다. Carry는 09-13, 10-01 두 날.
+
+### Recommended next action
+
+1. 사용자: audit/규칙/결과 확인 후 commit 승인(또는 수정 지시). 승인 시 이 branch에 commit, merge/push는 별도 승인.
+2. Taxonomy mirror rule 6개 채택 여부 결정(별도 작은 변경 권장, analytics snapshot 영향 확인).
+3. Rear-delt 운동을 한다면 Garmin Connect에서 지정 → `garmin refresh` → posterior-primary rule 추가 검토.
+
+## Previous task: Exercise Taxonomy coverage update (2026-10-01)
 
 Paseo worktree `taxonomy-coverage`(branch `feature/taxonomy-coverage`, base `8b259e7` = `--focus` commit).
 **구현, 테스트, production read-only 검증 완료. 사용자 승인(2026-10-01)으로 이 branch에 commit했다.**

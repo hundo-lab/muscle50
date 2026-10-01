@@ -582,17 +582,38 @@ def test_requested_shoulders_uses_only_shoulder_primary_exercises() -> None:
     assert "posterior_deltoid: no v1 taxonomy rule uses it as a primary muscle" in plan.reasons[0]
     # Two familiar exercises cannot fill the time goal; that is reported, never padded.
     assert plan.estimated_minutes == 23
-    limited = "history is limited: 1 usable familiar compound shoulders exercises in the last 28 days, so no accessory"
-    assert any(text.startswith(limited) for text in plan.reasons)
+    coverage = {item.muscle: item for item in plan.focus_coverage}
+    assert coverage["anterior_deltoid"].exercises == ("SHOULDER_PRESS/-",)
+    assert coverage["lateral_deltoid"].exercises == ("LATERAL_RAISE/-",)
+    assert coverage["posterior_deltoid"].status == "no_taxonomy_rule"
+    shortfall = next(text for text in plan.reasons if "against the 40-minute goal" in text)
+    assert shortfall.startswith("history is limited: shoulders session is about 23 min with 2 exercises")
+    assert "posterior_deltoid missing" in shortfall
+    # A second lateral-deltoid exercise with one session is considered but not used as filler.
+    assert "SHRUG/UPRIGHT_ROW considered, not added: lateral_deltoid already covered and only 1 session" in shortfall
+    assert shortfall.endswith("nothing was added to fill the time")
 
 
 def test_a_full_requested_session_is_not_reported_as_limited_history() -> None:
     history = _calm_upper_body_history()
+    for source_id, days in (("u3", 9), ("u4", 13)):
+        history.append(_strength(source_id, _days_ago(days), _sets("PULL_UP", None, (8, 0.0), (8, 0.0), (7, 0.0))))
 
     plan = _recommend(history, focus=StrengthFocus.PULL)
 
-    assert any(item.role.value == "accessory" for item in plan.exercises)
+    assert [item.role.value for item in plan.exercises] == ["key", "accessory", "accessory", "isolation"]
+    assert plan.estimated_minutes == 41
     assert not any(text.startswith("history is limited") for text in plan.reasons)
+    assert not any("against the 40-minute goal" in text for text in plan.reasons)
+
+
+def test_a_short_session_reports_why_instead_of_padding() -> None:
+    plan = _recommend(_calm_upper_body_history(), focus=StrengthFocus.PULL)
+
+    assert len(plan.exercises) == 3
+    shortfall = next(text for text in plan.reasons if "against the 40-minute goal" in text)
+    assert "pull session is about 32 min with 3 exercises" in shortfall
+    assert "no other familiar pull exercise in the last 28 days" in shortfall
 
 
 def test_hard_swim_keeps_requested_shoulders_but_drops_overhead_press_and_trims_sets() -> None:
@@ -609,9 +630,12 @@ def test_hard_swim_keeps_requested_shoulders_but_drops_overhead_press_and_trims_
     assert all(any("hard swim overlap" in text for text in item.adjustments) for item in plan.exercises)
     assert any("swim yesterday" in text for text in plan.adjustments)
     assert any(
-        "0 usable familiar compound shoulders exercises" in text and "overhead-press rule" in text
+        "anterior_deltoid missing (its only familiar exercises are overhead presses, excluded after a hard swim)"
+        in text
         for text in plan.reasons
     )
+    coverage = {item.muscle: item.status for item in plan.focus_coverage}
+    assert coverage["anterior_deltoid"] == "excluded_after_hard_swim"
 
 
 def test_poor_recovery_keeps_the_requested_focus_and_holds_progression() -> None:
@@ -690,3 +714,295 @@ def test_requested_focus_is_deterministic_and_order_independent() -> None:
         first = _recommend(history, focus=focus)
         second = _recommend(list(reversed(history)), focus=focus)
         assert json.dumps(dataclasses.asdict(first), default=str) == json.dumps(dataclasses.asdict(second), default=str)
+
+
+# --- muscle balance, low-confidence loads, no-rule warnings ---------------------------------
+
+
+def _legs_history_with_hinges() -> list[NormalizedActivity]:
+    """2026-10-01 shape: lunges/squats are most familiar, hinge work exists once each."""
+    return [
+        _strength(
+            "l1",
+            _days_ago(20),
+            _sets("LUNGE", None, (12, 20.0), (12, 20.0)) + _sets("SQUAT", None, (8, 40.0), start=2),
+        ),
+        _strength(
+            "l2",
+            _days_ago(13),
+            _sets("SQUAT", None, (12, 40.0), (10, 40.0))
+            + _sets("CRUNCH", "LEG_EXTENSIONS", (12, 50.0), (12, 50.0), start=2),
+        ),
+        _strength(
+            "l3",
+            _days_ago(12),
+            _sets("DEADLIFT", "BARBELL_DEADLIFT", (12, 35.0), (11, 35.0), (10, 35.0))
+            + _sets("LUNGE", None, (12, 30.0), start=3),
+        ),
+        _strength(
+            "l4",
+            _days_ago(8),
+            _sets("DEADLIFT", "STRAIGHT_LEG_DEADLIFT", (10, 50.0), (8, 50.0))
+            + _sets("LUNGE", None, (11, 40.0), (11, 40.0), start=2),
+        ),
+    ]
+
+
+def _legs_history_with_hinges_and_leg_curl() -> list[NormalizedActivity]:
+    """As above, plus a familiar non-hinge hamstring exercise."""
+    return _legs_history_with_hinges() + [
+        _strength("h1", _days_ago(6), _sets("LEG_CURL", None, (12, 30.0), (12, 30.0), (11, 30.0)))
+    ]
+
+
+def _deadlifts(plan: StrengthRecommendation) -> list[str]:
+    return [item.label for item in plan.exercises if item.category == "DEADLIFT"]
+
+
+def test_two_familiar_deadlift_variants_are_never_both_selected() -> None:
+    plan = _recommend(_legs_history_with_hinges(), focus=StrengthFocus.LEGS)
+
+    # The existing ranking picks one hinge (more familiar: 3 sets vs 2); the other is not added.
+    assert _deadlifts(plan) == ["DEADLIFT/BARBELL_DEADLIFT"]
+    assert all(item.label != "DEADLIFT/STRAIGHT_LEG_DEADLIFT" for item in plan.exercises)
+
+
+def test_a_non_hinge_alternative_covers_the_muscle_the_second_hinge_would_have() -> None:
+    plan = _recommend(_legs_history_with_hinges_and_leg_curl(), focus=StrengthFocus.LEGS)
+
+    muscles = [item.primary_muscle for item in plan.exercises]
+    assert plan.exercises[0].label == "LUNGE/-"  # most familiar compound stays the key
+    assert _deadlifts(plan) == ["DEADLIFT/BARBELL_DEADLIFT"]
+    assert "LEG_CURL/-" in [item.label for item in plan.exercises]
+    assert muscles.count("quadriceps") <= 2
+    assert {"glutes", "hamstrings"} <= set(muscles)
+    assert {item.status for item in plan.focus_coverage} == {"covered"}
+    assert plan.estimated_minutes == 41
+
+
+def test_without_a_non_hinge_alternative_the_session_stays_short_and_says_why() -> None:
+    plan = _recommend(_legs_history_with_hinges(), focus=StrengthFocus.LEGS)
+
+    assert len(plan.exercises) == 3
+    assert plan.estimated_minutes == 32
+    assert [item.primary_muscle for item in plan.exercises].count("quadriceps") == 2  # no third quad as filler
+    shortfall = next(text for text in plan.reasons if "against the 40-minute goal" in text)
+    assert (
+        "DEADLIFT/STRAIGHT_LEG_DEADLIFT considered, not added: one heavy hinge per session "
+        "(DEADLIFT/BARBELL_DEADLIFT is planned)" in shortfall
+    )
+    assert "CRUNCH/LEG_EXTENSIONS considered, not added: quadriceps already has 2 exercises" in shortfall
+    assert shortfall.endswith("nothing was added to fill the time")
+    hamstrings = next(item for item in plan.focus_coverage if item.muscle == "hamstrings")
+    assert hamstrings.status == "not_selected"
+    assert "one heavy hinge per session" in hamstrings.note
+
+
+def test_hinge_rule_never_changes_the_automatic_focus() -> None:
+    history = _legs_history_with_hinges()
+
+    automatic = _recommend(history)
+    requested = _recommend(history, focus=StrengthFocus.LEGS)
+
+    assert (automatic.focus, automatic.focus_source) == ("legs", "auto")
+    assert automatic.regions == requested.regions
+    assert len(_deadlifts(automatic)) == 1
+    # Upper-body automatic choices are unaffected (no deadlift candidates there).
+    assert _recommend(_push_pull_legs_history()).focus == "legs"
+    assert _recommend(_calm_upper_body_history()).focus in ("push", "pull")
+
+
+def test_hinge_rule_keeps_a_user_selected_focus() -> None:
+    history = _legs_history_with_hinges() + _calm_upper_body_history()
+
+    legs = _recommend(history, focus=StrengthFocus.LEGS)
+    pull = _recommend(history, focus=StrengthFocus.PULL)
+
+    assert (legs.focus, legs.focus_source) == ("legs", "user")
+    assert len(_deadlifts(legs)) == 1
+    assert (pull.focus, pull.focus_source) == ("pull", "user")
+    assert _deadlifts(pull) == []
+
+
+def test_quad_only_history_is_not_balanced_with_invented_exercises() -> None:
+    history = [
+        _strength(
+            f"q{days}",
+            _days_ago(days),
+            _sets("SQUAT", None, (10, 40.0), (10, 40.0)) + _sets("LUNGE", None, (10, 20.0), (10, 20.0), start=2),
+        )
+        for days in (4, 9)
+    ]
+
+    plan = _recommend(history, focus=StrengthFocus.LEGS)
+
+    assert {item.primary_muscle for item in plan.exercises} == {"quadriceps"}
+    coverage = {item.muscle: item.status for item in plan.focus_coverage}
+    assert coverage["hamstrings"] == coverage["glutes"] == "no_familiar_history"
+
+
+def test_a_third_exercise_for_one_muscle_waits_for_an_uncovered_muscle() -> None:
+    history = [
+        _strength(
+            f"q{days}",
+            _days_ago(days),
+            _sets("SQUAT", None, (10, 40.0), (10, 40.0))
+            + _sets("LUNGE", None, (10, 20.0), (10, 20.0), start=2)
+            + _sets("SQUAT", "BARBELL_BACK_SQUAT", (8, 60.0), (8, 60.0), start=4),
+        )
+        for days in (4, 9)
+    ] + [_strength("h1", _days_ago(6), _sets("LEG_CURL", None, (12, 30.0), (12, 30.0)))]
+
+    plan = _recommend(history, focus=StrengthFocus.LEGS)
+
+    muscles = [item.primary_muscle for item in plan.exercises]
+    assert muscles.count("quadriceps") == 2
+    assert "hamstrings" in muscles
+    shortfall = next(text for text in plan.reasons if "against the 40-minute goal" in text)
+    assert "quadriceps already has 2 exercises" in shortfall
+
+
+def test_mixed_equipment_load_is_low_confidence_with_a_range_and_a_confirm_step() -> None:
+    # 2026-10-01 SHOULDER_PRESS/- shape: 30 kg then 16 kg under one auto-detected label.
+    occurrences = [_occurrence("2026-09-10", (10, 30.0)), _occurrence("2026-09-22", (12, 16.0))]
+
+    target = plan_progression(ExerciseLabel("SHOULDER_PRESS", None), occurrences, COMPOUND, AdjustmentLevel.NORMAL)
+
+    assert target.load_confidence == "low"
+    assert target.recorded_load_range_kg == (16.0, 30.0)
+    assert not target.same_load_evidence
+    assert target.load_guidance is not None
+    assert "confirm the equipment and load used last time" in target.load_guidance
+    # The progression rule itself is unchanged.
+    assert target.action is ProgressionAction.ADD_REPS
+    assert target.load_kg == 16.0
+
+
+def test_low_confidence_load_repeated_last_time_is_the_comparable_start() -> None:
+    occurrences = [
+        _occurrence("2026-09-03", (10, 6.0)),
+        _occurrence("2026-09-10", (12, 10.0)),
+        _occurrence("2026-09-17", (12, 6.0)),
+    ]
+
+    target = plan_progression(
+        ExerciseLabel("LATERAL_RAISE", None), occurrences, RepRange(10, 20), AdjustmentLevel.NORMAL
+    )
+
+    assert target.load_confidence == "low"
+    assert target.same_load_evidence
+    assert target.load_guidance is not None and "also used on 2026-09-03" in target.load_guidance
+
+
+def test_consistent_load_has_no_guidance() -> None:
+    occurrences = [_occurrence("2026-09-10", (10, 50.0)), _occurrence("2026-09-17", (11, 50.0))]
+
+    target = plan_progression(BENCH, occurrences, COMPOUND, AdjustmentLevel.NORMAL)
+
+    assert target.load_confidence == "normal"
+    assert target.load_guidance is None
+    assert target.recorded_load_range_kg == (50.0, 50.0)
+
+
+def _no_rule_history() -> list[NormalizedActivity]:
+    """2026-09-30 shape: a confirmed pull session whose labels have no taxonomy rule yet."""
+    history = _push_pull_legs_history()
+    history.append(
+        _strength(
+            "nr1",
+            _days_ago(1),
+            _sets("PULL_UP", "WIDE_GRIP_LAT_PULLDOWN", (12, 30.0), (10, 30.0), (20, 20.0), (17, 20.0))
+            + _sets("ROW", "BENT_OVER_ROW_WITH_BARBELL", (12, 50.0), (10, 50.0), (8, 60.0), start=4)
+            + _sets("PLYO", "BOX_JUMP", (3, 10.0), start=7),
+        )
+    )
+    return history
+
+
+def test_no_rule_sets_are_warned_about_but_never_counted() -> None:
+    plan = _recommend(_no_rule_history())
+    baseline = _recommend(_push_pull_legs_history())
+
+    pull = next(item for item in plan.regions if item.region == "pull")
+    assert pull.sets_previous_day == 0  # still not counted or ranked
+    assert pull.no_rule_hint_sets_previous_day == 7
+    assert any("may be underestimated" in text for text in pull.notes)
+    assert plan.focus == baseline.focus
+    notices = {item.label: item for item in plan.no_rule_notices}
+    assert set(notices) == {"PULL_UP/WIDE_GRIP_LAT_PULLDOWN", "ROW/BENT_OVER_ROW_WITH_BARBELL", "PLYO/BOX_JUMP"}
+    assert notices["PULL_UP/WIDE_GRIP_LAT_PULLDOWN"].category_hint_region == "pull"
+    assert notices["PULL_UP/WIDE_GRIP_LAT_PULLDOWN"].set_count == 4
+    assert notices["PLYO/BOX_JUMP"].category_hint_muscle is None  # no category rule: region unknown
+    assert notices["PLYO/BOX_JUMP"].category_hint_region is None
+    assert plan.no_rule_active_sets_last_7_days == 8
+    assert any("8 sets in the last 7 days use labels without a taxonomy rule" in text for text in plan.reasons)
+    assert all(item.label not in notices for item in plan.exercises)
+
+
+def test_requested_focus_warns_when_no_rule_work_yesterday_may_hide_the_rest_rule() -> None:
+    plan = _recommend(_no_rule_history(), focus=StrengthFocus.PULL)
+
+    assert plan.adjustment_level == "normal"  # not inferred from an unmapped label
+    assert any(
+        "7 sets yesterday under labels without a taxonomy rule" in text and "may have missed it" in text
+        for text in plan.adjustments
+    )
+
+
+def test_carried_recovery_hold_names_its_source_dates() -> None:
+    rows = (
+        recovery(AS_OF.isoformat(), sleep_seconds=None, sleep_score=None),
+        recovery(_days_ago(1).isoformat(), sleep_seconds=13740, training_readiness_level="LOW"),
+    )
+
+    plan = _recommend(_push_pull_legs_history(), recoveries=rows)
+
+    assert plan.adjustment_level == "hold"
+    assert "carried from earlier mornings" in plan.adjustments[0]
+    assert _days_ago(1).isoformat() in plan.adjustments[0]
+    assert all(item.progression.action is not ProgressionAction.INCREASE_LOAD for item in plan.exercises)
+
+
+def test_uncovered_muscles_win_the_last_slots_over_a_second_chest_compound() -> None:
+    # 2026-09-21 shape: a familiar push-up would make chest the only muscle with two exercises
+    # while lateral deltoid and triceps both have familiar isolation work.
+    history = _push_pull_legs_history() + [
+        _strength(
+            f"x{days}",
+            _days_ago(days),
+            _sets("PUSH_UP", None, (15, 0.0), (15, 0.0)) + _sets("LATERAL_RAISE", None, (15, 8.0), start=2),
+        )
+        for days in (8, 12)
+    ]
+
+    plan = _recommend(history, focus=StrengthFocus.PUSH)
+
+    assert [item.primary_muscle for item in plan.exercises] == [
+        "chest",
+        "anterior_deltoid",
+        "triceps",
+        "lateral_deltoid",
+    ]
+    assert {item.status for item in plan.focus_coverage} == {"covered"}
+
+
+def test_a_reduced_full_size_session_names_recovery_not_unused_exercises() -> None:
+    history = _legs_history_with_hinges_and_leg_curl()
+    poor = (recovery(AS_OF.isoformat(), training_readiness_level="POOR"),)
+
+    plan = _recommend(history, recoveries=poor, focus=StrengthFocus.LEGS)
+
+    assert len(plan.exercises) == 4
+    shortfall = next(text for text in plan.reasons if "against the 40-minute goal" in text)
+    assert "recovery reduce: one set fewer per exercise" in shortfall
+    assert "considered, not added" not in shortfall
+    assert not shortfall.startswith("history is limited")
+
+
+def test_focus_names_no_rule_work_that_its_category_puts_in_the_focus() -> None:
+    plan = _recommend(_no_rule_history(), focus=StrengthFocus.PULL)
+
+    line = next(text for text in plan.reasons if text.startswith("pull counts may be underestimated"))
+    assert "7 sets in the last 28 days" in line
+    assert "PULL_UP/WIDE_GRIP_LAT_PULLDOWN" in line and "ROW/BENT_OVER_ROW_WITH_BARBELL" in line
+    assert "PLYO/BOX_JUMP" not in line

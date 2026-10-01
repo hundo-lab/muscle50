@@ -223,3 +223,71 @@ def test_long_lap_with_implausible_length_timing_is_not_a_distance_baseline() ->
     assert session.longest_implausible_segment.distance_meters == 1900.0
     assert recommendation.baseline.progression_anchor_meters == 1000.0
     assert any(caution.startswith("ignored as baseline: 1900 m") for caution in recommendation.goal.cautions)
+
+
+# --- history window and return-to-swim -------------------------------------------------------
+
+
+def test_swim_history_starts_on_the_same_day_as_strength_history() -> None:
+    from muscle50.domain.strength_recommendation import HISTORY_DAYS, strength_history
+
+    on_start = _swim("start", _days_ago(28), [_continuous(0, 400.0)])
+    before_start = _swim("before", _days_ago(29), [_continuous(0, 400.0)])
+
+    sessions = analyze_swims(AS_OF, [on_start, before_start])
+
+    assert [item.source_activity_id for item in sessions] == ["start"]
+    strength = [
+        activity(source_id, f"{day.isoformat()}T12:00:00", ActivityType.STRENGTH)
+        for source_id, day in (("s_start", _days_ago(28)), ("s_before", _days_ago(29)))
+    ]
+    window = strength_history(strength, AS_OF - timedelta(days=HISTORY_DAYS), AS_OF - timedelta(days=1))
+    assert [item.source_activity_id for _day, item in window] == ["s_start"]
+
+
+def test_long_swim_gap_gives_an_easy_re_entry_instead_of_more_distance() -> None:
+    # 2026-10-01 shape: last stored swim 14 days ago, configured baseline 1000 m.
+    plan = _recommend([_swim("old", _days_ago(14), [_continuous(0, 650.0)])])
+
+    goal = plan.goal
+    assert goal.session_type == SwimSessionType.RETURN_EASY
+    assert goal.target_continuous_meters == 800.0  # below the 1000 m anchor: no distance increase
+    assert goal.target_pace_seconds_per_100m is None  # no intensity increase
+    assert goal.total_meters == 800.0
+    assert "no pace target" in goal.main_set
+    assert "butterfly" not in goal.main_set and "freestyle" not in goal.main_set  # no invented stroke detail
+    assert any("14 days ago (>= 10 days)" in text for text in goal.reasons)
+    assert any("long-term target 1500 m is unchanged" in text for text in goal.reasons)
+    assert any("not synced" in text for text in goal.reasons)
+    assert plan.baseline.days_since_last_swim == 14
+    assert plan.baseline.long_term_target_meters == 1500.0
+
+
+def test_a_normal_gap_keeps_distance_progression() -> None:
+    plan = _recommend([_swim("recent", _days_ago(9), [_continuous(0, 400.0)])])
+
+    assert plan.goal.session_type == SwimSessionType.DISTANCE_PROGRESSION
+    assert plan.goal.target_continuous_meters == 1100.0
+
+
+def test_no_stored_swim_is_a_re_entry() -> None:
+    plan = _recommend([])
+
+    assert plan.goal.session_type == SwimSessionType.RETURN_EASY
+    assert plan.baseline.days_since_last_swim is None
+    assert any("no swim stored in the last 28 days" in text for text in plan.goal.reasons)
+
+
+def test_recovery_reduce_still_wins_over_a_re_entry() -> None:
+    plan = _recommend([_swim("old", _days_ago(14), [_continuous(0, 650.0)])], AdjustmentLevel.REDUCE)
+
+    assert plan.goal.session_type == SwimSessionType.RECOVERY_TECHNIQUE
+
+
+def test_re_entry_keeps_anomaly_safe_baselines() -> None:
+    phantom = lap(0, 2500.0, 1.787, ())
+    plan = _recommend([_swim("phantom", _days_ago(12), [phantom, _continuous(1, 500.0)], summary=3025.0)])
+
+    assert plan.goal.session_type == SwimSessionType.RETURN_EASY
+    assert plan.baseline.progression_anchor_meters == 1000.0
+    assert plan.excluded_baselines

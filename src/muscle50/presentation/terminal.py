@@ -538,6 +538,9 @@ def render_training_recommendation(recommendation: TrainingRecommendation) -> st
             f"last {exercise.last_performed.isoformat()}"
         )
         lines.extend(f"       adjustment: {text}" for text in exercise.adjustments)
+    if strength.focus_coverage:
+        lines.append("  Focus coverage (primary muscle):")
+        lines.extend(f"    {item.muscle}: {item.status} - {item.note}" for item in strength.focus_coverage)
     if strength.alternative is not None:
         alternative = strength.alternative
         lines.append(f"  Optional alternative for {alternative.replaces_label}: {alternative.label}")
@@ -549,10 +552,15 @@ def render_training_recommendation(recommendation: TrainingRecommendation) -> st
         lines.append(f"  {exercise.label} [{progression.action.value}, load confidence {progression.load_confidence}]")
         lines.extend(f"    - {text}" for text in progression.basis)
         lines.extend(f"    ! {text}" for text in progression.caveats)
+        if progression.load_guidance:
+            lines.append(f"    > load: {progression.load_guidance}")
 
     recovery = recommendation.recovery
     lines.extend(("", f"== Recovery adjustment: {strength.adjustment_level} =="))
     lines.extend(f"  {_observation_text(item)}" for item in recovery.observations)
+    if recovery.lookback is not None:
+        lines.append(f"  Lookback ({recovery.lookback.reason}):")
+        lines.extend(f"    {_observation_text(item)}" for item in recovery.lookback.observations)
     lines.extend(f"  -> {text}" for text in strength.adjustments)
 
     swimming = recommendation.swimming
@@ -577,7 +585,9 @@ def render_training_recommendation(recommendation: TrainingRecommendation) -> st
             f"  1500 m goal: {pace_text(fast)}-{pace_text(slow)} "
             f"({_clock(goals.target_1500m_fastest_seconds)}-{_clock(goals.target_1500m_slowest_seconds)})",
             f"  Swims in the last 7 days: {swimming.sessions_last_7_days} "
-            f"(goal {swimming.goal_sessions_per_week}/week)",
+            f"(goal {swimming.goal_sessions_per_week}/week); last stored swim "
+            f"{_days_ago(baseline.days_since_last_swim)}; long-term target "
+            f"{_fixed(baseline.long_term_target_meters)} m",
         )
     )
     for session in swimming.sessions[-4:]:
@@ -589,7 +599,26 @@ def render_training_recommendation(recommendation: TrainingRecommendation) -> st
             f"{', high intensity' if session.high_intensity else ''}"
         )
 
-    lines.extend(("", "== Data quality / UNKNOWN notices =="))
+    freshness = recommendation.data_freshness
+    lines.extend(
+        (
+            "",
+            "== Data freshness ==",
+            f"  latest stored: activity {_date_text(freshness.latest_activity_date)}, "
+            f"strength {_date_text(freshness.latest_strength_date)}, "
+            f"swim {_date_text(freshness.latest_swim_date)}, "
+            f"recovery row {_date_text(freshness.latest_recovery_date)}",
+            f"  {recommendation.as_of.isoformat()} recovery row: "
+            + (
+                ("present" if freshness.requested_date_sleep_recorded else "present, no sleep (partial)")
+                if freshness.requested_date_recovery_row
+                else "missing"
+            ),
+            f"  {freshness.statement}",
+        )
+    )
+
+    lines.extend(("", "== Data quality / UNKNOWN / no-rule notices =="))
     if not recommendation.notices:
         lines.append("  none")
     for notice in recommendation.notices:
@@ -610,6 +639,12 @@ def _prescription(exercise: PlannedExercise) -> str:
     rep_range = progression.rep_range
     reps = f"{progression.target_reps} reps" if progression.target_reps is not None else "reps"
     load = f" @ {kg_text(progression.load_kg)}" if progression.load_kg is not None else " (no load target)"
+    if progression.load_kg is not None and progression.load_confidence == "low":
+        # Never present a low-confidence load as exact.
+        recorded = progression.recorded_load_range_kg
+        spread = f"recorded {_fixed(recorded[0])}-{_fixed(recorded[1])} kg; " if recorded else ""
+        check = "comparable to last time" if progression.same_load_evidence else "confirm equipment/load used last time"
+        load = f" @ ~{kg_text(progression.load_kg)} (low confidence: {spread}{check})"
     if progression.action is ProgressionAction.ESTABLISH_BASELINE:
         load = " (choose a load for the range; no comparable history)"
     return f"{exercise.sets} sets x {reps}{load} (range {rep_range.minimum}-{rep_range.maximum})"
@@ -636,6 +671,10 @@ def _segment_line(segment: SwimSegment | None) -> str:
         f"{_fixed(segment.distance_meters)} m ({segment.local_date.isoformat()} {segment.source_activity_id} "
         f"lap {segment.lap_sequence}, {'/'.join(segment.strokes)}{pace_part}{verified})"
     )
+
+
+def _days_ago(days: int | None) -> str:
+    return "none in the last 28 days" if days is None else f"{days} days ago"
 
 
 def _clock(seconds: int) -> str:

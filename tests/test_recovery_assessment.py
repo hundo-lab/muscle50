@@ -76,3 +76,82 @@ def test_strongest_rule_wins_and_every_fired_rule_is_listed() -> None:
 
     assert assessment.level is AdjustmentLevel.REDUCE
     assert {item.field for item in assessment.fired} == {"sleep_score", "training_readiness_level"}
+
+
+# --- lookback when the requested date has no sleep measurement -------------------------------
+
+
+def _day(offset: int) -> str:
+    return date.fromordinal(AS_OF.toordinal() - offset).isoformat()
+
+
+def test_complete_requested_row_uses_no_lookback() -> None:
+    rows = (recovery(_day(0)), recovery(_day(1), sleep_seconds=3 * 3600, training_readiness_level="POOR"))
+
+    assessment = assess_recovery(AS_OF, rows)
+
+    assert assessment.lookback is None
+    assert assessment.level is AdjustmentLevel.NORMAL
+
+
+def test_partial_row_does_not_erase_a_very_short_sleep_yesterday() -> None:
+    # 2026-10-01 shape: today has readiness but no sleep; yesterday slept 3.8 h with LOW readiness.
+    rows = (
+        recovery(_day(0), sleep_seconds=None, sleep_score=None, training_readiness_level="MODERATE"),
+        recovery(_day(1), sleep_seconds=13740, sleep_score=50, training_readiness_level="LOW"),
+        recovery(_day(2), sleep_seconds=18960, sleep_score=51, training_readiness_level="LOW"),
+    )
+
+    assessment = assess_recovery(AS_OF, rows)
+
+    assert assessment.level is AdjustmentLevel.HOLD  # capped: not today's measurement
+    assert assessment.carried
+    assert assessment.lookback is not None
+    assert assessment.lookback.poor_dates == (date.fromisoformat(_day(1)), date.fromisoformat(_day(2)))
+    assert "fired a reduce-level rule" in assessment.lookback.explanation
+    assert "sleep_seconds 3h49m" in assessment.lookback.explanation
+    # Today's own observations and missing fields are not polluted by earlier days.
+    assert assessment.fired == ()
+    assert {item.source_date for item in assessment.observations} <= {AS_OF, date.fromisoformat(_day(1))}
+    assert "sleep_seconds" in assessment.missing_fields
+
+
+def test_two_poor_mornings_carry_hold_when_today_has_no_row() -> None:
+    rows = (
+        recovery(_day(1), training_readiness_level="LOW"),
+        recovery(_day(2), training_readiness_level="LOW"),
+    )
+
+    assessment = assess_recovery(AS_OF, rows)
+
+    assert assessment.level is AdjustmentLevel.HOLD
+    assert assessment.lookback is not None
+    assert "both of the previous 2 mornings were poor" in assessment.lookback.explanation
+
+
+def test_one_hold_level_morning_is_reported_but_not_carried() -> None:
+    rows = (recovery(_day(0), sleep_seconds=None), recovery(_day(1), training_readiness_level="LOW"), recovery(_day(2)))
+
+    assessment = assess_recovery(AS_OF, rows)
+
+    assert assessment.level is AdjustmentLevel.NORMAL
+    assert assessment.lookback is not None and not assessment.carried
+    assert "not enough to carry forward" in assessment.lookback.explanation
+
+
+def test_missing_earlier_rows_never_fire_the_lookback() -> None:
+    assessment = assess_recovery(AS_OF, (recovery(_day(0), sleep_seconds=None),))
+
+    assert assessment.level is AdjustmentLevel.NORMAL
+    assert assessment.lookback is not None and assessment.lookback.poor_dates == ()
+    assert "fired no rule" in assessment.lookback.explanation
+
+
+def test_carried_hold_never_weakens_a_poor_reading_today() -> None:
+    rows = (
+        recovery(_day(0), sleep_seconds=None, training_readiness_level="POOR"),
+        recovery(_day(1), training_readiness_level="LOW"),
+        recovery(_day(2), training_readiness_level="LOW"),
+    )
+
+    assert assess_recovery(AS_OF, rows).level is AdjustmentLevel.REDUCE

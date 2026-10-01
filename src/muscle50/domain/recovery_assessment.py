@@ -14,6 +14,15 @@ through the day (and backfilled rows were captured after the fact):
 - Row for the previous date: training status, an end-of-day value.
 - Body battery, stress, and resting HR are not used: their stored value can describe the
   state after the requested day's training.
+
+Lookback (a partial requested-date row must not erase clearly poor recent mornings):
+
+- It applies only when the requested date's row is missing or has no ``sleep_seconds``
+  (the night measurement; a readiness value without it was computed without last night).
+- The morning fields of D-1 and D-2 (sleep, sleep score, readiness level, recovery time) are
+  checked with the same thresholds. ``hold`` is carried when D-1 fired a reduce-level rule
+  or both D-1 and D-2 fired any rule. Carried evidence is never stronger than ``hold``
+  because it is not today's measurement. A missing earlier value never fires.
 """
 
 from __future__ import annotations
@@ -35,6 +44,8 @@ HOLD_HRV_STATUSES = frozenset({"LOW", "UNBALANCED", "POOR"})
 HOLD_READINESS_LEVELS = frozenset({"LOW"})
 REDUCE_READINESS_LEVELS = frozenset({"POOR"})
 HOLD_TRAINING_STATUSES = frozenset({"STRAINED", "OVERREACHING", "UNPRODUCTIVE"})
+# Earlier mornings checked when the requested date has no sleep measurement.
+LOOKBACK_DAYS = 2
 
 
 class AdjustmentLevel(StrEnum):
@@ -65,12 +76,26 @@ class RecoveryObservation:
 
 
 @dataclass(frozen=True)
+class RecoveryLookback:
+    """Earlier mornings checked because the requested date has no sleep measurement."""
+
+    reason: str
+    observations: tuple[RecoveryObservation, ...]
+    """D-1 and D-2 morning fields (``source_date`` says which day); never part of today's."""
+    poor_dates: tuple[date, ...]
+    carried_level: AdjustmentLevel | None
+    """``hold`` when carried into today's level, else None (evidence only)."""
+    explanation: str
+
+
+@dataclass(frozen=True)
 class RecoveryAssessment:
     level: AdjustmentLevel
     requested_date_row_available: bool
     previous_date_row_available: bool
     observations: tuple[RecoveryObservation, ...]
     missing_fields: tuple[str, ...]
+    lookback: RecoveryLookback | None = None
 
     @property
     def fired(self) -> tuple[RecoveryObservation, ...]:
@@ -80,6 +105,10 @@ class RecoveryAssessment:
     def data_available(self) -> bool:
         return any(item.value is not None for item in self.observations)
 
+    @property
+    def carried(self) -> bool:
+        return self.lookback is not None and self.lookback.carried_level is not None
+
 
 def assess_recovery(as_of: date, recoveries: Sequence[DailyRecovery]) -> RecoveryAssessment:
     by_date = {item.calendar_date: item for item in recoveries}
@@ -88,53 +117,7 @@ def assess_recovery(as_of: date, recoveries: Sequence[DailyRecovery]) -> Recover
     previous = by_date.get(previous_day.isoformat())
 
     observations = [
-        _numeric(
-            "sleep_seconds",
-            as_of,
-            today.sleep_seconds if today else None,
-            ((VERY_SHORT_SLEEP_SECONDS, AdjustmentLevel.REDUCE), (SHORT_SLEEP_SECONDS, AdjustmentLevel.HOLD)),
-            below=True,
-            unit="s",
-        ),
-        _numeric(
-            "sleep_score",
-            as_of,
-            today.sleep_score if today else None,
-            ((LOW_SLEEP_SCORE, AdjustmentLevel.HOLD),),
-            below=True,
-            unit="",
-        ),
-        _categorical(
-            "hrv_status",
-            as_of,
-            today.hrv_status if today else None,
-            {AdjustmentLevel.HOLD: HOLD_HRV_STATUSES},
-        ),
-        _categorical(
-            "training_readiness_level",
-            as_of,
-            today.training_readiness_level if today else None,
-            {AdjustmentLevel.REDUCE: REDUCE_READINESS_LEVELS, AdjustmentLevel.HOLD: HOLD_READINESS_LEVELS},
-        ),
-        # Reported for context only; the level above is Garmin's own banding of this score.
-        RecoveryObservation(
-            "training_readiness_score",
-            as_of,
-            today.training_readiness_score if today else None,
-            None,
-            None,
-        ),
-        _numeric(
-            "recovery_time_minutes",
-            as_of,
-            today.recovery_time_minutes if today else None,
-            (
-                (VERY_LONG_RECOVERY_TIME_MINUTES, AdjustmentLevel.REDUCE),
-                (LONG_RECOVERY_TIME_MINUTES, AdjustmentLevel.HOLD),
-            ),
-            below=False,
-            unit="min",
-        ),
+        *_morning_observations(as_of, today, include_hrv=True),
         _categorical(
             "training_status_key",
             previous_day,
@@ -146,13 +129,132 @@ def assess_recovery(as_of: date, recoveries: Sequence[DailyRecovery]) -> Recover
     for item in observations:
         if item.fired_level is not None:
             level = stronger(level, item.fired_level)
+    lookback = _lookback(as_of, today, by_date)
+    if lookback is not None and lookback.carried_level is not None:
+        level = stronger(level, lookback.carried_level)
     return RecoveryAssessment(
         level=level,
         requested_date_row_available=today is not None,
         previous_date_row_available=previous is not None,
         observations=tuple(observations),
         missing_fields=tuple(item.field for item in observations if item.value is None),
+        lookback=lookback,
     )
+
+
+def _morning_observations(day: date, row: DailyRecovery | None, *, include_hrv: bool) -> list[RecoveryObservation]:
+    observations = [
+        _numeric(
+            "sleep_seconds",
+            day,
+            row.sleep_seconds if row else None,
+            ((VERY_SHORT_SLEEP_SECONDS, AdjustmentLevel.REDUCE), (SHORT_SLEEP_SECONDS, AdjustmentLevel.HOLD)),
+            below=True,
+            unit="s",
+        ),
+        _numeric(
+            "sleep_score",
+            day,
+            row.sleep_score if row else None,
+            ((LOW_SLEEP_SCORE, AdjustmentLevel.HOLD),),
+            below=True,
+            unit="",
+        ),
+    ]
+    if include_hrv:
+        observations.append(
+            _categorical("hrv_status", day, row.hrv_status if row else None, {AdjustmentLevel.HOLD: HOLD_HRV_STATUSES})
+        )
+    observations.extend(
+        (
+            _categorical(
+                "training_readiness_level",
+                day,
+                row.training_readiness_level if row else None,
+                {AdjustmentLevel.REDUCE: REDUCE_READINESS_LEVELS, AdjustmentLevel.HOLD: HOLD_READINESS_LEVELS},
+            ),
+            # Reported for context only; the level above is Garmin's own banding of this score.
+            RecoveryObservation(
+                "training_readiness_score",
+                day,
+                row.training_readiness_score if row else None,
+                None,
+                None,
+            ),
+            _numeric(
+                "recovery_time_minutes",
+                day,
+                row.recovery_time_minutes if row else None,
+                (
+                    (VERY_LONG_RECOVERY_TIME_MINUTES, AdjustmentLevel.REDUCE),
+                    (LONG_RECOVERY_TIME_MINUTES, AdjustmentLevel.HOLD),
+                ),
+                below=False,
+                unit="min",
+            ),
+        )
+    )
+    return observations
+
+
+def _lookback(as_of: date, today: DailyRecovery | None, by_date: dict[str, DailyRecovery]) -> RecoveryLookback | None:
+    if today is not None and today.sleep_seconds is not None:
+        return None
+    reason = (
+        f"no recovery row for {as_of.isoformat()}"
+        if today is None
+        else f"no sleep recorded for {as_of.isoformat()} (row is partial)"
+    )
+    observations: list[RecoveryObservation] = []
+    fired_by_day: dict[date, list[RecoveryObservation]] = {}
+    for offset in range(1, LOOKBACK_DAYS + 1):
+        day = as_of - timedelta(days=offset)
+        # HRV status is a rolling weekly status, not one morning's signal; it is not carried.
+        day_observations = _morning_observations(day, by_date.get(day.isoformat()), include_hrv=False)
+        observations.extend(day_observations)
+        fired = [item for item in day_observations if item.fired_level is not None]
+        if fired:
+            fired_by_day[day] = fired
+    previous_day = as_of - timedelta(days=1)
+    previous_reduce = any(item.fired_level is AdjustmentLevel.REDUCE for item in fired_by_day.get(previous_day, ()))
+    carried = previous_reduce or len(fired_by_day) == LOOKBACK_DAYS
+    evidence = "; ".join(
+        f"{day.isoformat()}: {', '.join(_fired_text(item) for item in items)}"
+        for day, items in sorted(fired_by_day.items(), reverse=True)
+    )
+    if carried:
+        trigger = (
+            f"{previous_day.isoformat()} fired a reduce-level rule"
+            if previous_reduce
+            else f"both of the previous {LOOKBACK_DAYS} mornings were poor"
+        )
+        explanation = (
+            f"{reason}; {trigger} ({evidence}): hold carried forward (capped at hold because it is not "
+            "today's measurement)"
+        )
+    elif fired_by_day:
+        explanation = (
+            f"{reason}; earlier poor signal ({evidence}) is not enough to carry forward "
+            f"(needs a reduce-level rule on {previous_day.isoformat()} or both previous mornings poor)"
+        )
+    else:
+        explanation = f"{reason}; the previous {LOOKBACK_DAYS} mornings fired no rule (missing values never fire)"
+    return RecoveryLookback(
+        reason=reason,
+        observations=tuple(observations),
+        poor_dates=tuple(sorted(fired_by_day, reverse=True)),
+        carried_level=AdjustmentLevel.HOLD if carried else None,
+        explanation=explanation,
+    )
+
+
+def _fired_text(item: RecoveryObservation) -> str:
+    if item.field == "sleep_seconds" and isinstance(item.value, (int, float)):
+        hours, minutes = divmod(int(item.value) // 60, 60)
+        value = f"{hours}h{minutes:02d}m"
+    else:
+        value = str(item.value)
+    return f"{item.field} {value} ({item.rule})"
 
 
 def _numeric(

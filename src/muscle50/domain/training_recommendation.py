@@ -36,6 +36,7 @@ from muscle50.domain.strength_recommendation import (
     primary_muscle_sets_on,
 )
 from muscle50.domain.swim_recommendation import (
+    RETURN_AFTER_GAP_DAYS,
     StrengthContext,
     SwimRecommendation,
     analyze_swims,
@@ -59,6 +60,24 @@ class RecommendationNotice:
 
 
 @dataclass(frozen=True)
+class DataFreshness:
+    """What the stored data covers relative to the requested date.
+
+    The schema records what was stored, not which days were synced, so "no stored activity"
+    is never a confirmed rest day.
+    """
+
+    latest_activity_date: date | None
+    latest_strength_date: date | None
+    latest_swim_date: date | None
+    latest_recovery_date: date | None
+    requested_date_recovery_row: bool
+    requested_date_sleep_recorded: bool
+    sync_coverage_recorded: bool
+    statement: str
+
+
+@dataclass(frozen=True)
 class TrainingRecommendation:
     recommendation_version: int
     as_of: date
@@ -70,6 +89,7 @@ class TrainingRecommendation:
     excluded_same_day_strength_ids: tuple[str, ...]
     latest_activity_date: date | None
     latest_recovery_date: date | None
+    data_freshness: DataFreshness
     notices: tuple[RecommendationNotice, ...]
 
 
@@ -135,11 +155,24 @@ def build_training_recommendation(
         day for item in recoveries if start <= (day := date.fromisoformat(item.calendar_date)) <= as_of
     )
     latest_recovery = recovery_dates[-1] if recovery_dates else None
+    today_row = next((item for item in recoveries if item.calendar_date == as_of.isoformat()), None)
+    freshness = DataFreshness(
+        latest_activity_date=latest_activity,
+        latest_strength_date=_latest(dated, ActivityType.STRENGTH),
+        latest_swim_date=_latest(dated, ActivityType.SWIMMING),
+        latest_recovery_date=latest_recovery,
+        requested_date_recovery_row=today_row is not None,
+        requested_date_sleep_recorded=today_row is not None and today_row.sleep_seconds is not None,
+        sync_coverage_recorded=False,
+        statement=(
+            "sync completeness is not recorded: a day without a stored activity is 'no recorded activity', "
+            "not a confirmed rest day, and a partial recovery row may still be filled by a later sync"
+        ),
+    )
     notices = _notices(
         as_of,
         same_day_strength,
-        latest_activity,
-        latest_recovery,
+        freshness,
         recovery,
         strength,
         swimming,
@@ -156,20 +189,26 @@ def build_training_recommendation(
         excluded_same_day_strength_ids=same_day_strength,
         latest_activity_date=latest_activity,
         latest_recovery_date=latest_recovery,
+        data_freshness=freshness,
         notices=notices,
     )
+
+
+def _latest(dated: Sequence[tuple[date, NormalizedActivity]], activity_type: ActivityType) -> date | None:
+    return max((day for day, activity in dated if activity.canonical_type is activity_type), default=None)
 
 
 def _notices(
     as_of: date,
     same_day_strength: Sequence[str],
-    latest_activity: date | None,
-    latest_recovery: date | None,
+    freshness: DataFreshness,
     recovery: RecoveryAssessment,
     strength: StrengthRecommendation,
     swimming: SwimRecommendation,
     undated_source_activity_ids: Sequence[str],
 ) -> tuple[RecommendationNotice, ...]:
+    latest_activity = freshness.latest_activity_date
+    latest_recovery = freshness.latest_recovery_date
     notices: list[RecommendationNotice] = []
     for source_id in same_day_strength:
         notices.append(
@@ -197,20 +236,74 @@ def _notices(
                 "rather than rest (sync coverage is not recorded)",
             )
         )
+    lookback = f"; {recovery.lookback.explanation}" if recovery.lookback is not None else ""
     if not recovery.requested_date_row_available:
         latest = latest_recovery.isoformat() if latest_recovery else "none in window"
         notices.append(
             RecommendationNotice(
                 "recovery_row_missing",
-                f"no Garmin recovery row for {as_of.isoformat()} (latest: {latest}); missing is not treated as "
-                "poor recovery and no recovery adjustment is applied",
+                f"no Garmin recovery row for {as_of.isoformat()} (latest: {latest}); it may not be synced yet. "
+                f"Missing is not treated as poor recovery{lookback}",
             )
         )
-    elif recovery.missing_fields:
+    else:
+        if recovery.missing_fields:
+            notices.append(
+                RecommendationNotice(
+                    "recovery_fields_missing",
+                    f"recovery fields missing (not treated as poor): {', '.join(recovery.missing_fields)}",
+                )
+            )
+        if not freshness.requested_date_sleep_recorded:
+            readiness = next(
+                (item.value for item in recovery.observations if item.field == "training_readiness_level"), None
+            )
+            readiness_note = (
+                f"; its readiness ({readiness}) was stored without a sleep measurement" if readiness is not None else ""
+            )
+            notices.append(
+                RecommendationNotice(
+                    "recovery_row_partial",
+                    f"the {as_of.isoformat()} recovery row has no sleep; the stored data cannot tell whether the "
+                    f"night was not recorded or not synced yet{readiness_note}{lookback}",
+                    local_date=as_of,
+                )
+            )
+    if latest_recovery is not None and (as_of - latest_recovery).days >= COVERAGE_GAP_DAYS:
         notices.append(
             RecommendationNotice(
-                "recovery_fields_missing",
-                f"recovery fields missing (not treated as poor): {', '.join(recovery.missing_fields)}",
+                "recovery_coverage_gap",
+                f"newest stored recovery row is {latest_recovery.isoformat()}; recent recovery may be unsynced",
+            )
+        )
+    days_since_swim = swimming.baseline.days_since_last_swim
+    if days_since_swim is None or days_since_swim >= RETURN_AFTER_GAP_DAYS:
+        since = (
+            f"since {freshness.latest_swim_date.isoformat()} ({days_since_swim} days)"
+            if freshness.latest_swim_date is not None and days_since_swim is not None
+            else f"in the {LOOKBACK_DAYS} days before this date"
+        )
+        notices.append(
+            RecommendationNotice(
+                "swim_gap",
+                f"no swim stored {since}; a real break and unsynced swims cannot be distinguished",
+            )
+        )
+    for no_rule in strength.no_rule_notices:
+        hint = (
+            f"its Garmin category suggests {no_rule.category_hint_muscle} "
+            f"({no_rule.category_hint_region or 'no region'})"
+            if no_rule.category_hint_muscle
+            else "its region is unknown (no rule for its Garmin category either)"
+        )
+        notices.append(
+            RecommendationNotice(
+                "strength_no_rule_exercise",
+                f"{no_rule.label}: {no_rule.set_count} ACTIVE sets (set {_sequences(no_rule.set_sequences)}) have no "
+                f"taxonomy rule and are not counted for any muscle; {hint}, so that muscle/region may be "
+                "underestimated in focus and volume. Not guessed; a rule must be added after review",
+                no_rule.source_activity_id,
+                no_rule.local_date,
             )
         )
     for item in strength.unknown_notices:
