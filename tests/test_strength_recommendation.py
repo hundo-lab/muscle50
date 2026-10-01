@@ -18,6 +18,7 @@ from muscle50.domain.strength_recommendation import (
     ExerciseOccurrence,
     PerformedSet,
     ProgressionAction,
+    StrengthFocus,
     StrengthRecommendation,
     SwimOverlap,
     build_strength_recommendation,
@@ -107,10 +108,11 @@ def _recommend(
     recoveries: Sequence[DailyRecovery] | None = None,
     overlaps: Sequence[SwimOverlap] = (),
     avoid_muscles: Sequence[MuscleGroup] = (),
+    focus: StrengthFocus | None = None,
 ) -> StrengthRecommendation:
     rows = (recovery(AS_OF.isoformat()),) if recoveries is None else recoveries
     return build_strength_recommendation(
-        AS_OF, activities, assess_recovery(AS_OF, rows), overlaps, DEFAULT_TRAINING_GOALS, avoid_muscles
+        AS_OF, activities, assess_recovery(AS_OF, rows), overlaps, DEFAULT_TRAINING_GOALS, avoid_muscles, focus
     )
 
 
@@ -498,3 +500,193 @@ def test_no_history_gives_no_exercises_without_crashing() -> None:
     assert plan.focus is None
     assert plan.exercises == ()
     assert "no mapped strength history" in plan.reasons[-1]
+
+
+# --- user-requested focus ----------------------------------------------------------------
+
+_LEG_MUSCLES = {"quadriceps", "hamstrings", "glutes"}
+_SHOULDER_MUSCLES = {"anterior_deltoid", "lateral_deltoid", "posterior_deltoid"}
+
+
+def _calm_upper_body_history() -> list[NormalizedActivity]:
+    """A light leg session yesterday makes push/pull the automatic choice."""
+    history = _push_pull_legs_history()
+    history.append(_strength("l2", _days_ago(1), _sets("SQUAT", None, (8, 60.0), (8, 60.0), (8, 60.0))))
+    return history
+
+
+def _shoulder_history() -> list[NormalizedActivity]:
+    """Shoulder-primary work next to exercises that list a deltoid only as a secondary muscle."""
+    return [
+        _strength(
+            "s1",
+            _days_ago(8),
+            _sets("SHOULDER_PRESS", None, (10, 20.0), (10, 20.0), (9, 20.0))
+            + _sets("LATERAL_RAISE", None, (15, 8.0), (14, 8.0), start=3)
+            + _sets("BENCH_PRESS", None, (10, 50.0), (10, 50.0), (10, 50.0), start=5),
+        ),
+        _strength(
+            "s2",
+            _days_ago(4),
+            _sets("SHOULDER_PRESS", None, (11, 20.0), (10, 20.0), (10, 20.0))
+            + _sets("LATERAL_RAISE", None, (15, 8.0), (15, 8.0), start=3)
+            + _sets("SHRUG", "UPRIGHT_ROW", (12, 20.0), (12, 20.0), start=5)
+            + _sets("ROW", None, (10, 40.0), (10, 40.0), (10, 40.0), start=7),
+        ),
+    ]
+
+
+def test_without_a_requested_focus_the_automatic_choice_is_unchanged() -> None:
+    history = _push_pull_legs_history()
+
+    implicit = _recommend(history)
+    explicit = _recommend(history, focus=None)
+
+    assert implicit == explicit
+    assert implicit.focus == "legs"
+    assert implicit.focus_source == "auto"
+    assert implicit.auto_focus == implicit.focus
+
+
+def test_requested_legs_overrides_an_automatic_upper_body_focus() -> None:
+    history = _calm_upper_body_history()
+    automatic = _recommend(history)
+
+    plan = _recommend(history, focus=StrengthFocus.LEGS)
+
+    assert automatic.focus in ("push", "pull")
+    assert plan.focus == "legs"
+    assert plan.focus_source == "user"
+    assert plan.auto_focus == automatic.focus
+    assert plan.focus_muscles == ("quadriceps", "hamstrings", "glutes")
+    assert plan.exercises
+    assert {item.primary_muscle for item in plan.exercises} <= _LEG_MUSCLES
+    assert plan.reasons[0].startswith(f"legs: user-selected focus (automatic selection would be {automatic.focus})")
+    # The region ranking is still reported as evidence, unchanged.
+    assert plan.regions == automatic.regions
+
+
+def test_requested_shoulders_uses_only_shoulder_primary_exercises() -> None:
+    plan = _recommend(_shoulder_history(), focus=StrengthFocus.SHOULDERS)
+
+    assert plan.focus == "shoulders"
+    assert plan.focus_source == "user"
+    assert plan.auto_focus != "shoulders"  # never an automatic region
+    assert plan.focus_muscles == ("anterior_deltoid", "lateral_deltoid", "posterior_deltoid")
+    assert [item.label for item in plan.exercises] == ["SHOULDER_PRESS/-", "LATERAL_RAISE/-"]
+    assert {item.primary_muscle for item in plan.exercises} <= _SHOULDER_MUSCLES
+    # BENCH_PRESS and ROW only list a deltoid as a secondary muscle, so they never qualify.
+    assert all(item.category not in ("BENCH_PRESS", "ROW") for item in plan.exercises)
+    assert "anterior_deltoid 3 primary sets in 7 d" in plan.reasons[0]
+    # No v1 rule has posterior deltoid as primary: it is said, not shown as neglected.
+    assert "posterior_deltoid: no v1 taxonomy rule uses it as a primary muscle" in plan.reasons[0]
+    # Two familiar exercises cannot fill the time goal; that is reported, never padded.
+    assert plan.estimated_minutes == 23
+    limited = "history is limited: 1 usable familiar compound shoulders exercises in the last 28 days, so no accessory"
+    assert any(text.startswith(limited) for text in plan.reasons)
+
+
+def test_a_full_requested_session_is_not_reported_as_limited_history() -> None:
+    history = _calm_upper_body_history()
+
+    plan = _recommend(history, focus=StrengthFocus.PULL)
+
+    assert any(item.role.value == "accessory" for item in plan.exercises)
+    assert not any(text.startswith("history is limited") for text in plan.reasons)
+
+
+def test_hard_swim_keeps_requested_shoulders_but_drops_overhead_press_and_trims_sets() -> None:
+    overlap = SwimOverlap("swim", _days_ago(1), False, 1500.0, True, 0.0, ("HR zone 5 300 s >= 120 s",))
+
+    plan = _recommend(_shoulder_history(), overlaps=(overlap,), focus=StrengthFocus.SHOULDERS)
+
+    assert plan.focus == "shoulders"
+    assert plan.exercises
+    assert all(item.movement_pattern != "vertical_push" for item in plan.exercises)
+    assert {item.primary_muscle for item in plan.exercises} <= _SHOULDER_MUSCLES
+    assert any("SHOULDER_PRESS/- not used as key exercise" in text for text in plan.adjustments)
+    assert all(item.sets == 2 for item in plan.exercises)
+    assert all(any("hard swim overlap" in text for text in item.adjustments) for item in plan.exercises)
+    assert any("swim yesterday" in text for text in plan.adjustments)
+    assert any(
+        "0 usable familiar compound shoulders exercises" in text and "overhead-press rule" in text
+        for text in plan.reasons
+    )
+
+
+def test_poor_recovery_keeps_the_requested_focus_and_holds_progression() -> None:
+    history = _push_pull_legs_history()
+    # Two work sets at the top of the compound range: normally a load increase.
+    history.append(_strength("l2", _days_ago(4), _sets("SQUAT", None, (12, 60.0), (12, 60.0), (12, 60.0))))
+    poor = (recovery(AS_OF.isoformat(), training_readiness_level="POOR"),)
+
+    normal = _recommend(history, focus=StrengthFocus.LEGS)
+    reduced = _recommend(history, recoveries=poor, focus=StrengthFocus.LEGS)
+
+    squat = next(item for item in normal.exercises if item.category == "SQUAT")
+    assert squat.progression.action is ProgressionAction.INCREASE_LOAD
+    assert reduced.focus == "legs"
+    assert reduced.focus_source == "user"
+    assert reduced.adjustment_level == "reduce"
+    assert all(item.progression.action is not ProgressionAction.INCREASE_LOAD for item in reduced.exercises)
+    assert all(item.sets == 2 for item in reduced.exercises)
+
+
+def test_requested_focus_trained_heavily_yesterday_is_kept_but_reduced() -> None:
+    history = _push_pull_legs_history()
+    history.append(_strength("l2", _days_ago(1), _sets("SQUAT", None, *([(8, 60.0)] * 6))))
+
+    automatic = _recommend(history)
+    plan = _recommend(history, focus=StrengthFocus.LEGS)
+
+    assert automatic.focus != "legs"  # the ranking rests a region trained heavily yesterday
+    assert plan.focus == "legs"
+    assert plan.adjustment_level == "reduce"
+    assert any("requested legs had 6 primary sets yesterday" in text for text in plan.adjustments)
+    assert all(item.progression.action is not ProgressionAction.INCREASE_LOAD for item in plan.exercises)
+
+
+def test_requested_focus_without_history_is_not_switched_and_invents_nothing() -> None:
+    bench_only = [
+        _strength("b1", _days_ago(5), _sets("BENCH_PRESS", None, (10, 50.0), (10, 50.0), (10, 50.0))),
+        _strength("b2", _days_ago(2), _sets("BENCH_PRESS", None, (10, 50.0), (10, 50.0), (10, 50.0))),
+    ]
+
+    plan = _recommend(bench_only, focus=StrengthFocus.SHOULDERS)
+
+    assert plan.focus == "shoulders"
+    assert plan.focus_source == "user"
+    assert plan.auto_focus == "push"
+    assert plan.exercises == ()
+    assert plan.working_sets == 0
+    assert any(text.startswith("history is limited: no familiar mapped shoulders exercise") for text in plan.reasons)
+
+
+def test_single_unloaded_session_gives_a_rep_only_target_and_reports_limited_history() -> None:
+    history = [_strength("s1", _days_ago(3), _sets("LATERAL_RAISE", None, (15, 0.0), (14, 0.0)))]
+
+    plan = _recommend(history, focus=StrengthFocus.SHOULDERS)
+
+    raise_ = plan.exercises[0]
+    assert raise_.label == "LATERAL_RAISE/-"
+    assert raise_.progression.load_kg is None
+    assert raise_.progression.load_confidence == "none"
+    assert any("only one session" in text for text in plan.reasons)
+
+
+def test_requested_focus_still_respects_avoid() -> None:
+    plan = _recommend(_shoulder_history(), focus=StrengthFocus.SHOULDERS, avoid_muscles=(MuscleGroup.ANTERIOR_DELTOID,))
+
+    assert plan.focus == "shoulders"
+    assert [item.label for item in plan.exercises] == ["LATERAL_RAISE/-", "SHRUG/UPRIGHT_ROW"]
+    assert all(item.primary_muscle != "anterior_deltoid" for item in plan.exercises)
+    assert plan.avoided_muscles == ("anterior_deltoid",)
+
+
+def test_requested_focus_is_deterministic_and_order_independent() -> None:
+    history = _shoulder_history() + _calm_upper_body_history()
+
+    for focus in StrengthFocus:
+        first = _recommend(history, focus=focus)
+        second = _recommend(list(reversed(history)), focus=focus)
+        assert json.dumps(dataclasses.asdict(first), default=str) == json.dumps(dataclasses.asdict(second), default=str)

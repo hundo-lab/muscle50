@@ -34,6 +34,7 @@ from muscle50.domain.exercise_taxonomy import MuscleGroup
 from muscle50.domain.inbody_normalization import InBodyNormalizationError
 from muscle50.domain.normalization import NormalizationError, activity_id_from
 from muscle50.domain.recovery_normalization import RecoveryNormalizationError, validate_calendar_date
+from muscle50.domain.strength_recommendation import StrengthFocus
 from muscle50.domain.swim_normalization import SwimNormalizationError
 from muscle50.infrastructure.garmin.client import GarminConnectorError, PythonGarminConnector
 from muscle50.infrastructure.inbody.raw_store import InBodyRawStore
@@ -122,6 +123,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="muscle group to leave out today (for example pain); repeatable. "
         f"Choices: {', '.join(muscle.value for muscle in MuscleGroup)}",
     )
+    recommend.add_argument(
+        "--focus",
+        choices=[focus.value for focus in StrengthFocus],
+        metavar="FOCUS",
+        help="train this focus today instead of the automatic choice; recovery, swim overlap and --avoid "
+        f"still apply. Choices: {', '.join(focus.value for focus in StrengthFocus)}",
+    )
     recommend.add_argument("--json", action="store_true", help="print the full recommendation with evidence as JSON")
     inbody = commands.add_parser("inbody", help="InBody body-composition commands")
     inbody_commands = inbody.add_subparsers(dest="inbody_command", required=True)
@@ -157,7 +165,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "analytics" and args.analytics_command == "snapshot":
         return _analytics_snapshot(args.as_of, args.days, as_json=args.json)
     if args.command == "recommend":
-        return _recommend(args.as_of, [MuscleGroup(item) for item in args.avoid], as_json=args.json)
+        return _recommend(
+            args.as_of,
+            [MuscleGroup(item) for item in args.avoid],
+            StrengthFocus(args.focus) if args.focus else None,
+            as_json=args.json,
+        )
     if args.command == "inbody" and args.inbody_command == "sync":
         return _inbody_sync(args.file, show_values=args.show_values)
     return 2
@@ -408,7 +421,7 @@ def _analytics_snapshot(as_of_text: str, lookback_days: int, *, as_json: bool) -
         return 130
 
 
-def _recommend(as_of_text: str, avoid: list[MuscleGroup], *, as_json: bool) -> int:
+def _recommend(as_of_text: str, avoid: list[MuscleGroup], focus: StrengthFocus | None, *, as_json: bool) -> int:
     # Deliberately read-only: no ensure_directories(), no migrate(), no Garmin connector.
     try:
         as_of = date.fromisoformat(validate_calendar_date(as_of_text))
@@ -417,7 +430,9 @@ def _recommend(as_of_text: str, avoid: list[MuscleGroup], *, as_json: bool) -> i
         return 1
     try:
         paths = AppPaths.from_environment()
-        recommendation = BuildTrainingRecommendation(SqliteAnalyticsReader(paths.database_path)).execute(as_of, avoid)
+        recommendation = BuildTrainingRecommendation(SqliteAnalyticsReader(paths.database_path)).execute(
+            as_of, avoid, focus
+        )
         print(
             render_training_recommendation_json(recommendation)
             if as_json

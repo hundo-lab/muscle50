@@ -25,6 +25,7 @@ from enum import StrEnum
 from muscle50.domain.activity import ActivityType, NormalizedActivity
 from muscle50.domain.analytics import LabelOriginCounts, activity_local_date
 from muscle50.domain.exercise_taxonomy import (
+    EXERCISE_RULES,
     ExerciseRule,
     LabelOrigin,
     MovementPattern,
@@ -96,6 +97,35 @@ REGION_MUSCLES: Mapping[Region, tuple[MuscleGroup, ...]] = {
     ),
 }
 _REGION_OF_MUSCLE = {muscle: region for region, muscles in REGION_MUSCLES.items() for muscle in muscles}
+
+
+class StrengthFocus(StrEnum):
+    """A focus the user may request. ``shoulders`` spans the push and pull regions."""
+
+    PUSH = "push"
+    PULL = "pull"
+    LEGS = "legs"
+    SHOULDERS = "shoulders"
+
+
+class FocusSource(StrEnum):
+    AUTO = "auto"
+    USER = "user"
+
+
+# A requested focus selects exercises by primary muscle only; secondary exposure never qualifies.
+FOCUS_MUSCLES: Mapping[StrengthFocus, tuple[MuscleGroup, ...]] = {
+    StrengthFocus.PUSH: REGION_MUSCLES[Region.PUSH],
+    StrengthFocus.PULL: REGION_MUSCLES[Region.PULL],
+    StrengthFocus.LEGS: REGION_MUSCLES[Region.LEGS],
+    StrengthFocus.SHOULDERS: (
+        MuscleGroup.ANTERIOR_DELTOID,
+        MuscleGroup.LATERAL_DELTOID,
+        MuscleGroup.POSTERIOR_DELTOID,
+    ),
+}
+# Muscles some taxonomy rule uses as primary; any other focus muscle can never have sets.
+_RULE_PRIMARY_MUSCLES = frozenset(rule.primary_muscle.value for rule in EXERCISE_RULES)
 
 COMPOUND_PATTERNS = frozenset(
     {
@@ -302,6 +332,10 @@ class UnknownExerciseNotice:
 @dataclass(frozen=True)
 class StrengthRecommendation:
     focus: str | None
+    focus_source: str
+    """``auto`` (chosen by the region ranking) or ``user`` (requested; never switched)."""
+    auto_focus: str | None
+    """What the region ranking would choose; evidence only when the focus was requested."""
     focus_muscles: tuple[str, ...]
     reasons: tuple[str, ...]
     regions: tuple[RegionStatus, ...]
@@ -716,11 +750,11 @@ def _familiarity_key(candidate: _Candidate) -> tuple[int, int, int, str]:
 
 
 def _candidates(
-    region: Region,
+    focus_muscles: Iterable[MuscleGroup],
     occurrences: Mapping[ExerciseLabel, list[ExerciseOccurrence]],
     avoided: frozenset[MuscleGroup],
 ) -> list[_Candidate]:
-    muscles = set(REGION_MUSCLES[region])
+    muscles = set(focus_muscles)
     result = []
     for label, items in occurrences.items():
         rule = _rule_of(label)
@@ -774,6 +808,23 @@ def _select_slots(
     return plan, notes
 
 
+def _auto_selection(
+    ranked: Sequence[RegionStatus],
+    occurrences: Mapping[ExerciseLabel, list[ExerciseOccurrence]],
+    avoided: frozenset[MuscleGroup],
+    avoided_patterns: frozenset[MovementPattern],
+) -> tuple[RegionStatus | None, list[tuple[ExerciseRole, _Candidate]], list[str], list[str]]:
+    """The automatic focus: the first ranked region that has a familiar mapped exercise."""
+    skipped: list[str] = []
+    for status in ranked:
+        candidates = _candidates(REGION_MUSCLES[Region(status.region)], occurrences, avoided)
+        plan, notes = _select_slots(candidates, avoided_patterns)
+        if plan:
+            return status, plan, notes, skipped
+        skipped.append(f"{status.region}: no familiar mapped exercise in the last {HISTORY_DAYS} days; skipped")
+    return None, [], [], skipped
+
+
 def build_strength_recommendation(
     as_of: date,
     activities: Sequence[NormalizedActivity],
@@ -781,8 +832,13 @@ def build_strength_recommendation(
     swim_overlaps: Sequence[SwimOverlap],
     goals: TrainingGoals,
     avoid_muscles: Iterable[MuscleGroup] = (),
+    requested_focus: StrengthFocus | None = None,
 ) -> StrengthRecommendation:
-    """Recommend today's strength session from history strictly before ``as_of``."""
+    """Recommend today's strength session from history strictly before ``as_of``.
+
+    With ``requested_focus`` the session is built around that focus and never switched;
+    recovery, swim overlap, ``avoid_muscles`` and progression rules still apply unchanged.
+    """
     avoided = frozenset(avoid_muscles)
     history = strength_history(activities, as_of - timedelta(days=HISTORY_DAYS), as_of - timedelta(days=1))
     occurrences = exercise_occurrences(history)
@@ -794,25 +850,56 @@ def build_strength_recommendation(
     reasons: list[str] = []
     adjustments: list[str] = []
     level = recovery.level
-    if not any(item.eligible for item in statuses):
-        level = stronger(level, AdjustmentLevel.REDUCE)
-        adjustments.append("every region was trained substantially yesterday: reduced session")
-
     avoided_patterns = SWIM_AVOIDED_KEY_PATTERNS if strong_swim else frozenset()
-    focus: RegionStatus | None = None
-    plan: list[tuple[ExerciseRole, _Candidate]] = []
-    for status in ranked:
-        plan, notes = _select_slots(_candidates(Region(status.region), occurrences, avoided), avoided_patterns)
-        if plan:
-            focus = status
-            adjustments.extend(notes)
-            break
-        reasons.append(f"{status.region}: no familiar mapped exercise in the last {HISTORY_DAYS} days; skipped")
+    # Always computed: the decision without a request, evidence alongside one.
+    auto_status, auto_plan, auto_notes, auto_skipped = _auto_selection(ranked, occurrences, avoided, avoided_patterns)
 
-    if focus is not None:
-        reasons.insert(0, _focus_reason(focus, ranked))
+    plan: list[tuple[ExerciseRole, _Candidate]]
+    if requested_focus is None:
+        if not any(item.eligible for item in statuses):
+            level = stronger(level, AdjustmentLevel.REDUCE)
+            adjustments.append("every region was trained substantially yesterday: reduced session")
+        plan = auto_plan
+        adjustments.extend(auto_notes)
+        reasons.extend(auto_skipped)
+        if auto_status is not None:
+            reasons.insert(0, _focus_reason(auto_status, ranked))
+        else:
+            reasons.append(
+                f"no mapped strength history in the last {HISTORY_DAYS} days; no exercise can be recommended"
+            )
+        focus_name = auto_status.region if auto_status else None
+        focus_muscles = auto_status.muscles if auto_status else ()
+        focus_source = FocusSource.AUTO
     else:
-        reasons.append(f"no mapped strength history in the last {HISTORY_DAYS} days; no exercise can be recommended")
+        requested_muscles = FOCUS_MUSCLES[requested_focus]
+        # The same ~48 h rest rule that makes a region ineligible; a request keeps the focus,
+        # so it reduces the session instead of switching away from it.
+        previous_day = as_of - timedelta(days=1)
+        sets_yesterday = sum(muscle_sets[muscle].get(previous_day, 0) for muscle in requested_muscles)
+        if sets_yesterday >= REGION_RECENT_WORK_MIN_SETS:
+            level = stronger(level, AdjustmentLevel.REDUCE)
+            adjustments.append(
+                f"requested {requested_focus.value} had {sets_yesterday} primary sets yesterday (about 48 h rest "
+                "is usual): reduced session, focus kept"
+            )
+        plan, notes = _select_slots(_candidates(requested_muscles, occurrences, avoided), avoided_patterns)
+        adjustments.extend(notes)
+        reasons.append(_requested_focus_reason(requested_focus, statuses, auto_status))
+        if not plan:
+            reasons.append(
+                f"history is limited: no familiar mapped {requested_focus.value} exercise (primary muscle "
+                f"{', '.join(muscle.value for muscle in requested_muscles)}) in the last {HISTORY_DAYS} days; "
+                "no exercise or load target is recommended and the focus is not switched"
+            )
+        elif all(candidate.sessions < SECOND_ACCESSORY_MIN_SESSIONS for _role, candidate in plan):
+            reasons.append(
+                f"history is limited: every planned {requested_focus.value} exercise has only one session in the "
+                f"last {HISTORY_DAYS} days, so its targets rest on that single session"
+            )
+        focus_name = requested_focus.value
+        focus_muscles = tuple(muscle.value for muscle in requested_muscles)
+        focus_source = FocusSource.USER
 
     exercises: list[PlannedExercise] = []
     for role, candidate in plan:
@@ -852,6 +939,22 @@ def build_strength_recommendation(
         exercises
     ):
         adjustments.append(f"second accessory dropped to stay near {goals.strength_session_minutes} minutes")
+    if (
+        requested_focus is not None
+        and exercises
+        and not any(item.role is ExerciseRole.ACCESSORY for item in exercises)
+        and _minutes(exercises) + SESSION_MINUTES_TOLERANCE < goals.strength_session_minutes
+    ):
+        # Reported only: a requested focus is never padded with exercises outside its history.
+        familiar = _candidates(FOCUS_MUSCLES[requested_focus], occurrences, avoided)
+        usable = sum(1 for item in familiar if item.compound and item.rule.movement_pattern not in avoided_patterns)
+        swim_rule = any(item.compound and item.rule.movement_pattern in avoided_patterns for item in familiar)
+        reasons.append(
+            f"history is limited: {usable} usable familiar compound {requested_focus.value} exercises in the last "
+            f"{HISTORY_DAYS} days{' after the hard-swim overhead-press rule' if swim_rule else ''}, so no "
+            f"accessory slot was filled; the session is about {_minutes(exercises)} min against the "
+            f"{goals.strength_session_minutes}-minute goal and nothing was added to fill it"
+        )
 
     if level is not AdjustmentLevel.NORMAL:
         fired = ", ".join(item.rule or item.field for item in recovery.fired) or "no other region rested"
@@ -871,8 +974,10 @@ def build_strength_recommendation(
             "region set counts are lower bounds"
         )
     return StrengthRecommendation(
-        focus=focus.region if focus else None,
-        focus_muscles=focus.muscles if focus else (),
+        focus=focus_name,
+        focus_source=focus_source.value,
+        auto_focus=auto_status.region if auto_status else None,
+        focus_muscles=focus_muscles,
         reasons=tuple(reasons),
         regions=tuple(ranked),
         exercises=tuple(exercises),
@@ -928,6 +1033,35 @@ def _focus_reason(status: RegionStatus, ranked: Sequence[RegionStatus]) -> str:
     later = list(ranked[ranked.index(status) + 1 :])
     runner_up = later[0] if later else None
     return f"{status.region}: {_decided_by(status, runner_up)}; {_region_text(status)}"
+
+
+def _requested_focus_reason(
+    focus: StrengthFocus, statuses: Sequence[RegionStatus], auto_status: RegionStatus | None
+) -> str:
+    if auto_status is None:
+        automatic = "automatic selection found no usable history"
+    elif auto_status.region == focus.value:
+        automatic = "automatic selection agrees"
+    else:
+        automatic = f"automatic selection would be {auto_status.region}"
+    if focus is StrengthFocus.SHOULDERS:
+        # Shoulders spans two regions, so report its own primary muscles.
+        details = {item.muscle: item for status in statuses for item in status.muscle_detail}
+        detail = "; ".join(_muscle_text(details[muscle.value]) for muscle in FOCUS_MUSCLES[focus])
+    else:
+        detail = _region_text(next(item for item in statuses if item.region == focus.value))
+    return f"{focus.value}: user-selected focus ({automatic}); {detail}"
+
+
+def _muscle_text(status: MuscleStatus) -> str:
+    if status.muscle not in _RULE_PRIMARY_MUSCLES:
+        # Structurally always zero, so do not let it read as neglect.
+        return f"{status.muscle}: no v1 taxonomy rule uses it as a primary muscle (never counted)"
+    last = status.last_trained_date.isoformat() if status.last_trained_date else f"none in {HISTORY_DAYS} d"
+    return (
+        f"{status.muscle} {status.sets_last_7_days} primary sets in 7 d, "
+        f"{status.sets_last_28_days} in 28 d (last {last})"
+    )
 
 
 def _minutes(exercises: Sequence[PlannedExercise]) -> int:

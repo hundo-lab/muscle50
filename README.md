@@ -123,6 +123,7 @@ muscle group 매핑(Exercise Taxonomy v1)은 `docs/exercise-taxonomy.md`를 참�
 muscle50 recommend --date 2026-09-24
 muscle50 recommend --date 2026-09-24 --json
 muscle50 recommend --date 2026-09-24 --avoid triceps
+muscle50 recommend --date 2026-09-24 --focus shoulders   # 오늘 할 focus 직접 지정: push/pull/legs/shoulders
 ```
 
 규칙과 한계는 `docs/training-recommendation.md`를 참고하세요.

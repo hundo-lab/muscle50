@@ -142,12 +142,42 @@ def test_recommend_avoid_option(home: Path, capsys: pytest.CaptureFixture[str]) 
     assert payload["strength"]["exercises"] == []
 
 
+def test_recommend_marks_an_automatic_focus(home: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["recommend", "--date", "2026-03-16"]) == 0
+    assert "Focus: push (chest, anterior_deltoid, lateral_deltoid, triceps) [auto-selected]" in capsys.readouterr().out
+
+    assert main(["recommend", "--date", "2026-03-16", "--json"]) == 0
+    strength = json.loads(capsys.readouterr().out)["strength"]
+    assert (strength["focus"], strength["focus_source"], strength["auto_focus"]) == ("push", "auto", "push")
+
+
+def test_recommend_focus_option_is_kept_without_history_and_never_writes(
+    home: Path, database: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    before = _file_state(database)
+
+    assert main(["recommend", "--date", "2026-03-16", "--focus", "legs", "--json"]) == 0
+    strength = json.loads(capsys.readouterr().out)["strength"]
+    assert main(["recommend", "--date", "2026-03-16", "--focus", "legs"]) == 0
+    output = capsys.readouterr().out
+
+    # Only bench press history exists: the request is kept, nothing is invented or switched.
+    assert (strength["focus"], strength["focus_source"], strength["auto_focus"]) == ("legs", "user", "push")
+    assert strength["exercises"] == []
+    assert any(text.startswith("history is limited") for text in strength["reasons"])
+    assert "Focus: legs (quadriceps, hamstrings, glutes) [user-selected; automatic would be push]" in output
+    assert "[strength_unknown_exercise] 2026-03-10 8001" in output  # warnings still apply
+    assert output.isascii()
+    assert _file_state(database) == before
+
+
 @pytest.mark.parametrize(
     "argv",
     [
         ["recommend", "--date", "2026-3-16"],
         ["recommend"],
         ["recommend", "--date", "2026-03-16", "--avoid", "calves"],
+        ["recommend", "--date", "2026-03-16", "--focus", "arms"],
     ],
 )
 def test_recommend_rejects_invalid_input(home: Path, argv: list[str]) -> None:

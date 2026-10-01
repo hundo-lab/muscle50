@@ -152,6 +152,16 @@ def test_heavy_upper_body_strength_moves_intervals_to_easy_and_adds_cautions() -
     assert any("separate them by several hours" in item for item in goal.cautions)
 
 
+def test_requested_shoulders_focus_keeps_the_upper_body_swim_cautions() -> None:
+    swims = [_swim("distance", _days_ago(2), [_continuous(0, 1000.0)])]
+
+    goal = _recommend(swims, strength=StrengthContext(0, 0, "shoulders")).goal
+
+    assert any("no butterfly or paddles" in item for item in goal.cautions)
+    assert any("today's strength focus is shoulders" in item for item in goal.cautions)
+    assert not any("kick sets" in item for item in goal.cautions)
+
+
 def test_idle_length_splits_a_lap_into_separate_continuous_segments() -> None:
     lengths = [_length(index, 25.0, 30.0) for index in range(8)]
     lengths.insert(4, _length(99, 0.0, 45.0, stroke=None))  # 45 s wall rest recorded as idle

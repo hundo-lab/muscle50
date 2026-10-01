@@ -101,11 +101,17 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   push/pull 후순위와 overhead press 제외; UNKNOWN activity별 Garmin Connect 수정 + `garmin refresh` 안내; 다음 수영
   목표(`distance_progression`/`pace_intervals`/`easy_continuous`/`recovery_technique`)는 plausible length timing
   구간만 baseline으로 사용하고 2026-09-17 3025 m summary는 제외. `TrainingGoals`는 code default.
+- (feature branch에 commit, main 미통합, 아래 Pending merge) 사용자 지정 focus `muscle50 recommend --date D --focus push|pull|legs|shoulders`:
+  자동 순위 대신 요청한 focus로 세션을 만들고 바꾸지 않는다. Recovery, swim overlap, `--avoid`, progression,
+  UNKNOWN/data-quality 안내는 그대로 적용. 요청 focus의 어제 primary set ≥ 6이면 reduce. `shoulders`는 primary
+  anterior/lateral/posterior deltoid 종목만. JSON `focus_source`(`auto`/`user`)와 `auto_focus`.
 
 ## Pending merge
 
-- `feature/training-recommendation` (base main/origin `a92404b`, Paseo worktree `training-recommendation`):
-  Training Recommendation v1. 사용자 승인으로 이 branch에 commit했다. merge/push 하지 않았다.
+- Paseo worktree `training-recommendation`(branch `feature/training-recommendation`, base main = origin/main
+  `7740d7d`): 사용자 지정 focus override(`--focus`)를 사용자 승인(2026-10-01)으로 commit했다. main merge/push 하지
+  않았다(별도 승인 필요).
+- Training Recommendation v1은 `7740d7d`로 main/origin에 포함됐다(push 완료).
 - Exercise Taxonomy v1은 `a92404b`로 main/origin에 포함됐다.
 - Analytics Engine v1은 `2603b85`로 main/origin에 포함됐다.
 - `feature/garmin-analytics-prerequisites`는 main `dc2c99f`에 통합 완료.
@@ -140,6 +146,15 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 - `tests/test_refresh_activity.py`, `tests/test_swim_normalization.py`, `tests/test_sync_recovery.py`
 
 ## Verification
+
+2026-10-01 사용자 지정 focus override(`--focus`, worktree `training-recommendation`, base `7740d7d`, feature branch commit):
+
+- Gates: `uv run --extra dev pytest` 524 passed(기존 509 + 신규 15), `ruff check .`, `mypy src tests`(97 files),
+  `git diff --check` 통과. 기존 509개 test는 수정 없이 통과(자동 focus 동작 불변).
+- Production read-only `recommend --date 2026-10-01`: `--focus` 없는 JSON이 main `7740d7d` 출력과 새 field
+  2개(`focus_source`, `auto_focus`)를 빼면 동일, text는 Focus 줄의 `[auto-selected]`만 다름. `--focus legs/push/
+  pull/shoulders` 모두 exit 0, 요청 focus 유지. Shoulders는 SHOULDER_PRESS + LATERAL_RAISE 약 23분이며
+  "history is limited"로 보고. RAW 868 files와 DB/WAL hash 전후 동일.
 
 2026-10-01 Training Recommendation v1(`feature/training-recommendation`, base `a92404b`). Production DB/RAW는
 `mode=ro&immutable=1` audit와 read-only CLI로만 사용했다.
@@ -336,6 +351,12 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
 
 ## Known issues
 
+- Recommendation history window off-by-one(미수정): strength history는 D-28~D-1, 다음 수영 목표의 swim history는
+  Analytics snapshot window D-27~D를 쓴다. 2026-10-01 요청에서 2026-09-03 swim이 swim history에서 빠졌다. 그 날
+  600 m lap은 50 m length 하나가 2.72 m/s(> 2.5)라 baseline이 될 수 없어 결과에는 영향이 없었다.
+- `--focus shoulders`는 v1 taxonomy 한계로 얇다: shoulder-primary compound는 SHOULDER_PRESS(overhead press)뿐이고
+  posterior deltoid가 primary인 rule은 없다. 그래서 accessory slot이 비고 세션이 짧으며, 강한 swim 후에는 press도
+  빠진다. 출력은 "history is limited"로 알리고 다른 종목으로 채우지 않는다.
 - Refresh는 매 실행마다 새 RAW capture를 append한다. "동일 payload면 같은 capture 재사용"이라는
   설계 의도는 실제 Garmin 응답에서는 성립하지 않는다 — `get_activity_details`가 의미상 동일한
   데이터를 호출마다 다른 column 순서로 돌려주고(`metricDescriptors`의 `metricsIndex` 배정이

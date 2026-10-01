@@ -147,6 +147,11 @@ class SwimRecommendation:
     excluded_baselines: tuple[str, ...]
 
 
+# Strength focuses that load the muscles swimming loads (a user-requested shoulders focus
+# is one of them even though it is not an automatic region).
+_UPPER_BODY_FOCUSES = frozenset({"push", "pull", "shoulders"})
+
+
 @dataclass(frozen=True)
 class StrengthContext:
     """Strength load around the next swim (previous day's sets and today's planned focus)."""
@@ -430,9 +435,9 @@ def _select_goal(
         reasons.append(
             f"{strength.upper_body_sets_previous_day} shoulder/back/triceps sets yesterday: intervals moved to easy"
         )
-    if strength.upper_body_sets_previous_day >= HEAVY_UPPER_BODY_SETS or strength.planned_focus in ("push", "pull"):
+    if strength.upper_body_sets_previous_day >= HEAVY_UPPER_BODY_SETS or strength.planned_focus in _UPPER_BODY_FOCUSES:
         cautions.append("shoulders/back/triceps share load with strength: no butterfly or paddles today")
-    if strength.planned_focus in ("push", "pull"):
+    if strength.planned_focus in _UPPER_BODY_FOCUSES:
         cautions.append(
             f"today's strength focus is {strength.planned_focus}: if both happen today, separate them by several hours"
         )

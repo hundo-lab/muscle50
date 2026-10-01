@@ -497,8 +497,13 @@ def render_training_recommendation(recommendation: TrainingRecommendation) -> st
     ]
     if strength.focus is None:
         lines.append("Focus: none (no usable strength history)")
+    elif strength.focus_source == "user":
+        automatic = f"automatic would be {strength.auto_focus}" if strength.auto_focus else "no automatic choice"
+        lines.append(
+            f"Focus: {strength.focus} ({', '.join(strength.focus_muscles)}) [user-selected; {automatic}]"
+        )
     else:
-        lines.append(f"Focus: {strength.focus} ({', '.join(strength.focus_muscles)})")
+        lines.append(f"Focus: {strength.focus} ({', '.join(strength.focus_muscles)}) [auto-selected]")
     lines.extend(f"  - {reason}" for reason in strength.reasons)
     lines.append("  Regions (ranked):")
     for region in strength.regions:

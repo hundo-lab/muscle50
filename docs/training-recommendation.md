@@ -7,6 +7,7 @@
 uv run muscle50 recommend --date 2026-09-24            # text (ASCII only)
 uv run muscle50 recommend --date 2026-09-24 --json     # 근거 전체 JSON
 uv run muscle50 recommend --date 2026-09-24 --avoid triceps --avoid lats   # 통증 등으로 오늘 뺄 muscle group
+uv run muscle50 recommend --date 2026-09-24 --focus shoulders  # 오늘 할 focus를 직접 지정 (push/pull/legs/shoulders)
 ```
 
 ## 계층
@@ -95,6 +96,29 @@ muscle별 상세(`muscle_detail`: 7일/28일 set, 마지막 날짜), 그리고
 Focus region에 28일 내 익숙한 종목이 없으면 다음 region으로 넘어가며 이유를 남긴다. UNKNOWN set은 region에
 들어가지 않으므로 set 수는 하한값이라고 출력한다.
 
+### 사용자 지정 focus (`--focus`)
+
+`--focus push|pull|legs|shoulders`는 **선호이지 안전/회복 맥락을 무시하는 허가가 아니다.**
+
+- 없으면 위의 자동 선택 그대로(순위 규칙 변경 없음). 출력은 `[auto-selected]`, JSON `focus_source: "auto"`.
+- 있으면 요청한 focus로 세션을 만들고 **다른 focus로 바꾸지 않는다.** 출력은 `[user-selected; automatic would
+  be X]`, JSON `focus_source: "user"`, `auto_focus`(자동 순위가 골랐을 region, 근거용). Region 순위 표는
+  그대로 근거로 출력한다.
+- 그대로 적용되는 규칙: recovery normal/hold/reduce, swim overlap(강한 swim 후 overhead press를 key/accessory로
+  쓰지 않음, deltoid/lats 1 set 감소), `--avoid`, double progression, UNKNOWN/data-quality 안내.
+- 48h 휴식 규칙: 요청한 focus의 primary set이 어제 ≥ 6이면(자동 선택에서는 그 region을 제외하는 규칙) focus는
+  유지하고 세션을 reduce로 낮춘다.
+- `shoulders`는 자동 region이 아니다(push/pull에 걸쳐 있음). Primary muscle이 anterior/lateral/posterior
+  deltoid인 종목만 후보다. Secondary muscle로 deltoid가 있는 종목(bench press, row 등)은 shoulders 종목이 되지
+  않는다. v1 taxonomy에는 posterior deltoid가 primary인 rule이 없으므로 출력에 "never counted"로 표시한다
+  (0 set을 방치로 읽지 않도록).
+- "history is limited"는 요청한 focus에서만, 세 경우에 알린다. 부하 목표는 항상 기록된 부하에서만 나오고 세션을
+  다른 종목으로 채우지 않는다.
+  1. 28일 내 익숙한 종목이 없음 → 종목/부하 추천 없음, 다른 focus로 넘어가지 않음.
+  2. 계획한 종목이 모두 1회 세션뿐 → 목표가 그 한 세션에만 근거함.
+  3. 쓸 수 있는 compound가 1개 이하라 accessory slot을 못 채우고 세션이 목표 시간보다 5분 넘게 짧음(예:
+     shoulders는 v1에서 compound가 overhead press뿐이고, 강한 swim 후에는 그것도 빠진다).
+
 ### 종목 선택 (약 40분)
 
 - 후보: focus region에 primary muscle이 있는 매핑된 label 중 28일 안에 한 것. `--avoid` muscle이 primary나
@@ -165,6 +189,8 @@ Body battery, stress, resting HR은 사용하지 않는다(저장 값이 D의 �
 - **강한 overlap**: HR zone 5 ≥ 120 s, 또는 anaerobic TE ≥ 2.5, 또는 plausible butterfly ≥ 200 m.
   → push/pull region 후순위, vertical push(overhead press)는 key/accessory로 선택하지 않음,
   primary anterior/lateral deltoid·lats 종목 1 set 감소.
+- 오늘 focus가 push/pull/`--focus shoulders`이면 다음 수영에 "no butterfly or paddles"와 "several hours" 주의를
+  붙인다(shoulders도 수영과 같은 근육을 쓴다).
 - Lap `intensity_type`은 production에서 전부 NULL이고 paddle/fin 기록은 없다 → 사용하지 않음(발명 안 함).
 
 ## UNKNOWN strength 안내

@@ -2,11 +2,64 @@
 
 Last updated: 2026-10-01
 
-## Current task: Training Recommendation v1 (2026-10-01)
+## Current task: user-selected focus override `--focus` (2026-10-01)
+
+Paseo worktree `training-recommendation`(branch `feature/training-recommendation`, base main = origin/main `7740d7d`).
+**구현, 테스트, production read-only 검증 완료. 사용자 승인(2026-10-01)으로 이 branch에 commit했다.** Merge/push 없음.
+
+사용자 결정(2026-10-01): (1) 요청 focus가 전날 6+ primary set이어도 focus를 바꾸지 않고 reduce, (2) 자동 경로의
+"세 region 모두 어제 heavy" 규칙은 요청 focus에 추가 적용하지 않음, (3) shoulders도 push/pull과 같은 swim 주의,
+(4) "history is limited" 3개 조건 유지, (5) JSON `auto_focus` 유지, (6) 얇은 shoulders history는 taxonomy/종목을
+임의 확장해 해결하지 않고 실제 Garmin 기록 기반으로 별도 개선.
+
+### What was attempted / completed
+
+- `muscle50 recommend --date D --focus push|pull|legs|shoulders`. 없으면 자동 focus 선택 그대로(순위 규칙 변경 없음).
+  있으면 요청 focus로 세션을 만들고 다른 focus로 바꾸지 않는다. 자동 선택 결과는 `auto_focus`로 근거만 남긴다.
+- 그대로 적용: recovery `normal`/`hold`/`reduce`, 강한 swim 후 overhead press를 key/accessory로 쓰지 않음과
+  deltoid/lats 1 set 감소, `--avoid`, double progression, UNKNOWN/data-quality 안내.
+- 결정(사용자 승인): 요청 focus의 어제 primary set ≥ 6이면 reduce. 자동 경로에서 그 region을 제외하는 48h 규칙과
+  같은 기준이며, 요청은 바꾸지 않으므로 세션을 낮춘다. 자동 경로의 "세 region 모두 어제 heavy → reduce"는 요청 경로에서
+  쓰지 않는다(push/pull/legs는 위 규칙이 같은 결과를 내고, shoulders만 다를 수 있음).
+- `shoulders`: primary anterior/lateral/posterior deltoid 종목만(secondary 노출은 자격 아님). Posterior deltoid
+  primary rule은 v1 taxonomy에 없어 출력에 "never counted"로 표시.
+- "history is limited": 익숙한 종목 0개(추천 없음, 전환 없음), 계획 종목이 모두 1회 세션, 또는 compound 1개 이하로
+  accessory slot이 비고 목표 시간보다 5분 넘게 짧을 때. 세션을 다른 종목으로 채우지 않는다.
+- `swim_recommendation.py`: `shoulders` focus도 push/pull처럼 "no butterfly or paddles"와 "several hours" 주의를 받는다.
+- 표시: text `[auto-selected]` / `[user-selected; automatic would be X]`, JSON `focus_source`, `auto_focus`.
+
+### Files changed
+
+`src/muscle50/domain/strength_recommendation.py`(StrengthFocus/FocusSource/FOCUS_MUSCLES, `_candidates`를 muscle 집합
+기준으로 일반화, 자동 선택 loop를 `_auto_selection`으로 그대로 추출), `domain/training_recommendation.py`,
+`domain/swim_recommendation.py`, `application/recommend_training.py`, `cli.py`, `presentation/terminal.py`,
+`tests/test_strength_recommendation.py`, `tests/test_swim_recommendation.py`, `tests/test_recommend_cli.py`,
+`docs/training-recommendation.md`, `README.md`, `docs/CURRENT_STATE.md`, 이 파일.
+
+### Checks run
+
+- `uv run --extra dev pytest` 524 passed(기존 509 수정 없이 통과 + 신규 15), `ruff check .`, `mypy src tests`(97 files),
+  `git diff --check` 통과. 새로 건드린 파일의 `ruff format`은 main에서 깨끗했던 파일은 깨끗하게 유지했다
+  (`presentation/terminal.py`는 main부터 미포맷이라 그대로 둠).
+- Production read-only `recommend --date 2026-10-01`: `--focus` 없는 JSON은 main `7740d7d`와 새 field 2개 외 동일, text는
+  Focus 줄 `[auto-selected]`만 다름. `--focus legs/push/pull/shoulders` exit 0. RAW 868 files, DB/WAL hash 전후 동일.
+
+### Known failures or risks
+
+- Recommendation strength/swim history window off-by-one(미수정, `CURRENT_STATE.md` Known issues).
+- 데이터가 2026-09-28까지라 2026-10-01 결과의 neglect/swim 개수/recovery는 미동기화 영향을 받는다.
+
+### Recommended next action
+
+1. main 통합 여부 결정(명시적 승인 필요). push/merge 하지 않았다.
+2. 그 다음 history window off-by-one을 별도 수정 후보로 둔다(이번 commit에서는 의도적으로 수정하지 않음).
+3. Shoulders history 보강은 실제 Garmin 기록(종목 지정 후 `garmin refresh`) 기반으로 별도 진행.
+
+## Previous task: Training Recommendation v1 (2026-10-01)
 
 Branch `feature/training-recommendation` (Paseo worktree `training-recommendation`, base main = origin/main `a92404b`,
-Analytics Engine v1 + Exercise Taxonomy v1 포함). **구현, 테스트, production read-only 검증 완료. 사용자 승인으로 이
-branch에 commit했다(`git log feature/training-recommendation`).** merge/push 하지 않았다. 설계·규칙·한계 전체는
+Analytics Engine v1 + Exercise Taxonomy v1 포함). 구현, 테스트, production read-only 검증 후 이 branch에 commit했고,
+이후 main에 fast-forward되어 `7740d7d`로 origin/main까지 push됐다. 설계·규칙·한계 전체는
 `docs/training-recommendation.md`.
 
 ### What was attempted / completed

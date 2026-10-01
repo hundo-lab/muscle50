@@ -29,6 +29,7 @@ from muscle50.domain.strength_recommendation import (
     REGION_MUSCLES,
     SWIM_OVERLAP_MUSCLES,
     Region,
+    StrengthFocus,
     StrengthRecommendation,
     SwimOverlap,
     build_strength_recommendation,
@@ -84,6 +85,7 @@ def build_training_recommendation(
     goals: TrainingGoals = DEFAULT_TRAINING_GOALS,
     avoid_muscles: Iterable[MuscleGroup] = (),
     undated_source_activity_ids: Sequence[str] = (),
+    requested_focus: StrengthFocus | None = None,
 ) -> TrainingRecommendation:
     start = history_start(as_of)
     previous_day = as_of - timedelta(days=1)
@@ -116,7 +118,9 @@ def build_training_recommendation(
         for item in swim_sessions
         if item.local_date in (previous_day, as_of)
     )
-    strength = build_strength_recommendation(as_of, window_activities, recovery, overlaps, goals, avoid_muscles)
+    strength = build_strength_recommendation(
+        as_of, window_activities, recovery, overlaps, goals, avoid_muscles, requested_focus
+    )
 
     previous_sets = primary_muscle_sets_on(previous_day, window_activities)
     context = StrengthContext(
