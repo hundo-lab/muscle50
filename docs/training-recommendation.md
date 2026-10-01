@@ -190,7 +190,7 @@ Focus region에 28일 내 익숙한 종목이 없으면 다음 region으로 넘�
 | --- | --- | --- |
 | 비교 가능한 set 없음 | `establish_baseline` | rep range, load 없음 |
 | load 미기록(0 kg/없음) | `add_reps`(또는 상한이면 `maintain`) | best + 1 rep, load target 없음 |
-| work set 2개 이상이 range 상한 도달 | `increase_load` | +2.5 kg(또는 다음 가능한 단위), reps = max(하한, 상한 - 4) |
+| work set 2개 이상이 range 상한 도달 | `increase_load` | +2.5 kg(아래 "증량 step" 조건일 때만) 또는 "next available step", reps = max(하한, 상한 - 4) |
 | range 하한 미달 | `add_reps` | 같은 무게로 하한 rep |
 | 1 set만 상한 도달 | `add_reps` | 같은 무게로 2 set 이상 상한 |
 | 그 외 | `add_reps` | 같은 무게, best + 1 rep |
@@ -210,6 +210,41 @@ Focus region에 28일 내 익숙한 종목이 없으면 다음 region으로 넘�
 - **Stagnation**: 최근 3번이 같은 work load이고 best reps가 늘지 않음 → 같은 movement pattern(없으면 같은 primary
   muscle)의 다른 익숙한 label을 **선택적 대안**으로 1개 제시(기본 계획은 바꾸지 않음).
 - 근거(`basis`)에는 마지막 session, 판단 이유, 2-4주 trend(날짜별 work load × best reps)가 들어간다.
+
+### 증량 step (Progression Hardening v1, 2026-10-01)
+
+**언제** 증량하는지(work set 2개 이상 상한)는 그대로다. **얼마나**만 바뀐다. `increase_load`가 나왔을 때:
+
+| 조건 | `load_kg` | `load_increase_from_kg` | `load_step` | Text |
+| --- | --- | --- | --- | --- |
+| label이 `PULL_UP/-`, `PUSH_UP/-`, `TRICEPS_EXTENSION/BENCH_DIP`(`AMBIGUOUS_LOAD_LABELS`) | `null` | 마지막 work load | `smallest_available_direction_unknown` | `@ one smallest available step from ~8 kg (less if assistance, more if added resistance)` |
+| 2.5 kg ≤ 15% × work load(`MAX_EXACT_LOAD_INCREASE_RATIO`, 즉 work load ≥ 약 16.7 kg) | work load + 2.5 | `null` | `null` | `@ 22.5 kg`(기존과 동일) |
+| 그 외(2.5 kg > 15%) | `null` | 마지막 work load | `smallest_available` | `@ next available step above 6 kg` |
+
+- 더 작은 숫자 step(예 +1 kg)을 만들지 않는다. 장비별 증량 단위는 데이터에 없으므로 추론하지 않는다.
+- 애매한 label은 15% 이하여도 숫자 증량이 없다. `load_guidance`에 "if the recorded weight is assistance, reduce
+  assistance by the smallest available step; if it is added resistance, increase by the smallest available step"을
+  더한다(어느 쪽인지 추정하지 않음). Confidence는 기존대로 `low`.
+- 순서: step은 상한 분기 안에서만 정해지고, 이후 same-load regression, recovery hold/reduce, 48 h rest rule이
+  기존대로 `maintain`(마지막 work load/reps, 숫자)으로 덮는다. 덮인 `maintain`에는 `null` 목표나 step 필드가 남지
+  않는다. Basis 첫 판단 문장은 상한 도달과 step 이유를 그대로 설명한다.
+- Low confidence 판정(1.5배 spread, 애매한 label)은 숫자 목표 유무와 무관하게 같은 work load를 기준으로 한다.
+- Reps 재시작(상한 - 4), rep range, trigger, regression, recovery, focus/종목/set 수는 바뀌지 않는다.
+
+JSON schema(`strength.exercises[].progression`, 추가 필드는 모든 exercise에 항상 있음 — `dataclasses.asdict`):
+
+- `load_kg`: 숫자 목표 또는 `null`. `null`이면 `action`으로 의미를 구분한다: `increase_load`면 숫자 없는 증량,
+  `establish_baseline`/load 미기록이면 load 목표 없음.
+- `load_increase_from_kg`(신규): `increase_load`이고 `load_kg`가 `null`일 때만 마지막 recorded work load. 그 외 `null`.
+- `load_step`(신규): 같은 경우에만 `smallest_available` 또는 `smallest_available_direction_unknown`. 그 외 `null`.
+- 숫자 목표 recommendation은 기존 key 값이 모두 같고 새 key 두 개가 `null`로 추가될 뿐이다(하위 호환).
+
+**15%를 고른 이유**(2026-10-01 production audit, evidence `C:\temp\muscle50-evidence-20261001-progression-audit\`
+`cap_analysis.py`/`cap.txt`): 생리학적 최적값이 아니라 **정확한 +2.5 kg 숫자를 낼 만큼 믿을 수 있는지의 기준**이다.
+이 사용자의 2026-07~09 history에서 (1) 애매하지 않은 label의 실제 증량은 한 번도 10% 이하가 아니었고, 2.5 kg
+step이 실제로 쓰이고 추천과 일치한 유일한 경우가 20 → 22.5 kg(12.5%)였다 → cap ≥ 12.5%. (2) 10-19.9 kg 구간의
+실제 증량(장비 전환 제외)은 모두 +4-5 kg(33%) 이상이었고 16.5/17.5 kg는 기록된 적 없다 → 14 → 16.5, 15 → 17.5는
+만든 숫자 → cap < 16.7%. 15%는 그 사이다. 근거가 얇다(각 경계가 소수 사례). 16.7-20 kg trigger는 데이터에 없다.
 
 ## Recovery 조정
 
@@ -338,6 +373,28 @@ anchor = max(설정 baseline 1000 m, 28일 최장 연속 구간). Effort = 최�
 Strength 맥락: 어제 shoulder/back/triceps primary set ≥ 8이면 intervals → easy. 오늘 focus가 push/pull이면
 "no butterfly/paddles, 몇 시간 간격" caution, legs면 "kick/fins easy".
 
+## Production read-only 검증 — Progression Hardening v1 (2026-10-01)
+
+Evidence(repo 밖): `C:\temp\muscle50-evidence-20261001-progression-audit\`(`sweep_full.py`, `sweep_baseline.json`
+(base `4f26ec2`), `sweep_impl.json`(+ `_rerun` byte-identical), `compare_impl.py/txt`, `sweep_increases.py`,
+`increases.json`/`increases_impl.json`, `cap_analysis.py/txt`, `fingerprint.py`, `impl_before.json`/`impl_after.json`).
+
+- 93일(07-02~10-02) × (auto + focus 4) = 465 run. Focus, 종목 label/role/set 수, recovery/session level과
+  adjustments, heavy hinge, focus coverage, UNKNOWN/no-rule notice, 모든 notice, swim 전체, regions/reasons/
+  alternative/minutes 차이 0. Progression 밖 payload 차이 0.
+- 바뀐 progression 54 항목(54 run), 바뀐 field는 `load_kg`, `basis`, `load_guidance`와 새 필드뿐:
+  - `LATERAL_RAISE/ONE_ARM_CABLE_LATERAL_RAISE` 6 → 8.5 kg 9 run(09-24 auto/push/shoulders, 09-26/28, 10-02
+    push/shoulders) → next available step above 6 kg.
+  - `SHOULDER_PRESS/-` 14 → 16.5 kg 13 run(07-09~07-16) → next available step above 14 kg.
+  - `PULL_UP/-` 8 → 10.5 kg 8 run(07-21~09-07 pull, 09-05 auto) → `smallest_available_direction_unknown`.
+  - 위 label의 덮인 `maintain` 24 run(lateral 12, shoulder press 2, pull-up 9, push-up 1): load/reps 동일, basis의
+    상한 도달 문장만 바뀜.
+- `increase_load` 152 → 숫자 122(LEG_CURL 61.5, ROW 22.5/32.5/42.5/52.5, LAT_PULLDOWN 25/42.5/82.5, SQUAT 32.5/42.5,
+  BENCH 22.5, LUNGE 22.5, SHOULDER_PRESS 22.5) + step 안내 30. 새 text에 "8.5 kg", "16.5 kg", "10.5 kg" 없음.
+- Label 단위(선택/recovery 무시) trigger 32개: 숫자 18, step 14(애매한 label 11 + lateral 6, shoulder press 14,
+  lying triceps 15 kg). 20 → 22.5(6 label)와 50 → 52.5(ROW/-, BENCH_PRESS/-)는 숫자 유지. Trigger 자체(210 day-label)는 동일.
+- Fingerprint before = after(DB/WAL, 28 table, RAW 954). `garmin refresh` 미실행.
+
 ## Production read-only 검증 — Hardening v1 + Taxonomy coverage 통합 (2026-10-01)
 
 Evidence(repo 밖): `C:\temp\muscle50-evidence-20261001-integration-hardening\`(`compare62.py`, `c62_reference.json`
@@ -443,7 +500,9 @@ Bias 확인(counterfactual, 2026-08-01~10-01 62일 매일 실행, `distribution.
 - Garmin Connect에서 새로 지정한 구체적 label은 rule 추가 전까지 no-rule로 빠져 그 muscle이 과소평가된다(notice로
   표시). 2026-10-01 지정 label 7개는 `aba8cfe`에서 rule이 추가됐고, 남은 no-rule은 `PLYO/BOX_JUMP`(의도적)뿐이다.
 - Recovery lookback은 저장 field만 본다(`validSleep` 등 RAW 전용 field는 미사용). D-1 하나만 hold 수준이면 carry 안 함.
-- 2.5 kg 증량 단위와 시간 추정(3분/set)은 고정 상수다.
+- 2.5 kg 증량 단위, 15% 숫자 목표 한계, 시간 추정(3분/set)은 고정 상수다. 장비별 실제 증량 단위(cable stack,
+  dumbbell 간격)는 데이터에 없어 "next available step"으로만 안내한다. 증량 후 reps 재시작(상한 - 4)은 작은 무게
+  isolation에서도 그대로다(예 6 kg × 20 → 다음 step × 16).
 - Focus 정렬은 매일 독립적으로 계산된다(사용자가 실제로 무엇을 했는지만 반영; 이전 추천을 기억하지 않음).
   사용자가 upper body를 거의 매일 무겁게 하므로 push/pull이 "resting"이 되는 날이 많고, 그날은 legs가 된다.
   Push는 실제 비율보다 적게 추천된다(23% vs 38%).

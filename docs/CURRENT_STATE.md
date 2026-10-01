@@ -96,7 +96,8 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   legs) focus를 어제 heavy work 제외, 7일+ 미훈련(neglected, 수영 불포함) 보호, 수영 overlap, recovery reduce 시
   최근 region 후순위, 자기 28일 주기 대비 due, 자기 평균 대비 7일 volume 순으로 선택; 28일 history의 익숙한
   원본 Garmin label로 key/accessory/isolation(약 40분); label별 double progression(같은 무게 rep 증가, work set 2개
-  상한 도달 시 +2.5 kg, 같은 무게 rep 감소 시 maintain, load 일관성 낮으면 `low` confidence); 필드별 recovery 규칙
+  상한 도달 시 +2.5 kg(Progression Hardening v1부터 2.5 kg ≤ work load의 15%일 때만, 아니면 "next available step"),
+  같은 무게 rep 감소 시 maintain, load 일관성 낮으면 `low` confidence); 필드별 recovery 규칙
   (`normal`/`hold`/`reduce`, missing ≠ poor); 강한 수영(zone 5 ≥ 120 s, anaerobic TE ≥ 2.5, butterfly ≥ 200 m) 후
   push/pull 후순위와 overhead press 제외; UNKNOWN activity별 Garmin Connect 수정 + `garmin refresh` 안내; 다음 수영
   목표(`distance_progression`/`pace_intervals`/`easy_continuous`/`recovery_technique`)는 plausible length timing
@@ -113,17 +114,23 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   swim history D-28~D 정렬, 10일 이상 swim 공백 후 `return_easy` 재진입. 상세는 `docs/training-recommendation.md`.
   통합 수정: 조정 원인 표기 분리 — 48 h rest rule이 올린 reduce는 "48 h rest rule reduce"로, recovery는 자기 level로만
   표기(결정 불변). Text heading은 두 level이 다를 때 `Recovery adjustment: hold; session adjustment: reduce`.
+- (branch `feature/progression-hardening`, base main `4f26ec2`, main 미통합) Progression Hardening v1: 증량 시점(work
+  set 2개 상한)은 그대로, 정확한 +2.5 kg 목표는 2.5 kg ≤ work load × 15%(`MAX_EXACT_LOAD_INCREASE_RATIO`)일 때만.
+  초과하면 `increase_load` + `load_kg: null` + `load_increase_from_kg`(마지막 work load) + `load_step:
+  "smallest_available"`, text `@ next available step above 6 kg`. `PULL_UP/-`, `PUSH_UP/-`,
+  `TRICEPS_EXTENSION/BENCH_DIP`는 항상 숫자 없음 + `smallest_available_direction_unknown` + assistance/추가 저항 양방향
+  안내. Regression, recovery hold/reduce, 48 h rest rule은 기존대로 숫자 `maintain`으로 덮는다. 15%는 사용자 history로
+  보정한 숫자 목표 신뢰 기준(생리학적 최적값 아님). 상세는 `docs/training-recommendation.md` "증량 step".
 
 ## Pending merge
 
-- Paseo worktree `integration-recommendation-hardening`(branch `integration/recommendation-hardening`, base local main
-  `aba8cfe`): Recommendation Hardening v1 `5dd2af7`/`272761a`를 cherry-pick(docs 충돌만 해소; 이 branch에서
-  `5dd2af7` → `5fbdd56`, `272761a` → `38a23ae`)하고 통합 수정 commit 1개
-  (Taxonomy coverage로 매핑된 label을 쓰던 테스트 3개를 test-only 미매핑 label로 교체, stale 문서, 조정 원인 표기 수정)를
-  더한 후보. Gates·production read-only 검증 완료. local main fast-forward 가능(main은 이 branch의 ancestor), merge/push는
-  별도 승인 필요. 원본 `feature/recommendation-hardening`(`272761a`)은 승인된 reference로 그대로 둔다.
-- Taxonomy coverage(`aba8cfe`, branch `feature/taxonomy-coverage`)는 local main에 포함됐다. origin/main은 `8b259e7`
-  그대로(push 안 함).
+- Paseo worktree `progression-hardening`(branch `feature/progression-hardening`, base main = origin/main `4f26ec2`):
+  Progression Hardening v1 commit 1개. Gates·production read-only 검증 완료. main은 이 branch의 ancestor(fast-forward
+  가능). merge/push는 별도 승인 필요.
+
+- Recommendation Hardening v1 통합(`5fbdd56`/`38a23ae`/`4f26ec2`)과 Taxonomy coverage(`aba8cfe`)는 main = origin/main
+  `4f26ec2`에 포함됐다(2026-10-01 `git rev-parse` 확인). 원본 `feature/recommendation-hardening`(`272761a`)은 reference로
+  그대로 둔다.
 - 사용자 지정 focus override(`--focus`)는 `8b259e7`로 main/origin에 포함됐다(2026-10-01 `git branch -vv` 확인).
 - Training Recommendation v1은 `7740d7d`로 main/origin에 포함됐다(push 완료).
 - Exercise Taxonomy v1은 `a92404b`로 main/origin에 포함됐다.
@@ -160,6 +167,16 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 - `tests/test_refresh_activity.py`, `tests/test_swim_normalization.py`, `tests/test_sync_recovery.py`
 
 ## Verification
+
+2026-10-01 Progression Hardening v1(worktree `progression-hardening`, base `4f26ec2`):
+
+- Gates: `uv run --extra dev pytest` 582 passed(574 + 신규 8), `ruff check .`, `mypy src tests`(97 files),
+  `git diff --check` 통과. 신규 8개는 base src에서 모두 실패(override 3개는 새 필드 assert 때문).
+- Production read-only(`garmin refresh` 미실행), evidence `C:\temp\muscle50-evidence-20261001-progression-audit\`:
+  93일 × 5 = 465 run을 base `4f26ec2`와 비교 — focus/label/role/set/recovery·session level/hinge/coverage/notice/swim
+  차이 0. 바뀐 progression 54 항목: lateral raise 6 → 8.5(9 run), `SHOULDER_PRESS/-` 14 → 16.5(13), `PULL_UP/-`
+  8 → 10.5(8)가 숫자 없는 step으로, 덮인 maintain 24개는 basis 문장만. 숫자 증량 122 유지(20 → 22.5, 50 → 52.5 포함).
+  JSON/text 재실행 byte-identical. Fingerprint before = after(DB/WAL, 28 table, RAW 954).
 
 2026-10-01 Recommendation Hardening v1 통합(worktree `integration-recommendation-hardening`, base local main `aba8cfe`):
 
@@ -398,9 +415,10 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
 
 ## Known issues
 
-- Recommendation 후보(미수정): double progression의 고정 +2.5 kg step이 가벼운 isolation에 과하다.
-  `LATERAL_RAISE/ONE_ARM_CABLE_LATERAL_RAISE` 6 kg → 8.5 kg(약 42%; 통합 tree 62일 중 09-24 auto와 09-24/26/28 push·shoulders).
-  Hardening v1은 progression 규칙을 바꾸지 않았다.
+- (Progression Hardening v1, `feature/progression-hardening`에서 수정, main 미통합) 고정 +2.5 kg step이 가벼운
+  isolation에 과했다(`LATERAL_RAISE/ONE_ARM_CABLE_LATERAL_RAISE` 6 → 8.5 kg, 42%). 이제 15% 초과면 숫자 없이 "next
+  available step above 6 kg". 남은 한계: 장비별 실제 증량 단위는 모름(추론 안 함), 증량 후 reps 재시작(상한 - 4)은
+  작은 무게에서도 그대로, 15% 경계 근거는 소수 사례이고 16.7-20 kg trigger는 production에 없다.
 - `PLYO/BOX_JUMP`(1 set, 자동 인식 37.5%)는 의도적으로 rule 없음(사용자 결정 2026-10-01; plyometric은 v1 범위
   밖). 유일한 non-UNKNOWN ACTIVE `no_rule` label.
 - (Hardening v1 `5dd2af7`에서 수정, integration branch에 포함, main 미통합) Recommendation swim history가 D-27~D로 strength(D-28~D-1)보다 하루 짧았다. 이제

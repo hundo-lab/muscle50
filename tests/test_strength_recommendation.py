@@ -13,12 +13,17 @@ from muscle50.domain.exercise_taxonomy import MuscleGroup
 from muscle50.domain.recovery import DailyRecovery
 from muscle50.domain.recovery_assessment import AdjustmentLevel, assess_recovery
 from muscle50.domain.strength_recommendation import (
+    LOAD_INCREMENT_KG,
+    LOAD_STEP_SMALLEST_AVAILABLE,
+    LOAD_STEP_SMALLEST_AVAILABLE_DIRECTION_UNKNOWN,
+    MAX_EXACT_LOAD_INCREASE_RATIO,
     REPS_BELOW_TOP_AFTER_LOAD_INCREASE,
     ExerciseLabel,
     ExerciseOccurrence,
     ExerciseRole,
     PerformedSet,
     ProgressionAction,
+    ProgressionTarget,
     StrengthFocus,
     StrengthRecommendation,
     SwimOverlap,
@@ -223,6 +228,121 @@ def test_missing_reps_only_history_establishes_a_baseline() -> None:
 
     assert target.action is ProgressionAction.ESTABLISH_BASELINE
     assert target.load_kg is None
+
+
+# --- load increase step (Progression Hardening v1) --------------------------------------
+
+ISOLATION = RepRange(10, 20)
+CABLE_LATERAL_RAISE = ExerciseLabel("LATERAL_RAISE", "ONE_ARM_CABLE_LATERAL_RAISE")
+
+
+def _top_of_range(label: ExerciseLabel, load: float, rep_range: RepRange, level: AdjustmentLevel) -> ProgressionTarget:
+    """Two work sets at the top of the range: the double-progression increase trigger."""
+    occurrence = _occurrence("2026-09-22", (rep_range.maximum, load), (rep_range.maximum, load))
+    return plan_progression(label, [occurrence], rep_range, level)
+
+
+def test_small_load_increase_names_the_next_available_step_instead_of_an_invented_number() -> None:
+    # 2026-09-22 ONE_ARM_CABLE_LATERAL_RAISE: 6 kg x 20/20; +2.5 kg would be 42%.
+    target = _top_of_range(CABLE_LATERAL_RAISE, 6.0, ISOLATION, AdjustmentLevel.NORMAL)
+
+    assert target.action is ProgressionAction.INCREASE_LOAD
+    assert target.load_kg is None
+    assert target.load_increase_from_kg == 6.0
+    assert target.load_step == LOAD_STEP_SMALLEST_AVAILABLE
+    assert target.load_confidence == "normal"
+    # The rep restart after an increase is unchanged.
+    assert target.target_reps == max(ISOLATION.minimum, ISOLATION.maximum - REPS_BELOW_TOP_AFTER_LOAD_INCREASE)
+    assert any("next available step above 6 kg" in text for text in target.basis)
+    assert "8.5" not in json.dumps(dataclasses.asdict(target), default=str)
+
+
+def test_exact_increase_is_kept_only_up_to_the_relative_limit() -> None:
+    boundary = LOAD_INCREMENT_KG / MAX_EXACT_LOAD_INCREASE_RATIO  # +2.5 kg is exactly 15%
+    cases = {14.0: None, 15.0: None, 16.6: None, boundary: boundary + LOAD_INCREMENT_KG, 20.0: 22.5, 50.0: 52.5}
+
+    for load, expected in cases.items():
+        target = _top_of_range(BENCH, load, COMPOUND, AdjustmentLevel.NORMAL)
+        assert target.action is ProgressionAction.INCREASE_LOAD, load
+        assert target.load_kg == expected, load
+        if expected is None:
+            assert (target.load_increase_from_kg, target.load_step) == (load, LOAD_STEP_SMALLEST_AVAILABLE)
+        else:
+            # A numeric target keeps the previous contract: no step fields.
+            assert (target.load_increase_from_kg, target.load_step) == (None, None)
+            assert any(f"add {kg_text(LOAD_INCREMENT_KG)}" in text for text in target.basis)
+
+
+def test_ambiguous_load_label_never_gets_a_numeric_increase_or_a_direction() -> None:
+    for label, load in ((ExerciseLabel("PULL_UP", None), 8.0), (ExerciseLabel("PUSH_UP", None), 60.0)):
+        target = _top_of_range(label, load, COMPOUND, AdjustmentLevel.NORMAL)
+
+        assert target.action is ProgressionAction.INCREASE_LOAD
+        assert target.load_kg is None  # even where +2.5 kg would be within the limit
+        assert target.load_increase_from_kg == load
+        assert target.load_step == LOAD_STEP_SMALLEST_AVAILABLE_DIRECTION_UNKNOWN
+        assert target.load_confidence == "low"
+        assert target.load_guidance is not None
+        assert (
+            "if the recorded weight is assistance, reduce assistance by the smallest available step; "
+            "if it is added resistance, increase by the smallest available step"
+        ) in target.load_guidance
+        assert kg_text(load + LOAD_INCREMENT_KG) not in json.dumps(dataclasses.asdict(target), default=str)
+
+    dip = _top_of_range(ExerciseLabel("TRICEPS_EXTENSION", "BENCH_DIP"), 55.0, ISOLATION, AdjustmentLevel.NORMAL)
+    assert (dip.load_kg, dip.load_step) == (None, LOAD_STEP_SMALLEST_AVAILABLE_DIRECTION_UNKNOWN)
+
+
+def test_hold_and_reduce_turn_a_small_load_increase_back_into_a_numeric_maintain() -> None:
+    for level in (AdjustmentLevel.HOLD, AdjustmentLevel.REDUCE):
+        for label in (CABLE_LATERAL_RAISE, ExerciseLabel("PULL_UP", None)):
+            target = _top_of_range(label, 6.0, ISOLATION, level)
+
+            assert target.action is ProgressionAction.MAINTAIN
+            assert (target.load_kg, target.target_reps) == (6.0, 20)
+            assert (target.load_increase_from_kg, target.load_step) == (None, None)
+
+
+def test_rest_rule_reduce_turns_a_small_load_increase_back_into_a_numeric_maintain() -> None:
+    target = plan_progression(
+        CABLE_LATERAL_RAISE,
+        [_occurrence("2026-09-22", (20, 6.0), (20, 6.0))],
+        ISOLATION,
+        AdjustmentLevel.REDUCE,
+        "48 h rest rule reduce",
+    )
+
+    assert target.action is ProgressionAction.MAINTAIN
+    assert (target.load_kg, target.target_reps) == (6.0, 20)
+    assert (target.load_increase_from_kg, target.load_step) == (None, None)
+    assert any(text.startswith("48 h rest rule reduce: no load or rep increase") for text in target.basis)
+
+
+def test_same_load_regression_overrides_a_small_load_increase_with_a_numeric_maintain() -> None:
+    occurrences = [
+        _occurrence("2026-09-15", (25, 6.0), (24, 6.0)),
+        _occurrence("2026-09-22", (20, 6.0), (20, 6.0)),
+    ]
+
+    target = plan_progression(CABLE_LATERAL_RAISE, occurrences, ISOLATION, AdjustmentLevel.NORMAL)
+
+    assert target.regression
+    assert target.action is ProgressionAction.MAINTAIN
+    assert (target.load_kg, target.target_reps) == (6.0, 20)
+    assert (target.load_increase_from_kg, target.load_step) == (None, None)
+
+
+def test_low_confidence_small_load_increase_keeps_its_low_confidence_guidance() -> None:
+    # Mixed loads under one label: confidence detection must not depend on the numeric target.
+    occurrences = [_occurrence("2026-09-10", (12, 30.0)), _occurrence("2026-09-22", (12, 14.0), (12, 14.0))]
+
+    target = plan_progression(ExerciseLabel("SHOULDER_PRESS", None), occurrences, COMPOUND, AdjustmentLevel.NORMAL)
+
+    assert target.action is ProgressionAction.INCREASE_LOAD
+    assert (target.load_kg, target.load_increase_from_kg) == (None, 14.0)
+    assert target.load_confidence == "low"
+    assert target.recorded_load_range_kg == (14.0, 30.0)
+    assert target.load_guidance is not None and "confirm the equipment and load" in target.load_guidance
 
 
 # --- selection -------------------------------------------------------------------------

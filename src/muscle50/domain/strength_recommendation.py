@@ -8,8 +8,10 @@ Rules (details and thresholds in docs/training-recommendation.md):
   UNKNOWN and rule-less labels are never recommended and never guessed.
 - Progression is double progression on the label's most recent comparable session: add
   reps at the same load inside the goal rep range, and add load only after at least two
-  work sets reached the top of the range. Recovery or performance signals can only hold
-  or reduce, never force an increase.
+  work sets reached the top of the range. The exact +2.5 kg target is given only while it is
+  at most 15% of the work load and the stored weight is not possibly assistance; otherwise
+  the target is "the next available step" with no invented number. Recovery or performance
+  signals can only hold or reduce, never force an increase.
 - Every decision carries the evidence it used; missing data is reported, never zeroed.
 """
 
@@ -54,6 +56,13 @@ REDUCE_REST_DAYS = 2
 # Names a reduce that comes from yesterday's training load rather than from recovery data.
 REST_RULE_REDUCE = "48 h rest rule reduce"
 LOAD_INCREMENT_KG = 2.5
+# An exact +LOAD_INCREMENT_KG target is emitted only while it is at most this share of the work
+# load. Calibrated on the user's 2026-07..09 history (a confidence threshold for the exact number,
+# not a physiological optimum); above it the target is "the next available step" instead.
+MAX_EXACT_LOAD_INCREASE_RATIO = 0.15
+# ProgressionTarget.load_step values (set only for an increase without a numeric target).
+LOAD_STEP_SMALLEST_AVAILABLE = "smallest_available"
+LOAD_STEP_SMALLEST_AVAILABLE_DIRECTION_UNKNOWN = "smallest_available_direction_unknown"
 # After a load increase the rep target restarts this far below the top of the range.
 REPS_BELOW_TOP_AFTER_LOAD_INCREASE = 4
 # The session may exceed the minutes goal by this much before the second accessory is dropped.
@@ -255,6 +264,13 @@ class ProgressionTarget:
     """An earlier session used the same work load as the last one (the target load is comparable)."""
     load_guidance: str | None = None
     """How to treat a ``low`` confidence load target; the target is never presented as exact."""
+    load_increase_from_kg: float | None = None
+    """For ``increase_load`` without a numeric target (``load_kg`` None): the last recorded work
+    load the step is taken from. None otherwise (a numeric target is in ``load_kg``)."""
+    load_step: str | None = None
+    """For ``increase_load`` without a numeric target: ``smallest_available`` (the next available
+    step above ``load_increase_from_kg``) or ``smallest_available_direction_unknown`` (the stored
+    weight may be assistance or added resistance, so the direction is not known). None otherwise."""
 
 
 @dataclass(frozen=True)
@@ -528,12 +544,27 @@ def plan_progression(
         load = work_load
         if top_hits >= 2:
             action = ProgressionAction.INCREASE_LOAD
-            load = work_load + LOAD_INCREMENT_KG
             target_reps = max(rep_range.minimum, rep_range.maximum - REPS_BELOW_TOP_AFTER_LOAD_INCREASE)
-            basis.append(
+            reached = (
                 f"{top_hits} work sets reached the top of {rep_range.minimum}-{rep_range.maximum} reps at "
-                f"{kg_text(work_load)}; add {kg_text(LOAD_INCREMENT_KG)} (or the next available step)"
+                f"{kg_text(work_load)}"
             )
+            if (label.category, label.name) in AMBIGUOUS_LOAD_LABELS:
+                load = None
+                basis.append(
+                    f"{reached}; the stored weight may be assistance or added resistance, so no numeric "
+                    "target: move one smallest available step"
+                )
+            elif work_load * MAX_EXACT_LOAD_INCREASE_RATIO + _EPSILON >= LOAD_INCREMENT_KG:
+                load = work_load + LOAD_INCREMENT_KG
+                basis.append(f"{reached}; add {kg_text(LOAD_INCREMENT_KG)} (or the next available step)")
+            else:
+                load = None
+                basis.append(
+                    f"{reached}; {kg_text(LOAD_INCREMENT_KG)} would be {LOAD_INCREMENT_KG / work_load:.0%} of it "
+                    f"(over the {MAX_EXACT_LOAD_INCREASE_RATIO:.0%} limit for an exact target): use the next "
+                    f"available step above {kg_text(work_load)}"
+                )
         elif last.below_range:
             action = ProgressionAction.ADD_REPS
             target_reps = rep_range.minimum
@@ -575,12 +606,20 @@ def plan_progression(
             f"stagnant: same work load and no rep gain over the last {STAGNATION_SESSIONS} sessions of this label"
         )
 
-    load_confidence = "none" if load is None else "normal"
+    # An overriding maintain (regression, recovery, rest rule) already restored the recorded load.
+    increase_from = last.work_load_kg if action is ProgressionAction.INCREASE_LOAD and load is None else None
+    ambiguous = (label.category, label.name) in AMBIGUOUS_LOAD_LABELS
+    load_step = None
+    if increase_from is not None:
+        load_step = LOAD_STEP_SMALLEST_AVAILABLE_DIRECTION_UNKNOWN if ambiguous else LOAD_STEP_SMALLEST_AVAILABLE
+    # The load the target refers to, numeric or not; confidence is judged the same either way.
+    reference_load = load if load is not None else increase_from
+    load_confidence = "none" if reference_load is None else "normal"
     loads = [item.work_load_kg for item in usable if item.work_load_kg is not None]
     load_range = (min(loads), max(loads)) if loads else None
     same_load = comparable is not None
     guidance: list[str] = []
-    if load is not None and len(loads) >= 2 and max(loads) > min(loads) * LOAD_SPREAD_RATIO:
+    if reference_load is not None and len(loads) >= 2 and max(loads) > min(loads) * LOAD_SPREAD_RATIO:
         load_confidence = "low"
         caveats.append(
             f"work loads ranged {kg_text(min(loads))}-{kg_text(max(loads))} over {len(loads)} sessions; "
@@ -596,10 +635,15 @@ def plan_progression(
                 f"recorded {kg_text(min(loads))}-{kg_text(max(loads))} under this one label and the last load was "
                 "not repeated: confirm the equipment and load used last time; if unsure, start at the low end"
             )
-    if load is not None and (label.category, label.name) in AMBIGUOUS_LOAD_LABELS:
+    if reference_load is not None and ambiguous:
         load_confidence = "low"
         caveats.append("stored weight may be added load or machine assistance; Garmin does not say which")
         guidance.append("confirm whether the stored weight was added load or machine assistance")
+        if load_step == LOAD_STEP_SMALLEST_AVAILABLE_DIRECTION_UNKNOWN:
+            guidance.append(
+                "if the recorded weight is assistance, reduce assistance by the smallest available step; "
+                "if it is added resistance, increase by the smallest available step"
+            )
     last_origins = occurrences[-1].label_origins
     if last_origins.auto_detected and not last_origins.confirmed:
         caveats.append("label auto-detected by the watch (not confirmed in Garmin Connect)")
@@ -618,6 +662,8 @@ def plan_progression(
         load_range,
         same_load,
         "; ".join(guidance) if guidance else None,
+        increase_from,
+        load_step,
     )
 
 

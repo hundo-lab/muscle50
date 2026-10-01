@@ -2,7 +2,52 @@
 
 Last updated: 2026-10-01
 
-## Current task: Recommendation Hardening v1 integration on local main (2026-10-01)
+## Current task: Progression Hardening v1 (2026-10-01)
+
+Paseo worktree `progression-hardening`(branch `feature/progression-hardening`, base main = origin/main `4f26ec2`).
+**이 branch에 commit 1개. main merge/push 안 함.**
+
+### What was attempted / completed
+
+1. Read-only audit(증량 위치, 모든 trigger의 production 결과)과 cap 보정 분석(연속 session 증량 분포) 후 사용자가
+   15% 승인. Evidence `C:\temp\muscle50-evidence-20261001-progression-audit\`(`loads.*`, `increases.*`, `simulate.*`,
+   `cap_analysis.py`, `cap.txt`, `cap_families.txt`).
+2. `plan_progression`의 상한 분기 안에서만 step 결정: 애매한 label(`AMBIGUOUS_LOAD_LABELS`) → `load_kg` null +
+   `smallest_available_direction_unknown` + 양방향 guidance; 2.5 kg ≤ 15% × work load → 기존 +2.5; 그 외 → null +
+   `smallest_available`. 새 `ProgressionTarget` 필드 `load_increase_from_kg`, `load_step`(기본 None, 끝에 추가).
+   Regression/recovery/rest rule override는 그대로 뒤에서 숫자 `maintain`으로 덮고 새 필드는 None. Low confidence
+   판정은 숫자 유무와 무관하게 reference load 기준(동작 불변).
+3. `terminal._prescription`: `@ next available step above 6 kg`, 애매한 label `@ one smallest available step from ~8 kg
+   (less if assistance, more if added resistance)`. 숫자 목표 text는 byte 단위로 기존과 같다.
+4. 테스트 8개(domain 7 + CLI 1). 문서: `training-recommendation.md` "증량 step" 절(schema, 15% 근거), 검증 절, 한계.
+
+### Files changed
+
+`src/muscle50/domain/strength_recommendation.py`, `src/muscle50/presentation/terminal.py`,
+`tests/test_strength_recommendation.py`, `tests/test_recommend_cli.py`, `docs/training-recommendation.md`,
+`docs/CURRENT_STATE.md`, 이 파일.
+
+### Checks run
+
+- `uv run --extra dev pytest` 582 passed, `ruff check .`, `mypy src tests`(97 files), `git diff --check` 통과.
+  `ruff format`은 baseline에 무관한 drift(16 files, `terminal.py` 포함)가 있어 전체 적용하지 않았다.
+- 신규 8개 테스트는 base src(`git archive HEAD`, 상수만 shim)에서 모두 실패.
+- Production read-only 465 run before/after(`compare_impl.txt`): 불변식 위반 0, 바뀐 progression 54 항목(위
+  CURRENT_STATE Verification). 재실행 byte-identical. Fingerprint before = after.
+
+### Known failures or risks
+
+- 15% 근거는 소수 사례(하한: 20 → 22.5 한 번, 상한: 10-19.9 kg 증량 5개). 16.7-20 kg trigger는 데이터에 없다.
+- 증량 후 reps 재시작(상한 - 4)은 작은 무게에서도 그대로(6 kg × 20 → 다음 step × 16). 별도 검토 후보.
+- `load_kg: null`을 숫자로 가정하던 외부 consumer가 있다면 `action`/`load_step`을 봐야 한다(repo 안 consumer는
+  terminal뿐이며 갱신됨).
+
+### Recommended next action
+
+1. 사용자: `feature/progression-hardening`으로 main fast-forward 여부 결정(main은 ancestor). Push는 별도 승인.
+2. 이후 후보: 작은 무게 증량 후 reps 재시작 규칙 검토.
+
+## Previous task: Recommendation Hardening v1 integration on local main (2026-10-01)
 
 Paseo worktree `integration-recommendation-hardening`(branch `integration/recommendation-hardening`, base local main
 `aba8cfe` = Taxonomy coverage; origin/main `8b259e7`). **통합 후보 commit 완료. main merge/fast-forward/push 안 함.**

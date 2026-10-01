@@ -150,6 +150,36 @@ def test_recommend_heading_separates_recovery_from_a_rest_rule_reduce(
     assert "recovery reduce" not in output
 
 
+def test_recommend_small_load_increase_shows_the_next_available_step_not_an_invented_load(
+    home: Path, database: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    lateral = [
+        strength_set(index, category="LATERAL_RAISE", name="ONE_ARM_CABLE_LATERAL_RAISE", reps=20, weight_kg=6.0)
+        for index in range(1, 3)
+    ]
+    _save(database, activity("8005", "2026-03-13T18:00:00", ActivityType.STRENGTH, strength_sets=tuple(lateral)))
+    argv = ["recommend", "--date", "2026-03-16", "--focus", "shoulders"]
+
+    assert main(argv) == 0
+    output = capsys.readouterr().out
+    assert main(argv) == 0
+    assert capsys.readouterr().out == output
+    assert main([*argv, "--json"]) == 0
+    first = capsys.readouterr().out
+    assert main([*argv, "--json"]) == 0
+    assert capsys.readouterr().out == first
+
+    assert "LATERAL_RAISE/ONE_ARM_CABLE_LATERAL_RAISE" in output
+    assert "@ next available step above 6 kg (range 10-20)" in output
+    assert "8.5 kg" not in output
+    (exercise,) = json.loads(first)["strength"]["exercises"]
+    progression = exercise["progression"]
+    assert progression["action"] == "increase_load"
+    assert progression["load_kg"] is None
+    assert (progression["load_increase_from_kg"], progression["load_step"]) == (6.0, "smallest_available")
+    assert "8.5" not in json.dumps(exercise)
+
+
 def test_recommend_avoid_option(home: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["recommend", "--date", "2026-03-16", "--avoid", "chest", "--json"]) == 0
 

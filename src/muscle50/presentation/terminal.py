@@ -24,7 +24,12 @@ from muscle50.domain.analytics import (
 )
 from muscle50.domain.derivation import derive_summary
 from muscle50.domain.recovery_assessment import RecoveryObservation
-from muscle50.domain.strength_recommendation import PlannedExercise, ProgressionAction, kg_text
+from muscle50.domain.strength_recommendation import (
+    LOAD_STEP_SMALLEST_AVAILABLE_DIRECTION_UNKNOWN,
+    PlannedExercise,
+    ProgressionAction,
+    kg_text,
+)
 from muscle50.domain.swim_recommendation import SwimSegment, pace_text
 from muscle50.domain.swimming import NormalizedSwimActivity, derive_lap_metrics
 from muscle50.domain.training_recommendation import TrainingRecommendation
@@ -642,13 +647,23 @@ def _prescription(exercise: PlannedExercise) -> str:
     progression = exercise.progression
     rep_range = progression.rep_range
     reps = f"{progression.target_reps} reps" if progression.target_reps is not None else "reps"
-    load = f" @ {kg_text(progression.load_kg)}" if progression.load_kg is not None else " (no load target)"
-    if progression.load_kg is not None and progression.load_confidence == "low":
-        # Never present a low-confidence load as exact.
+    reference = progression.load_kg if progression.load_kg is not None else progression.load_increase_from_kg
+    low = reference is not None and progression.load_confidence == "low"
+    # Never present a low-confidence load as exact.
+    shown = f"{'~' if low else ''}{kg_text(reference)}" if reference is not None else ""
+    if reference is None:
+        load = " (no load target)"
+    elif progression.load_kg is not None:
+        load = f" @ {shown}"
+    elif progression.load_step == LOAD_STEP_SMALLEST_AVAILABLE_DIRECTION_UNKNOWN:
+        load = f" @ one smallest available step from {shown} (less if assistance, more if added resistance)"
+    else:
+        load = f" @ next available step above {shown}"
+    if low:
         recorded = progression.recorded_load_range_kg
         spread = f"recorded {_fixed(recorded[0])}-{_fixed(recorded[1])} kg; " if recorded else ""
         check = "comparable to last time" if progression.same_load_evidence else "confirm equipment/load used last time"
-        load = f" @ ~{kg_text(progression.load_kg)} (low confidence: {spread}{check})"
+        load += f" (low confidence: {spread}{check})"
     if progression.action is ProgressionAction.ESTABLISH_BASELINE:
         load = " (choose a load for the range; no comparable history)"
     return f"{exercise.sets} sets x {reps}{load} (range {rep_range.minimum}-{rep_range.maximum})"
