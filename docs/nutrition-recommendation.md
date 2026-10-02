@@ -39,7 +39,7 @@ Nutrition Core / Nutrition Targets unchanged; the only change on that side is th
 | `no_targets_configured` | every target unset (the default; production today) | no section: text identical to before | none |
 | `no_intake_logged` | a target is set, no meal logged for D | one line: status not used, not counted as 0 kcal/0 g | none |
 | `evaluated` | a target is set and at least one item is logged | one line per *targeted* nutrient + actions | see below |
-| `unavailable` | targets file invalid, DB unreadable/too old | one line with the reason; training plan unaffected, exit 0 | none |
+| `unavailable` | targets file invalid, unreadable (locked, a directory) or not UTF-8; DB unreadable/too old | one line with the reason; training plan unaffected, exit 0 | none |
 
 Per nutrient (only with `evaluated`, only for a configured target):
 

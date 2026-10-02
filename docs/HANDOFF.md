@@ -32,7 +32,7 @@ Branch에 commit만 했다. **Merge/rebase/push 안 함**(별도 승인 필요).
 
 ### Checks run
 
-- `uv run --extra dev pytest` 840 passed, `ruff check .`, `mypy src tests`(115 files), `git diff --check` 통과. `ruff format`은
+- `uv run --extra dev pytest` 842 passed, `ruff check .`, `mypy src tests`(115 files), `git diff --check` 통과. `ruff format`은
   신규 파일에만(기존 파일은 repo 전체가 format 미적용 상태라 건드리지 않음), 모든 파일 LF.
 - Acceptance(임시 home, production DB의 read-only 복사 + 합성 nutrition): CURRENT_STATE Verification 참고.
 - Production: read-only `recommend` text/JSON만 실행(`no_targets_configured`). Fingerprint before/after에서 DB/WAL/table/RAW/

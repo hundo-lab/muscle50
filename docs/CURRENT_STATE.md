@@ -246,8 +246,8 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 
 2026-10-02 Nutrition → Daily/Recommendation Integration v1(`feature/nutrition-recommendation`, base `f07f5a2`):
 
-- `uv run --extra dev pytest` 840 passed(기존 789 + 신규 `tests/test_nutrition_guidance.py` 27, `tests/test_recommend_nutrition.py`
-  16, `tests/test_nutrition_reader.py` 4, `tests/test_daily_sync.py` +4), `ruff check .`, `mypy src tests`(115 files),
+- `uv run --extra dev pytest` 842 passed(기존 789 + 신규 `tests/test_nutrition_guidance.py` 27, `tests/test_recommend_nutrition.py`
+  18, `tests/test_nutrition_reader.py` 4, `tests/test_daily_sync.py` +4), `ruff check .`, `mypy src tests`(115 files),
   `git diff --check` 통과. 기존 테스트는 수정 없이 통과.
 - Acceptance: 임시 home `C:\temp\muscle50-evidence-20261002-nutrition-recommendation\acceptance-home`(production DB를
   `mode=ro&immutable=1` backup으로 복사한 training data + 합성 음식/식사/목표). 2026-10-02: 목표 없음(text 절 없음,

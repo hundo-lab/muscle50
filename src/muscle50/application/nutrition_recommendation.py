@@ -22,8 +22,10 @@ from muscle50.domain.nutrition_targets import NutritionTargetError
 from muscle50.domain.training_recommendation import TrainingRecommendation
 from muscle50.infrastructure.sqlite.nutrition_reader import NutritionReadError
 
-# Expected ways for nutrition to be unreadable; anything else is a bug and propagates.
-_UNAVAILABLE_ERRORS = (NutritionReadError, NutritionTargetError, sqlite3.Error)
+# Expected ways for nutrition to be unreadable; anything else is a bug and propagates. The
+# targets file is read as-is by its repository, so a locked/unreadable file (OSError) or one
+# saved in a non-UTF-8 encoding (UnicodeDecodeError) reaches here unwrapped.
+_UNAVAILABLE_ERRORS = (NutritionReadError, NutritionTargetError, sqlite3.Error, OSError, UnicodeDecodeError)
 
 
 class DailyNutritionStatusSource(Protocol):

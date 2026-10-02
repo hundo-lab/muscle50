@@ -452,6 +452,27 @@ def test_unreadable_targets_leave_the_training_plan_intact(home: Path, capsys: p
     assert targets.read_text(encoding="utf-8") == "{not json"
 
 
+@pytest.mark.parametrize("damage", ["directory", "not_utf8"])
+def test_an_unopenable_targets_file_is_unavailable_not_a_crash(
+    home: Path, capsys: pytest.CaptureFixture[str], damage: str
+) -> None:
+    baseline = _training_only(_recommend_json(capsys))
+    targets = home / "config" / "nutrition_targets.json"
+    targets.parent.mkdir()
+    if damage == "directory":
+        targets.mkdir()  # reading it raises an OSError (PermissionError on Windows)
+    else:
+        targets.write_bytes(b"\xff\xfe{}")  # e.g. saved as UTF-16 by an editor
+
+    document = _recommend_json(capsys)
+
+    nutrition = document["nutrition"]
+    assert (nutrition["availability"], nutrition["nutrients"], nutrition["actions"]) == ("unavailable", None, [])
+    assert nutrition["unavailable_reason"]
+    assert _training_only(document) == baseline
+    assert "unavailable: " in _ok(capsys, "recommend", "--date", DAY)
+
+
 def test_nutrition_never_changes_the_training_recommendation(home: Path, capsys: pytest.CaptureFixture[str]) -> None:
     database = home / "db" / "muscle50.sqlite3"
     DailyRecoveryRepository(database).migrate()
