@@ -161,7 +161,7 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   `daily`는 추천이 만들어진 경우에만 nutrition을 붙이고 단계로 취급하지 않는다(`ok` 불변); daily JSON의 `recommendation`은
   계속 standalone `recommend --json`과 같다. Nutrition 쪽 변경은 `ShowDailyIntake`/`ShowDailyNutritionStatus`가 좁은
   `MealReader` protocol을 받게 한 것과 `nutrient_status_line`/`nutrient_status_payload` 공개(출력 불변)뿐.
-- (local main `1549c4a`에 fast-forward 통합, origin 미push) Nutrition Targets + Daily Status v1:
+- (`c77de0d`/`1549c4a`, main/origin 포함) Nutrition Targets + Daily Status v1:
   `muscle50 nutrition target set {kcal,protein,carbs,fat} (--exact N | --range MIN MAX | --unset)`,
   `muscle50 nutrition target show [--json]`, `muscle50 nutrition status [--date D] [--json]`. 목표는 Decimal, > 0,
   range는 inclusive(min <= max, 같아도 됨), unset ≠ 0, 자동 계산 없음. 저장: `<home>\config\nutrition_targets.json`
@@ -197,7 +197,9 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 
 - `feature/nutrition-targets`(Nutrition Targets + Daily Status v1, `c77de0d`, `1549c4a`)는 2026-10-02 local main으로
   fast-forward 통합됐다(`7f4a4ef` → `1549c4a`, merge commit/rebase/squash 없음). 통합 전 `git fetch` + `git ls-remote`로
-  origin/main = `7f4a4ef` 확인. origin push 안 함(별도 승인). Branch와 Paseo worktree `nutrition-targets`는 유지한다.
+  origin/main = `7f4a4ef` 확인. 당시 origin push는 하지 않았으나 이후 push되어 origin/main `f07f5a2`에 포함됐다
+  (2026-10-02 `git merge-base --is-ancestor`로 `c77de0d`, `1549c4a` 확인). Branch와 Paseo worktree `nutrition-targets`는
+  유지한다.
 - Nutrition Logging MVP(`9ec54d1`, `7f4a4ef`)는 main에 포함됐다(2026-10-02 local `main` = `origin/main` = `7f4a4ef`).
 - Daily orchestration(`c3f5842`, `8b08773`)은 2026-10-02에 local main으로 fast-forward(`c06a36c` → `8b08773`, merge
   commit/rebase/squash 없음)됐다. 당시 origin/main은 `c06a36c`였으나 이후 push되어 2026-10-02 `git ls-remote origin
