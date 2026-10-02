@@ -184,8 +184,13 @@ muscle50 nutrition status                                 # 오늘 섭취 vs 목
 
 어느 식사 item에 해당 영양소 값이 없으면(`unknown`) 그 영양소의 총량과 남은 양은 모른다고 표시하고(0으로 계산하지 않음),
 아는 item 합계와 값이 없는 item을 보여 줍니다. 아는 item 합계만으로 이미 목표/범위 상한을 넘으면 "above"만 확정합니다.
-목표 기록은 하나뿐이라 과거 날짜도 현재 목표와 비교합니다. `muscle50 recommend`와 `muscle50 daily`는 아직 영양 목표/섭취를
-반영하지 않습니다. 상세: `docs/nutrition-targets.md`.
+목표 기록은 하나뿐이라 과거 날짜도 현재 목표와 비교합니다. 상세: `docs/nutrition-targets.md`.
+
+`muscle50 recommend`와 `muscle50 daily`는 목표가 하나라도 설정돼 있으면 추천 날짜의 영양 status(`nutrition status`와 같은
+계산)를 `== Nutrition ...` 절로 보여 주고, 기록된 섭취가 목표보다 적을 때만 짧은 행동 안내를 붙입니다(protein; kcal; 운동이
+계획된 날의 carbohydrate). 식사 기록이 없으면 0으로 보지 않고 "status를 쓰지 않음"만 표시하며, 값이 없는 item이 있으면 남은 양을
+말하지 않습니다. 영양은 운동 계획을 바꾸거나 취소하지 않습니다. JSON은 끝에 `nutrition` key만 추가됩니다. 상세:
+`docs/nutrition-recommendation.md`.
 
 ## 개발 검증
 

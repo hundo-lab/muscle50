@@ -6,7 +6,9 @@ Stages, in order:
 2. ``activities``: ``IngestGarminActivityRange`` over D-1..D.
 3. ``load_metrics``: ``BackfillActivityLoadMetrics`` (RAW-only, idempotent).
 4. ``recovery``: ``SyncGarminRecovery.execute_range`` over D-1..D (full mode only).
-5. ``recommendation``: ``BuildTrainingRecommendation`` for D (full mode only).
+5. ``recommendation``: ``BuildTrainingRecommendation`` for D (full mode only), plus the
+   optional nutrition context for D from ``BuildNutritionContext`` (not a stage: it never
+   changes the plan or the outcome, and unreadable nutrition is reported, not failed).
 
 No Garmin normalization, persistence, recovery or recommendation rule lives here; each stage
 is the existing use case, so its idempotency and RAW snapshot semantics are unchanged.
@@ -31,6 +33,7 @@ from typing import Protocol
 from muscle50.application.backfill_activity_load_metrics import ActivityLoadBackfillResult
 from muscle50.application.ingest_activity import ActivitySyncError
 from muscle50.application.ingest_activity_range import RangeIngestResult
+from muscle50.application.nutrition_recommendation import NutritionContext
 from muscle50.application.sync_garmin_recovery import RecoveryRangeSyncResult
 from muscle50.domain.exercise_taxonomy import MuscleGroup
 from muscle50.domain.normalization import NormalizationError
@@ -104,6 +107,10 @@ class TrainingRecommender(Protocol):
     ) -> TrainingRecommendation: ...
 
 
+class NutritionContextBuilder(Protocol):
+    def execute(self, as_of: date, training: TrainingRecommendation) -> NutritionContext: ...
+
+
 @dataclass(frozen=True)
 class StageReport:
     stage: str
@@ -123,6 +130,8 @@ class DailySyncResult:
     load_metrics: ActivityLoadBackfillResult | None
     recovery: RecoveryRangeSyncResult | None
     recommendation: TrainingRecommendation | None
+    nutrition: NutritionContext | None = None
+    """Nutrition context for the recommended date; only present with a recommendation."""
 
     @property
     def failed_stages(self) -> tuple[str, ...]:
@@ -146,12 +155,14 @@ class RunDailySync:
         load_metric_backfill: LoadMetricBackfill,
         recovery_sync: Callable[[DailyGarminConnector], RecoveryRangeSync],
         recommender: TrainingRecommender,
+        nutrition: NutritionContextBuilder | None = None,
     ):
         self._connect = connect
         self._activity_ingest = activity_ingest
         self._load_metric_backfill = load_metric_backfill
         self._recovery_sync = recovery_sync
         self._recommender = recommender
+        self._nutrition = nutrition
 
     def execute(
         self,
@@ -201,7 +212,12 @@ class RunDailySync:
             else:
                 stages.append(StageReport(STAGE_RECOMMENDATION, StageStatus.OK))
 
-        return DailySyncResult(as_of, mode, start, tuple(stages), activities, load_metrics, recovery, recommendation)
+        nutrition: NutritionContext | None = None
+        if recommendation is not None and self._nutrition is not None:
+            nutrition = self._nutrition.execute(as_of, recommendation)
+        return DailySyncResult(
+            as_of, mode, start, tuple(stages), activities, load_metrics, recovery, recommendation, nutrition
+        )
 
     def _activities(
         self, connector: DailyGarminConnector, start: date, as_of: date

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import date, tzinfo
 from typing import Protocol
 
-from muscle50.application.nutrition import MealRepository
+from muscle50.application.nutrition import MealReader
 from muscle50.application.nutrition_logging import DailyIntake, ShowDailyIntake
 from muscle50.domain.nutrition import NutrientField
 from muscle50.domain.nutrition_targets import (
@@ -71,7 +71,7 @@ class ShowNutritionTargets:
 
 
 class ShowDailyNutritionStatus:
-    def __init__(self, meals: MealRepository, targets: NutritionTargetRepository) -> None:
+    def __init__(self, meals: MealReader, targets: NutritionTargetRepository) -> None:
         self._intake = ShowDailyIntake(meals)
         self._targets = targets
 

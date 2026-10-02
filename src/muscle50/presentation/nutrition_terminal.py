@@ -13,6 +13,7 @@ from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any
 
 from muscle50.application.nutrition_logging import DailyIntake, ItemIntake, MealIntake
+from muscle50.application.nutrition_recommendation import NutritionContext
 from muscle50.application.nutrition_targets import DailyNutritionStatus, NutrientDayStatus
 from muscle50.domain.nutrition import (
     FoodNutritionProfile,
@@ -21,6 +22,7 @@ from muscle50.domain.nutrition import (
     NutritionFact,
     NutritionValue,
 )
+from muscle50.domain.nutrition_guidance import NutritionAvailability
 from muscle50.domain.nutrition_targets import (
     NutrientTarget,
     NutrientTargetStatus,
@@ -280,17 +282,7 @@ def render_nutrition_status(status: DailyNutritionStatus) -> str:
         lines.append(f"Logged: {len(intake.meals)} {meal_word}, {nutrition.item_count} {item_word}")
     else:
         lines.append("No meals recorded for this day.")
-    for day_status in status.nutrients:
-        nutrient = day_status.status.nutrient
-        target = day_status.status.target
-        consumed = _aggregate_value(nutrition, nutrient)
-        if target is None:
-            lines.append(f"  {_LABELS[nutrient]:<13} {consumed}; no target")
-        else:
-            lines.append(
-                f"  {_LABELS[nutrient]:<13} {consumed}; target {_target_text(target, nutrient)}: "
-                f"{_status_text(day_status.status)}"
-            )
+    lines.extend(f"  {nutrient_status_line(nutrition, day_status.status)}" for day_status in status.nutrients)
     incomplete = [day_status for day_status in status.nutrients if day_status.missing_items]
     if incomplete:
         lines.append("Incomplete: no exact total or remaining amount, because an item has no value for:")
@@ -319,11 +311,20 @@ def render_nutrition_status_json(status: DailyNutritionStatus) -> str:
             "meal_count": len(intake.meals),
             "item_count": intake.summary.nutrition.item_count,
             "nutrients": {
-                day_status.status.nutrient.value: _nutrient_status_payload(day_status)
+                day_status.status.nutrient.value: nutrient_status_payload(day_status)
                 for day_status in status.nutrients
             },
         }
     )
+
+
+def nutrient_status_line(nutrition: NutritionAggregate, status: NutrientTargetStatus) -> str:
+    """One nutrient's logged amount, target and status, as `nutrition status` prints it (ASCII)."""
+    nutrient = status.nutrient
+    consumed = _aggregate_value(nutrition, nutrient)
+    if status.target is None:
+        return f"{_LABELS[nutrient]:<13} {consumed}; no target"
+    return f"{_LABELS[nutrient]:<13} {consumed}; target {_target_text(status.target, nutrient)}: {_status_text(status)}"
 
 
 def _target_text(target: NutrientTarget | None, nutrient: NutrientField) -> str:
@@ -366,6 +367,77 @@ def _status_text(status: NutrientTargetStatus) -> str:
             return f"{label} (the known items alone exceed it; exact excess unknown)"
         return f"{label} by {amount(status.excess)}"
     return kind.value
+
+
+# --- nutrition next to a training recommendation ---------------------------------------------
+
+
+def nutrition_context_lines(context: NutritionContext) -> list[str]:
+    """The recommendation's nutrition section; empty when no target is configured at all."""
+    guidance = context.guidance
+    availability = guidance.availability
+    if availability is NutritionAvailability.NO_TARGETS_CONFIGURED:
+        return []
+    day = f"{context.day.isoformat()} (UTC{context.timezone_name})"
+    lines = [f"== Nutrition: logged intake {day} vs current targets =="]
+    if availability is NutritionAvailability.UNAVAILABLE or context.status is None:
+        lines.append(
+            f"  unavailable: {context.unavailable_reason}. The training plan above does not depend on nutrition."
+        )
+        return lines
+    if availability is NutritionAvailability.NO_INTAKE_LOGGED:
+        lines.append(
+            "  [no_intake_logged] no meals logged for this date, so nutrition status is not used "
+            "(not counted as 0 kcal or 0 g)"
+        )
+        return lines
+    status = context.status
+    nutrition = status.intake.summary.nutrition
+    meal_word = "meal" if len(status.intake.meals) == 1 else "meals"
+    item_word = "item" if nutrition.item_count == 1 else "items"
+    lines.append(f"  Logged so far: {len(status.intake.meals)} {meal_word}, {nutrition.item_count} {item_word}")
+    for day_status in status.nutrients:
+        if day_status.status.target is None:
+            continue
+        lines.append(f"  {nutrient_status_line(nutrition, day_status.status)}")
+        missing = len(day_status.missing_items)
+        if missing:
+            lines.append(
+                f"    {missing} logged {'item has' if missing == 1 else 'items have'} no "
+                f"{_NAMES[day_status.status.nutrient]} value: the known amount is a lower bound, not a total"
+            )
+    lines.extend(f"  -> [{action.code}] {action.message}" for action in guidance.actions)
+    return lines
+
+
+def nutrition_context_payload(context: NutritionContext) -> dict[str, Any]:
+    guidance = context.guidance
+    training = guidance.training_context
+    status = context.status
+    return {
+        "guidance_version": guidance.guidance_version,
+        "date": context.day.isoformat(),
+        "timezone": context.timezone_name,
+        "scope": "intake_vs_current_targets",
+        "availability": guidance.availability.value,
+        "unavailable_reason": context.unavailable_reason,
+        "meal_count": len(status.intake.meals) if status is not None else None,
+        "item_count": status.intake.summary.nutrition.item_count if status is not None else None,
+        "training_context": {
+            "strength_session_planned": training.strength_session_planned,
+            "strength_adjustment_level": training.strength_adjustment_level,
+            "next_swim_session_type": training.next_swim_session_type,
+            "fuel_relevant": training.fuel_relevant,
+            "description": training.description,
+        },
+        "nutrients": None
+        if status is None
+        else {day_status.status.nutrient.value: nutrient_status_payload(day_status) for day_status in status.nutrients},
+        "actions": [
+            {"code": action.code, "nutrient": action.nutrient.value, "message": action.message}
+            for action in guidance.actions
+        ],
+    }
 
 
 # --- JSON payloads ------------------------------------------------------------------------
@@ -476,7 +548,8 @@ def _targets_payload(targets: NutritionTargets) -> dict[str, Any]:
     return {nutrient.value: target_payload(targets.get(nutrient)) for nutrient in NutrientField}
 
 
-def _nutrient_status_payload(day_status: NutrientDayStatus) -> dict[str, Any]:
+def nutrient_status_payload(day_status: NutrientDayStatus) -> dict[str, Any]:
+    """One nutrient's `nutrition status --json` entry; recommendation JSON reuses it verbatim."""
     status = day_status.status
     return {
         "target": target_payload(status.target),

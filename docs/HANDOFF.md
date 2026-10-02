@@ -2,7 +2,56 @@
 
 Last updated: 2026-10-02
 
-## Current task: Nutrition Targets + Daily Nutrition Status v1 (2026-10-02)
+## Current task: Nutrition → Daily/Recommendation Integration v1 (2026-10-02)
+
+Paseo worktree `nutrition-recommendation`(branch `feature/nutrition-recommendation`, base `f07f5a2` = local main = origin/main).
+Branch에 commit만 했다. **Merge/rebase/push 안 함**(별도 승인 필요). 규칙·JSON 계약: `docs/nutrition-recommendation.md`.
+
+### What was attempted / completed
+
+- Audit: `recommend` = `BuildTrainingRecommendation`(read-only `SqliteAnalyticsReader`) → domain `build_training_recommendation`
+  (모든 정책). `daily` = `RunDailySync`가 같은 use case를 조합하고 JSON에 standalone `recommend --json`을 그대로 넣는다.
+  `SqliteMealRepository`는 읽기에도 mkdir/DB 생성/WAL 설정을 해 read-only `recommend`에 쓸 수 없음을 확인.
+- 경계: 추천을 먼저 만들고(불변), `BuildNutritionContext`가 같은 날짜의 `ShowDailyNutritionStatus`(= `nutrition status`)를
+  실행한 뒤 순수 정책 `build_nutrition_guidance`가 status + training fuel context로 행동을 고른다. Nutrition은 추천 입력이
+  아니므로 운동을 바꾸거나 취소할 수 없다. Read-only `SqliteNutritionReader` 추가, `ShowDailyIntake`/
+  `ShowDailyNutritionStatus` 파라미터를 좁은 `MealReader` protocol로 변경(기존 호출 그대로).
+- 출력: text `== Nutrition ...` 절(목표 미설정이면 없음 → 기존 text와 byte 동일), JSON 끝 `nutrition` key(기존 필드 불변).
+  `daily`는 추천이 만들어졌을 때만 붙이고 단계/`ok`에 영향 없음.
+
+### Files changed
+
+신규: `src/muscle50/domain/nutrition_guidance.py`, `src/muscle50/application/nutrition_recommendation.py`,
+`src/muscle50/infrastructure/sqlite/nutrition_reader.py`, `tests/test_nutrition_guidance.py`, `tests/test_recommend_nutrition.py`,
+`tests/test_nutrition_reader.py`, `docs/nutrition-recommendation.md`. 수정: `src/muscle50/cli.py`, `src/muscle50/application/daily_sync.py`,
+`src/muscle50/application/nutrition.py`(`MealReader`), `src/muscle50/application/nutrition_logging.py`,
+`src/muscle50/application/nutrition_targets.py`(파라미터 타입만), `src/muscle50/presentation/nutrition_terminal.py`
+(`nutrient_status_line`/`nutrient_status_payload` 공개 + 추천용 renderer; `nutrition status` 출력 불변),
+`src/muscle50/presentation/terminal.py`(optional `nutrition` 인자), `tests/test_daily_sync.py`(+4), `README.md`,
+`docs/nutrition-targets.md`, `docs/training-recommendation.md`, `docs/CURRENT_STATE.md`, 이 파일. Migration 없음.
+
+### Checks run
+
+- `uv run --extra dev pytest` 840 passed, `ruff check .`, `mypy src tests`(115 files), `git diff --check` 통과. `ruff format`은
+  신규 파일에만(기존 파일은 repo 전체가 format 미적용 상태라 건드리지 않음), 모든 파일 LF.
+- Acceptance(임시 home, production DB의 read-only 복사 + 합성 nutrition): CURRENT_STATE Verification 참고.
+- Production: read-only `recommend` text/JSON만 실행(`no_targets_configured`). Fingerprint before/after에서 DB/WAL/table/RAW/
+  home 파일 동일, `config\` 생성 없음, `-shm` mtime만 변화(내용 동일, 기존 analytics reader도 동일 — `shm_control.txt`).
+  Evidence `C:\temp\muscle50-evidence-20261002-nutrition-recommendation\`.
+
+### Known failures or risks
+
+- D 하루 섭취만 사용; 시각을 모르므로 아침엔 대부분 below(행동 문구는 "if meals remain today").
+- `fuel_relevant`는 계획 기반(실제 운동 여부/시각 모름). Fat 행동 없음. 목표 history 없음(과거 날짜도 현재 목표).
+- SQLite read-only WAL 열기가 `-shm` mtime을 갱신(기존 동작).
+
+### Recommended next action
+
+사용자 검토 후 `feature/nutrition-recommendation`을 main으로 fast-forward(현재 main = base `f07f5a2`라 가능). 통합 후 main에서
+전체 게이트 재실행 + production fingerprint. 실제 목표를 설정한 뒤(`nutrition target set`) 하루 동안 `recommend` 문구가 과하거나
+부족하지 않은지 확인하는 것을 권장.
+
+## Previous task: Nutrition Targets + Daily Nutrition Status v1 (2026-10-02)
 
 Paseo worktree `nutrition-targets`(branch `feature/nutrition-targets`, base `7f4a4ef` = local main = local origin/main ref).
 **2026-10-02 local main으로 fast-forward 통합 완료(`7f4a4ef` → `1549c4a`, merge commit/rebase/squash 없음). origin push 안

@@ -27,6 +27,7 @@ from muscle50.application.nutrition_logging import (
     ShowFood,
     offset_name,
 )
+from muscle50.application.nutrition_recommendation import BuildNutritionContext
 from muscle50.application.nutrition_targets import (
     SetNutritionTarget,
     ShowDailyNutritionStatus,
@@ -67,6 +68,7 @@ from muscle50.infrastructure.raw_store import RawStore, RawStoreError, RecoveryR
 from muscle50.infrastructure.sqlite.analytics_reader import AnalyticsDatabaseError, SqliteAnalyticsReader
 from muscle50.infrastructure.sqlite.body_composition import SqliteBodyCompositionRepository
 from muscle50.infrastructure.sqlite.database import ActivityRepository, DailyRecoveryRepository
+from muscle50.infrastructure.sqlite.nutrition_reader import SqliteNutritionReader
 from muscle50.infrastructure.sqlite.nutrition_repository import SqliteFoodNutritionRepository, SqliteMealRepository
 from muscle50.presentation.nutrition_terminal import (
     render_daily_intake,
@@ -622,10 +624,12 @@ def _recommend(as_of_text: str, avoid: list[MuscleGroup], focus: StrengthFocus |
         recommendation = BuildTrainingRecommendation(SqliteAnalyticsReader(paths.database_path)).execute(
             as_of, avoid, focus
         )
+        # Built after the plan and from it; nutrition never changes the training recommendation.
+        nutrition = _nutrition_context(paths).execute(as_of, recommendation)
         print(
-            render_training_recommendation_json(recommendation)
+            render_training_recommendation_json(recommendation, nutrition)
             if as_json
-            else render_training_recommendation(recommendation)
+            else render_training_recommendation(recommendation, nutrition)
         )
         return 0
     except (AnalyticsDatabaseError, ConfigurationError) as exc:
@@ -685,6 +689,7 @@ def _daily(
             recovery_sync=lambda connector: SyncGarminRecovery(connector, recovery_repository, recovery_raw_store),
             # A read-only reader built exactly as `recommend` builds it; it reads after the sync stages write.
             recommender=BuildTrainingRecommendation(SqliteAnalyticsReader(paths.database_path)),
+            nutrition=_nutrition_context(paths),
         )
         print(
             f"muscle50 daily {as_of.isoformat()}: syncing {daily_sync_start(as_of).isoformat()}..{as_of.isoformat()}",
@@ -699,6 +704,14 @@ def _daily(
     except KeyboardInterrupt:
         print("\n취소되었습니다.", file=sys.stderr)
         return 130
+
+
+def _nutrition_context(paths: AppPaths) -> BuildNutritionContext:
+    """`nutrition status` for the plan's date, read-only: no migration, no database or config file created."""
+    status = ShowDailyNutritionStatus(
+        SqliteNutritionReader(paths.database_path), JsonNutritionTargetRepository(paths.nutrition_targets_path)
+    )
+    return BuildNutritionContext(status, _local_timezone)
 
 
 def _local_timezone(day: date) -> tzinfo:

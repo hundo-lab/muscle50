@@ -25,9 +25,11 @@ from muscle50.application.daily_sync import (
     StageStatus,
 )
 from muscle50.application.ingest_activity_range import RangeIngestOutcome, RangeIngestResult
+from muscle50.application.nutrition_recommendation import NutritionContext
 from muscle50.application.sync_garmin_recovery import RecoveryRangeOutcome, RecoveryRangeSyncResult
 from muscle50.cli import build_parser, main
 from muscle50.domain.exercise_taxonomy import MuscleGroup
+from muscle50.domain.nutrition_guidance import unavailable_guidance
 from muscle50.domain.strength_recommendation import StrengthFocus
 from muscle50.domain.training_recommendation import TrainingRecommendation, build_training_recommendation
 from muscle50.infrastructure.garmin.client import (
@@ -105,6 +107,15 @@ class StubRecommender:
         )
 
 
+class StubNutrition:
+    def __init__(self) -> None:
+        self.calls: list[tuple[date, TrainingRecommendation]] = []
+
+    def execute(self, as_of: date, training: TrainingRecommendation) -> NutritionContext:
+        self.calls.append((as_of, training))
+        return NutritionContext(as_of, "+09:00", None, unavailable_guidance(training), "synthetic: not read")
+
+
 class StubConnector:
     """Never called by the stubs; it only proves the same session reaches every Garmin stage."""
 
@@ -140,6 +151,7 @@ class Harness:
         backfill: StubBackfill | None = None,
         recovery: StubRecovery | None = None,
         recommender: StubRecommender | None = None,
+        nutrition: StubNutrition | None = None,
     ):
         self.login_error = login_error
         self.connector = StubConnector()
@@ -147,6 +159,7 @@ class Harness:
         self.backfill = backfill or StubBackfill()
         self.recovery = recovery or StubRecovery()
         self.recommender = recommender or StubRecommender()
+        self.nutrition = nutrition
         self.sessions: list[object] = []
 
     def _connect(self) -> DailyGarminConnector:
@@ -163,7 +176,9 @@ class Harness:
         return self.recovery
 
     def run(self, mode: DailyMode = DailyMode.FULL, **kwargs: Any) -> DailySyncResult:
-        use_case = RunDailySync(self._connect, self._ingest, self.backfill, self._recovery, self.recommender)
+        use_case = RunDailySync(
+            self._connect, self._ingest, self.backfill, self._recovery, self.recommender, self.nutrition
+        )
         return use_case.execute(TODAY, mode, **kwargs)
 
 
@@ -345,6 +360,31 @@ def test_recommendation_failure_is_reported() -> None:
 
     assert result.failed_stages == (STAGE_RECOMMENDATION,)
     assert not result.ok and result.recommendation is None
+
+
+def test_nutrition_is_attached_to_a_built_recommendation_without_becoming_a_stage() -> None:
+    harness = Harness(nutrition=StubNutrition())
+
+    result = harness.run()
+
+    assert result.ok
+    assert [item.stage for item in result.stages][-1] == STAGE_RECOMMENDATION  # no nutrition stage
+    assert harness.nutrition is not None
+    assert harness.nutrition.calls == [(TODAY, result.recommendation)]
+    assert result.nutrition is not None and result.nutrition.unavailable_reason == "synthetic: not read"
+    assert result.ok  # unreadable nutrition never fails the run
+
+
+@pytest.mark.parametrize("mode", [DailyMode.FULL, DailyMode.AFTER_WORKOUT])
+def test_nutrition_is_not_built_without_a_recommendation(mode: DailyMode) -> None:
+    failing = Harness(
+        nutrition=StubNutrition(), backfill=StubBackfill(error=sqlite3.OperationalError("database is locked"))
+    )
+
+    result = failing.run(mode)
+
+    assert result.recommendation is None and result.nutrition is None
+    assert failing.nutrition is not None and failing.nutrition.calls == []
 
 
 def test_unexpected_errors_are_not_swallowed() -> None:
@@ -726,3 +766,39 @@ def test_invalid_daily_requests_are_rejected_before_authentication(
     assert main(list(argv)) == 1
     assert "오류" in capsys.readouterr().err
     assert not home.exists()  # rejected before any directory or database is created
+
+
+def test_daily_nutrition_equals_standalone_recommend(
+    home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Synthetic food and targets in the temporary home only.
+    food = ["nutrition", "food", "add", "--id", "syn-bar", "--name", "SynBar", "--per", "1", "count"]
+    food += ["--kcal", "250", "--protein", "20", "--carbs", "30", "--fat", "8"]
+    food += ["--source", "nutrition_label", "--accuracy", "exact"]
+    for argv in (
+        food,
+        ["nutrition", "log", "--date", "2026-10-02", "--meal", "breakfast", "--item", "syn-bar", "1", "count"],
+        ["nutrition", "target", "set", "protein", "--exact", "120"],
+        ["nutrition", "target", "set", "carbs", "--range", "150", "220"],
+    ):
+        code, _ = _run(capsys, *argv)
+        assert code == 0
+    _use(monkeypatch, _account())
+
+    code, daily_json = _run(capsys, "daily", "--json")
+    assert code == 0
+    code, standalone_json = _run(capsys, "recommend", "--date", "2026-10-02", "--json")
+    assert code == 0
+    recommendation = json.loads(daily_json)["recommendation"]
+    assert recommendation == json.loads(standalone_json)
+    nutrition = recommendation["nutrition"]
+    assert (nutrition["availability"], nutrition["date"]) == ("evaluated", "2026-10-02")
+    assert nutrition["nutrients"]["protein_g"]["status"] == "below_target"
+    assert nutrition["actions"][0]["code"] == "protein_below_target"
+
+    code, daily_text = _run(capsys, "daily")
+    assert code == 0
+    code, standalone_text = _run(capsys, "recommend", "--date", "2026-10-02")
+    assert code == 0
+    assert daily_text.endswith(standalone_text)
+    assert "== Nutrition: logged intake 2026-10-02" in standalone_text

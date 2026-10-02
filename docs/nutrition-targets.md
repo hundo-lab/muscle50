@@ -3,8 +3,9 @@
 Daily targets for kcal, protein, carbohydrate and fat that you set explicitly, and a daily
 status that compares a date's logged intake (Nutrition Logging) with those targets.
 
-**Not nutrition-aware yet:** `muscle50 recommend` and `muscle50 daily` do not read targets or
-intake. Not implemented: automatic target calculation (per kg, TDEE, ...), training/rest-day
+`muscle50 recommend` and `muscle50 daily` show this status for the recommended date and may add
+a short action (Nutrition Recommendation Integration v1, `docs/nutrition-recommendation.md`);
+they reuse `ShowDailyNutritionStatus` unchanged. Not implemented: automatic target calculation (per kg, TDEE, ...), training/rest-day
 target cycling, Garmin-based adjustment, food or meal suggestions, free-text meal parsing,
 meal/food edit or delete, unit conversion.
 
@@ -202,7 +203,8 @@ per-nutrient target objects.
 
 - One current target set, no history: a past date's status uses today's targets.
 - Same targets every day (no training/rest/swim day variants), no automatic calculation.
-- Recommendations (`muscle50 recommend`) and `muscle50 daily` are not nutrition-aware.
+- `muscle50 recommend`/`daily` use this status as-is (`docs/nutrition-recommendation.md`); they
+  add no target logic of their own.
 - A day without logged meals is `no_intake_logged`, not "0 consumed"; there is no way to mark
   a day as "logged, ate nothing".
 - Estimated totals are compared by their point value; estimate ranges are not used (catalog

@@ -64,6 +64,12 @@ def materialize_parsed_meal(meal_id: str, parsed: ParsedMeal) -> Meal:
     )
 
 
+class MealReader(Protocol):
+    """Read-only view of logged meals; enough for daily intake and status."""
+
+    def list_eaten_between(self, start_inclusive: datetime, end_exclusive: datetime) -> tuple[Meal, ...]: ...
+
+
 class MealRepository(Protocol):
     """Persistence boundary; implementations must retain superseded facts."""
 

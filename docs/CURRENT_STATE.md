@@ -33,8 +33,12 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 - Nutrition Targets + Daily Status v1(`domain/nutrition_targets.py`, `application/nutrition_targets.py`,
   `infrastructure/nutrition_target_store.py`, CLI `muscle50 nutrition target set|show`, `muscle50 nutrition status`)은
   사용자가 직접 정한 하루 목표(exact/range/unset)를 `<home>\config\nutrition_targets.json`(versioned JSON, migration 없음)에
-  두고, `ShowDailyIntake` 결과를 그대로 목표와 비교한다. Recommend/daily는 아직 nutrition-aware가 아니다. 상세는
-  `docs/nutrition-targets.md`.
+  두고, `ShowDailyIntake` 결과를 그대로 목표와 비교한다. 상세는 `docs/nutrition-targets.md`.
+- (branch `feature/nutrition-recommendation`, main 미통합) Nutrition → Daily/Recommendation Integration v1: 추천이 먼저
+  만들어진 뒤 `BuildNutritionContext`(`application/nutrition_recommendation.py`)가 같은 날짜의 `ShowDailyNutritionStatus`를
+  그대로 실행하고, 순수 규칙 `domain/nutrition_guidance.py`가 status를 행동 안내로 바꾼다. 추천은 nutrition을 입력으로 받지
+  않는다(운동 계획 불변). Read-only meal reader `infrastructure/sqlite/nutrition_reader.py`. 상세는
+  `docs/nutrition-recommendation.md`.
 - Activity-load metric(training load/effect, HR zone, intensity minutes)은 shared
   `normalize_activity`가 아니라 전용 RAW-only backfill(`garmin backfill-load-metrics`)이 초기 flat
   `summary.json`에서 `activity_metrics`로 쓴다. Refresh 출력은 변하지 않고, refresh는 자신이
@@ -144,6 +148,19 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   local 무결성 오류)는 명령 전체를 중단한다. 출력: ASCII 단계 블록 + `Stored data now` freshness 줄 + 기존
   `recommend` text 그대로. `--json`은 단계 요약 + `"recommendation"`에 standalone `recommend --json` 문서를 그대로 넣고
   recovery row timestamp는 넣지 않아 같은 입력이면 byte-identical. 진행 안내와 Garmin 재로그인 prompt는 stderr.
+- (branch `feature/nutrition-recommendation`, 미통합) Nutrition → Daily/Recommendation Integration v1:
+  `recommend`/`daily`가 추천 날짜의 nutrition status를 보여 준다. `availability`: `no_targets_configured`(목표 전부 unset —
+  text 절 없음, 기존 text와 동일), `no_intake_logged`(식사 0개 — "0 kcal/0 g 아님" 한 줄, 행동 없음), `evaluated`, `unavailable`
+  (목표 파일 손상/DB 읽기 불가 — 이유 한 줄, 추천 유지, exit 0). 행동은 complete total의 `below_*`에서만: protein
+  `protein_below_target`, kcal `energy_below_target`(운동 있으면 fuel 문구 + "plan 불변"), carbohydrate는 `fuel_relevant`일
+  때만 `carbohydrate_below_target_for_training`. `fuel_relevant` = strength 세션 계획 && adjustment != reduce, 또는 다음 수영
+  `distance_progression`/`pace_intervals`. Above/reached/within은 status만(보상 조언 없음), `indeterminate`는 "N item 값 없음,
+  known은 하한" 표시만, `no_target`은 표시·행동 없음, fat은 행동 없음. 숫자/임계값/목표값 하드코딩 없음 — 숫자는 status에서만.
+  JSON: 기존 필드 불변 + 끝에 `nutrition`(`guidance_version` 1, `availability`, `unavailable_reason`, `meal_count`, `item_count`,
+  `training_context`, `nutrients` = `nutrition status --json`의 `nutrients`와 동일, `actions`). `recommendation_version` 1 유지.
+  `daily`는 추천이 만들어진 경우에만 nutrition을 붙이고 단계로 취급하지 않는다(`ok` 불변); daily JSON의 `recommendation`은
+  계속 standalone `recommend --json`과 같다. Nutrition 쪽 변경은 `ShowDailyIntake`/`ShowDailyNutritionStatus`가 좁은
+  `MealReader` protocol을 받게 한 것과 `nutrient_status_line`/`nutrient_status_payload` 공개(출력 불변)뿐.
 - (local main `1549c4a`에 fast-forward 통합, origin 미push) Nutrition Targets + Daily Status v1:
   `muscle50 nutrition target set {kcal,protein,carbs,fat} (--exact N | --range MIN MAX | --unset)`,
   `muscle50 nutrition target show [--json]`, `muscle50 nutrition status [--date D] [--json]`. 목표는 Decimal, > 0,
@@ -171,6 +188,9 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   고정 순서, byte-stable.
 
 ## Pending merge
+
+- `feature/nutrition-recommendation`(Nutrition → Daily/Recommendation Integration v1, base `f07f5a2` = main)은 branch에만
+  commit됐다. Merge/rebase/push 안 함(별도 승인).
 
 - `feature/nutrition-targets`(Nutrition Targets + Daily Status v1, `c77de0d`, `1549c4a`)는 2026-10-02 local main으로
   fast-forward 통합됐다(`7f4a4ef` → `1549c4a`, merge commit/rebase/squash 없음). 통합 전 `git fetch` + `git ls-remote`로
@@ -223,6 +243,23 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 - `tests/test_refresh_activity.py`, `tests/test_swim_normalization.py`, `tests/test_sync_recovery.py`
 
 ## Verification
+
+2026-10-02 Nutrition → Daily/Recommendation Integration v1(`feature/nutrition-recommendation`, base `f07f5a2`):
+
+- `uv run --extra dev pytest` 840 passed(기존 789 + 신규 `tests/test_nutrition_guidance.py` 27, `tests/test_recommend_nutrition.py`
+  16, `tests/test_nutrition_reader.py` 4, `tests/test_daily_sync.py` +4), `ruff check .`, `mypy src tests`(115 files),
+  `git diff --check` 통과. 기존 테스트는 수정 없이 통과.
+- Acceptance: 임시 home `C:\temp\muscle50-evidence-20261002-nutrition-recommendation\acceptance-home`(production DB를
+  `mode=ro&immutable=1` backup으로 복사한 training data + 합성 음식/식사/목표). 2026-10-02: 목표 없음(text 절 없음,
+  `no_targets_configured`) → 목표만(`no_intake_logged`) → 합성 식사(protein/kcal/carbs below, 행동 3개, strength `hold` 세션 =
+  fuel relevant) → protein 값 없는 item 추가(`indeterminate`, known 40 하한, remaining null). JSON 재실행 byte-identical,
+  `nutrients` = `nutrition status --json`, 네 경우의 training 부분 JSON 동일, 출력 전부 ASCII.
+- Production: read-only `recommend --date 2026-10-02` text/JSON 1회씩(production은 목표 없음 → `no_targets_configured`,
+  text 절 없음). Fingerprint before/after: DB 파일 sha/size/mtime, `-wal`(빈 파일), 28 table, RAW 974, 그 밖의 home 파일 24개
+  모두 동일, `config\` 생성 없음. 유일한 차이는 `-shm` mtime(sha/size 동일) — 기존 `SqliteAnalyticsReader`만 단독 실행한
+  대조 실험에서도 같은 mtime 변화(`shm_control.txt`)라 SQLite read-only WAL 열기의 기존 동작이다. Evidence:
+  `C:\temp\muscle50-evidence-20261002-nutrition-recommendation\`.
+- Migration 없음(`schema_migrations` 7 그대로). Production에 nutrition 명령, `daily`, Garmin 호출 실행 안 함.
 
 2026-10-02 Nutrition Targets + Daily Status v1(`feature/nutrition-targets`, base `7f4a4ef`):
 
@@ -616,8 +653,11 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
 - Analytics v1 gap: muscle-group mapping 없음, `swim_lengths.length_type` 전부 NULL, `pool_length`
   activity metric unit NULL, lap duration vs length duration 불일치 규칙 미정, swim pace/SWOLF
   progression과 기간 비교(trend)는 아직 없다.
-- (Nutrition Targets v1) 목표 history 없음(과거 날짜도 현재 목표로 비교), 요일/운동일별 목표 없음, 목표 자동 계산 없음,
-  `recommend`/`daily`는 nutrition 미반영. 식사 0개인 날은 `no_intake_logged`이며 "기록했고 먹지 않음"을 표시할 방법이
+- (Nutrition Recommendation v1, `feature/nutrition-recommendation`) 추천 날짜 D의 섭취만 본다(어제 완료된 섭취 미사용).
+  시각을 모르므로 아침에는 대부분 below로 보고된다("Logged so far" 표기). `fuel_relevant`는 계획(strength 세션/조정,
+  다음 수영 종류)만 보고 실제 운동 시각을 모른다. Fat 행동 없음. SQLite가 read-only 열기에서 빈 `-wal`/`-shm`을 만들거나
+  `-shm` mtime을 갱신하는 것은 기존 analytics reader와 같은 동작이다.
+- (Nutrition Targets v1) 목표 history 없음(과거 날짜도 현재 목표로 비교), 요일/운동일별 목표 없음, 목표 자동 계산 없음. 식사 0개인 날은 `no_intake_logged`이며 "기록했고 먹지 않음"을 표시할 방법이
   없다. Estimated total은 point 값으로 비교한다. Text는 0.1 반올림(정확한 값은 `--json`).
 - (Nutrition Logging MVP) 계산된 nutrition target, 메뉴·운동 전후 식사 추천, 자유 문장
   meal parser(`MealParser` 구현), 외부 food DB/barcode/사진, 주간 분석은 아직 없다. 식사/음식 수정·삭제 CLI 없음 —

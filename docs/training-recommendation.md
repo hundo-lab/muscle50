@@ -22,6 +22,11 @@ uv run muscle50 recommend --date 2026-09-24 --focus shoulders  # 오늘 할 focu
 | application | `application/recommend_training.py` | `BuildTrainingRecommendation`: 기존 read-only reader로 한 번 읽고 domain 호출 |
 | presentation | `presentation/terminal.py` | `render_training_recommendation`(ASCII, Garmin activity 이름 미출력), `_json` |
 | CLI | `muscle50 recommend` | `analytics snapshot`과 동일: `ensure_directories()`/`migrate()`/Garmin 인증 없음 |
+| application | `application/nutrition_recommendation.py` | 추천이 **만들어진 뒤** 같은 날짜의 `nutrition status`와 guidance를 붙인다(추천 입력 아님) |
+
+Nutrition(2026-10-02, `docs/nutrition-recommendation.md`): 추천 결정(focus, 종목, set/rep/load, recovery/수영 조정)은
+nutrition을 입력으로 받지 않는다. Text의 `== Nutrition ...` 절(목표 미설정이면 없음)과 JSON 끝 `nutrition` key만 추가되고 기존
+필드와 `recommendation_version`은 그대로다.
 
 재사용한 기존 primitive: `SqliteAnalyticsReader`(`mode=ro` + `query_only`), `build_training_snapshot`의 swim
 plausibility(implausible lap, summary 오염 판정), `classify_strength_set`/`classify_exercise`(taxonomy),

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, tzinfo
 from decimal import Decimal
 
-from muscle50.application.nutrition import FoodNutritionRepository, MealRepository
+from muscle50.application.nutrition import FoodNutritionRepository, MealReader, MealRepository
 from muscle50.domain.nutrition import (
     Accuracy,
     CalculatedNutrition,
@@ -275,7 +275,7 @@ class LogMeal:
 
 
 class ShowDailyIntake:
-    def __init__(self, meals: MealRepository) -> None:
+    def __init__(self, meals: MealReader) -> None:
         self._meals = meals
 
     def execute(self, day: date, timezone: tzinfo, *, timezone_name: str) -> DailyIntake:

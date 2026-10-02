@@ -15,6 +15,7 @@ from muscle50.application.daily_sync import (
     DailySyncResult,
 )
 from muscle50.application.ingest_activity_range import RangeIngestResult
+from muscle50.application.nutrition_recommendation import NutritionContext
 from muscle50.application.refresh_garmin_activity import ActivityRefreshResult
 from muscle50.application.renormalize_garmin_recovery import RecoveryRenormalizeResult
 from muscle50.application.sync_garmin_recovery import RecoveryRangeSyncResult, RecoverySyncResult
@@ -40,6 +41,7 @@ from muscle50.domain.strength_recommendation import (
 from muscle50.domain.swim_recommendation import SwimSegment, pace_text
 from muscle50.domain.swimming import NormalizedSwimActivity, derive_lap_metrics
 from muscle50.domain.training_recommendation import TrainingRecommendation
+from muscle50.presentation.nutrition_terminal import nutrition_context_lines, nutrition_context_payload
 
 _TYPE_LABELS = {
     ActivityType.RUNNING: "러닝",
@@ -491,12 +493,22 @@ def _origins_text(origins: LabelOriginCounts) -> str:
     return f"{text}, unspecified {origins.unspecified}" if origins.unspecified else text
 
 
-def render_training_recommendation_json(recommendation: TrainingRecommendation) -> str:
-    """Full recommendation with evidence; ASCII-only and stable for identical input."""
-    return json.dumps(dataclasses.asdict(recommendation), indent=2, ensure_ascii=True, default=_json_default)
+def render_training_recommendation_json(
+    recommendation: TrainingRecommendation, nutrition: NutritionContext | None = None
+) -> str:
+    """Full recommendation with evidence; ASCII-only and stable for identical input.
+
+    The training fields are unchanged; a nutrition context adds one trailing ``nutrition`` key.
+    """
+    payload = dataclasses.asdict(recommendation)
+    if nutrition is not None:
+        payload["nutrition"] = nutrition_context_payload(nutrition)
+    return json.dumps(payload, indent=2, ensure_ascii=True, default=_json_default)
 
 
-def render_training_recommendation(recommendation: TrainingRecommendation) -> str:
+def render_training_recommendation(
+    recommendation: TrainingRecommendation, nutrition: NutritionContext | None = None
+) -> str:
     # ASCII only (cp949 consoles); Garmin activity names are never printed.
     strength = recommendation.strength
     goals = recommendation.goals
@@ -615,6 +627,11 @@ def render_training_recommendation(recommendation: TrainingRecommendation) -> st
             f"{', high intensity' if session.high_intensity else ''}"
         )
 
+    nutrition_lines = nutrition_context_lines(nutrition) if nutrition is not None else []
+    if nutrition_lines:
+        lines.append("")
+        lines.extend(nutrition_lines)
+
     freshness = recommendation.data_freshness
     lines.extend(
         (
@@ -722,7 +739,7 @@ def render_daily_sync_json(result: DailySyncResult) -> str:
         # Exactly the standalone `recommend --json` document, never re-serialized differently.
         "recommendation": None
         if result.recommendation is None
-        else json.loads(render_training_recommendation_json(result.recommendation)),
+        else json.loads(render_training_recommendation_json(result.recommendation, result.nutrition)),
     }
     return json.dumps(payload, indent=2, ensure_ascii=True)
 
@@ -757,7 +774,7 @@ def render_daily_sync(result: DailySyncResult) -> str:
     text = "\n".join(lines)
     if recommendation is None:
         return text
-    return f"{text}\n\n{render_training_recommendation(recommendation)}"
+    return f"{text}\n\n{render_training_recommendation(recommendation, result.nutrition)}"
 
 
 def _daily_stage_detail(result: DailySyncResult, stage: str) -> str:
