@@ -384,11 +384,17 @@ def test_targets_live_only_under_muscle50_home(capsys: pytest.CaptureFixture[str
     assert sorted(path.name for path in (home / "config").iterdir()) == ["nutrition_targets.json"]
 
 
-def test_tiny_remaining_amount_is_not_displayed_as_zero(capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize(
+    ("target", "shown", "exact"), [("53.04", "<0.1 g", "0.04"), ("53.05", "<0.1 g", "0.05"), ("53.06", "0.1 g", "0.06")]
+)
+def test_tiny_remaining_amount_is_not_displayed_as_zero(
+    capsys: pytest.CaptureFixture[str], target: str, shown: str, exact: str
+) -> None:
+    # Breakfast protein is 53 g; 0.05 rounds half-even to 0.0, the boundary case.
     _log_breakfast(capsys)
-    _ok(capsys, "nutrition", "target", "set", "protein", "--exact", "53.04")
+    _ok(capsys, "nutrition", "target", "set", "protein", "--exact", target)
 
     out = _ok(capsys, "nutrition", "status")
 
-    assert "target 53.04 g (exact): below target, <0.1 g to go" in out
-    assert json.loads(_ok(capsys, "nutrition", "status", "--json"))["nutrients"]["protein_g"]["remaining"] == "0.04"
+    assert f"target {target} g (exact): below target, {shown} to go" in out
+    assert json.loads(_ok(capsys, "nutrition", "status", "--json"))["nutrients"]["protein_g"]["remaining"] == exact

@@ -129,8 +129,8 @@ muscle50 nutrition status [--date YYYY-MM-DD] [--json]   # default: today on thi
 `1,000` and `MIN > MAX` are refused with nothing written. `target set` changes only the named
 nutrient.
 
-Text output (synthetic values; amounts rounded to 0.1 for display, a non-zero gap below 0.05
-shows as `<0.1`, targets shown exactly):
+Text output (synthetic values; amounts rounded to 0.1 for display, a non-zero gap that would
+round to 0 shows as `<0.1`, targets shown exactly):
 
 ```text
 Nutrition status 2026-10-02 (UTC+09:00)

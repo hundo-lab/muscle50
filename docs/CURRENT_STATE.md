@@ -225,8 +225,8 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 
 2026-10-02 Nutrition Targets + Daily Status v1(`feature/nutrition-targets`, base `7f4a4ef`):
 
-- `uv run --extra dev pytest` 787 passed(신규 `tests/test_nutrition_targets.py` 45, `tests/test_nutrition_target_store.py` 30,
-  `tests/test_nutrition_target_cli.py` 31; `tests/test_nutrition_cli.py`는 바뀐 `day` scope 문장만 갱신), `ruff check .`,
+- `uv run --extra dev pytest` 789 passed(신규 `tests/test_nutrition_targets.py` 45, `tests/test_nutrition_target_store.py` 30,
+  `tests/test_nutrition_target_cli.py` 32; `tests/test_nutrition_cli.py`는 바뀐 `day` scope 문장만 갱신), `ruff check .`,
   `mypy src tests`(109 files), `git diff --check` 통과.
 - 테스트와 CLI acceptance는 임시 home만 사용(acceptance: `C:\temp\muscle50-evidence-20261002-nutrition-targets\acceptance-home`,
   합성 값). Production에 nutrition 명령을 실행하지 않았다. Production DB/WAL/SHM, 28 table, RAW 974 files, 그 밖의 home

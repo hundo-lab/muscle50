@@ -41,7 +41,7 @@ uv run muscle50 nutrition status [--date D] [--json]
 
 ### Checks run
 
-- `uv run --extra dev pytest` 787 passed, `ruff check .`, `mypy src tests`(109 files), `git diff --check` 통과. `ruff format`은
+- `uv run --extra dev pytest` 789 passed, `ruff check .`, `mypy src tests`(109 files), `git diff --check` 통과. `ruff format`은
   새/수정한 파일에만 적용, 모든 파일 LF.
 - CLI acceptance(합성 값, 임시 home `C:\temp\muscle50-evidence-20261002-nutrition-targets\acceptance-home`): exact/range 설정,
   0/역범위 거부, 합성 음식 3개(fat unknown 1개) + 식사 2개, status text/JSON(below, within range, indeterminate, known
@@ -52,7 +52,7 @@ uv run muscle50 nutrition status [--date D] [--json]
 
 - 목표 history 없음: 목표를 바꾸면 과거 날짜 status도 새 목표로 비교된다(meal data는 불변).
 - 식사 0개인 날은 `no_intake_logged`; "먹지 않음" 기록 방법 없음.
-- Text는 0.1 반올림(0 < gap < 0.05는 `<0.1`로 표시), 정확한 값은 `--json`.
+- Text는 0.1 반올림(0으로 반올림될 0보다 큰 gap은 `<0.1`로 표시), 정확한 값은 `--json`.
 - Recommend/daily는 nutrition-aware 아님. 식사/음식 수정·삭제, 단위 변환은 여전히 없음.
 
 ### Recommended next action

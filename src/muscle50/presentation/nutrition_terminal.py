@@ -213,11 +213,15 @@ def _fact_line(fact: NutritionFact) -> str:
 
 
 def _amount(value: Decimal, nutrient: NutrientField) -> str:
-    rounded = value.quantize(Decimal("0.1"), rounding=ROUND_HALF_EVEN)
-    text = decimal_to_text(rounded)
+    text = decimal_to_text(_rounded(value))
     if "." in text:
         text = text.rstrip("0").rstrip(".")
     return text if nutrient is NutrientField.CALORIES_KCAL else f"{text} g"
+
+
+def _rounded(value: Decimal) -> Decimal:
+    """Display rounding only (0.1, half-even); JSON keeps the exact value."""
+    return value.quantize(Decimal("0.1"), rounding=ROUND_HALF_EVEN)
 
 
 def _item_name(item: ItemIntake) -> str:
@@ -339,7 +343,7 @@ def _status_text(status: NutrientTargetStatus) -> str:
         if value is None:
             return "unknown"
         # A non-zero gap must not display as 0 ("below target, 0 g to go").
-        if 0 < value < Decimal("0.05"):
+        if value > 0 and _rounded(value) == 0:
             return "<0.1" if nutrient is NutrientField.CALORIES_KCAL else "<0.1 g"
         return _amount(value, nutrient)
 
