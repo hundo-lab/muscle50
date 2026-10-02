@@ -1,8 +1,54 @@
 # Session Handoff
 
-Last updated: 2026-10-02
+Last updated: 2026-10-03
 
-## Current task: Nutrition → Daily/Recommendation Integration v1 (2026-10-02)
+## Current task: Nutrition fact versioning (2026-10-03)
+
+Paseo worktree `nutrition-food-facts`(branch `feature/nutrition-food-facts`, base `55364fc` = local main). 하나의 feature
+commit만 만들었다. merge/rebase/push 안 함. Production DB/RAW/config 쓰기 없음(테스트·smoke는 모두 임시 `MUSCLE50_HOME`).
+
+### What was attempted / completed
+
+- Audit: food identity = `nutrition_food_profiles.profile_id`; nutrition = append-only `nutrition_facts`(UPDATE/DELETE trigger),
+  `supersedes_fact_id`(같은 owner·unit trigger), 선택은 nutrient별 supersession 후 source priority > accuracy > confidence >
+  created_at. `SqliteFoodNutritionRepository.append_nutrition_fact`(단일 `BEGIN IMMEDIATE`)가 이미 있었고 CLI만 없었다.
+  `LogMeal`은 same-unit fact history를 item 소유 fact로 snapshot → 과거 식사는 catalog와 무관. **Migration 불필요.**
+- CLI `muscle50 nutrition food fact add <food_id> ...`(`food add`와 같은 fact flag; `update`는 append-only와 맞지 않아 배제,
+  `target set`처럼 nested group). Use case `AddFoodFact` + `NewFoodFact`/`AddedFoodFact`, `food add`와 validation 공유
+  (`_check_catalog_fact`, CLI `_add_fact_arguments`/`_new_food_fact`).
+- Activation 규칙과 거부 조건: `docs/nutrition-logging.md` "Add a new nutrition fact version". 핵심: v2(`food_database`
+  300)가 v1(`user_provided` 500)을 이기는 건 supersession 덕분이고 supersession은 nutrient별이라, known → unknown은 거부하고
+  추가 후 `select_preferred_fact` 결과가 nutrient마다 새 fact(또는 None)인지 검증한다(3-version gap 방지).
+- Presentation: `food show` text에 `replaces <fact>` 표시, meal item `source:` 줄은 선택된 fact provenance만.
+
+### Files changed
+
+신규 `tests/test_nutrition_food_facts.py`(19 tests: A–G — B는 과거 날짜의 `nutrition day`/`status`/`recommend` text·JSON을 v2
+추가 전후 byte 비교 —, storage-failure rollback, 3-version gap, ambiguous head).
+수정 `src/muscle50/application/nutrition_logging.py`, `src/muscle50/cli.py`, `src/muscle50/presentation/nutrition_terminal.py`,
+`docs/nutrition-logging.md`, `README.md`, `docs/CURRENT_STATE.md`, 이 파일.
+
+### Checks run
+
+- `uv run --extra dev pytest` 861 passed(기존 842 + 19), `ruff check .`, `mypy src tests`(116 files), `git diff --check` 통과.
+  `ruff format`은 신규 test 파일에만(`nutrition_terminal.py`의 format 차이는 base `55364fc`에서도 동일하게 있는 기존 상태라 건드리지 않음). LF 유지.
+- Mutation check: supersession을 빼면 A/C/E/guard test가 실패함을 확인.
+- 임시 home CLI smoke: 사용자 예시 v1(per 200 g, P 36만) → 식사 → v2 추가 → 과거 `day` text byte 동일, 이후 식사 kcal 240 |
+  P 36 | C 4 | F 8 (food_database/estimated), kcal `unknown` v3는 거부.
+
+### Known failures or risks
+
+- 현재 fact 확인과 append가 한 transaction이 아님: 동시에 두 번 실행하면 같은 fact를 둘 다 supersede할 수 있음(이후 추가는
+  ambiguous로 거부). 단일 사용자 CLI라 문서화만.
+- Storage 오류(sqlite3.Error)는 기존 `food add`처럼 CLI에서 traceback으로 나온다(rollback은 검증됨).
+- 다른 unit의 fact 추가(예: per pack → per 210 g)와 이름/alias 변경은 범위 밖.
+
+### Recommended next action
+
+Review 후 local main으로 fast-forward 통합 여부 결정(별도 승인). 통합 후 실제 `chicken-breast`에 v2를 추가하기 전에 production
+DB 백업 권장.
+
+## Previous task: Nutrition → Daily/Recommendation Integration v1 (2026-10-02)
 
 Paseo worktree `nutrition-recommendation`(branch `feature/nutrition-recommendation`, base `f07f5a2` = local main = origin/main).
 **2026-10-02 local main으로 fast-forward 통합 완료(`f07f5a2` → `caa7982`, merge commit/rebase/squash 없음). origin push 안

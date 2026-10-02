@@ -35,6 +35,7 @@ from muscle50.domain.nutrition import (
     QuantityUnit,
     aggregate_day,
     aggregate_meal,
+    select_preferred_fact,
 )
 
 # Letters (including Hangul), digits, "_", "." and "-": no whitespace, so an ID is one CLI token.
@@ -50,6 +51,14 @@ CATALOG_SOURCE_TYPES: tuple[NutritionSourceType, ...] = (
 )
 
 MEAL_TYPE_ORDER: dict[MealType, int] = {meal_type: index for index, meal_type in enumerate(MealType)}
+
+# Nutrient names as the CLI flags spell them.
+_FLAG_NAMES: dict[NutrientField, str] = {
+    NutrientField.CALORIES_KCAL: "kcal",
+    NutrientField.PROTEIN_G: "protein",
+    NutrientField.CARBOHYDRATE_G: "carbs",
+    NutrientField.FAT_G: "fat",
+}
 
 
 class NutritionLoggingError(ValueError):
@@ -67,6 +76,26 @@ class NewFood:
     accuracy: Accuracy
     source_reference: str
     aliases: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class NewFoodFact:
+    """A new nutrition fact version for an existing food (same fields as `NewFood`'s fact)."""
+
+    food_id: str
+    basis_quantity: Decimal
+    basis_unit: QuantityUnit
+    values: NutritionValue
+    source_type: NutritionSourceType
+    accuracy: Accuracy
+    source_reference: str
+
+
+@dataclass(frozen=True)
+class AddedFoodFact:
+    profile: FoodNutritionProfile
+    fact: NutritionFact
+    superseded_fact_id: str
 
 
 @dataclass(frozen=True)
@@ -112,10 +141,7 @@ class AddFood:
         name = food.name.strip()
         if not name:
             raise NutritionLoggingError("food name must not be blank")
-        if food.source_type not in CATALOG_SOURCE_TYPES:
-            raise NutritionLoggingError(f"source {food.source_type.value!r} cannot be entered into the food catalog")
-        if not food.values.has_any_value:
-            raise NutritionLoggingError("at least one of kcal/protein/carbohydrate/fat must be a number")
+        _check_catalog_fact(food.source_type, food.values)
         if self._repository.get(food.food_id) is not None:
             raise NutritionLoggingError(f"food id {food.food_id!r} already exists; nothing was changed")
         aliases = tuple(alias.strip() for alias in food.aliases)
@@ -150,6 +176,102 @@ class AddFood:
         except ValueError as exc:
             raise NutritionLoggingError(str(exc)) from exc
         return profile
+
+
+class AddFoodFact:
+    """Append a new nutrition fact version to an existing food; nothing stored is changed.
+
+    The new fact supersedes the food's current fact in the same unit, so it becomes the one
+    used for every nutrient from now on. Older facts stay in the history, and meals already
+    logged keep the facts snapshotted when they were logged.
+    """
+
+    def __init__(self, repository: FoodNutritionRepository, clock: Callable[[], datetime]) -> None:
+        self._repository = repository
+        self._clock = clock
+
+    def execute(self, new: NewFoodFact) -> AddedFoodFact:
+        _check_catalog_fact(new.source_type, new.values)
+        profile = self._repository.get(new.food_id)
+        if profile is None:
+            raise NutritionLoggingError(
+                f"no food with id {new.food_id!r}; add it first with `muscle50 nutrition food add`. "
+                "Nothing was changed."
+            )
+        unit = new.basis_unit
+        if not any(fact.basis_unit is unit for fact in profile.facts):
+            units = ", ".join(sorted({fact.basis_unit.value for fact in profile.facts}))
+            raise NutritionLoggingError(
+                f"food {profile.profile_id!r} has nutrition per {units}, not per {unit.value}; a new fact "
+                "version must use the same unit as the fact it replaces. Nothing was changed."
+            )
+        superseded = {fact.supersedes_fact_id for fact in profile.facts if fact.supersedes_fact_id is not None}
+        current = [fact for fact in profile.facts if fact.basis_unit is unit and fact.fact_id not in superseded]
+        if len(current) != 1:
+            current_ids = ", ".join(fact.fact_id for fact in current)
+            raise NutritionLoggingError(
+                f"food {profile.profile_id!r} has {len(current)} current facts per {unit.value} ({current_ids}); "
+                "cannot tell which one the new version replaces. Nothing was changed."
+            )
+        previous = current[0]
+        # Supersession is decided per nutrient: a nutrient left unknown here would keep the old
+        # fact in use for it, so the new version would not be the active fact.
+        dropped = [
+            nutrient
+            for nutrient in NutrientField
+            if new.values.get(nutrient) is None and select_preferred_fact(profile.facts, unit, nutrient) is not None
+        ]
+        if dropped:
+            names = ", ".join(_FLAG_NAMES[nutrient] for nutrient in dropped)
+            raise NutritionLoggingError(
+                f"the current fact {previous.fact_id} has a value for {names}; a new version must give a number "
+                "for it too (unknown cannot replace a known value). Nothing was changed."
+            )
+        if (
+            previous.value_range is None
+            and previous.values == new.values
+            and previous.basis_quantity == new.basis_quantity
+            and previous.provenance.source_type is new.source_type
+            and previous.provenance.accuracy is new.accuracy
+            and previous.provenance.source_reference == new.source_reference
+        ):
+            raise NutritionLoggingError(
+                f"the new fact is the same as the current fact {previous.fact_id}; nothing was changed"
+            )
+        ids = {fact.fact_id for fact in profile.facts}
+        number = len(profile.facts) + 1
+        while f"food:{profile.profile_id}:{number}" in ids:
+            number += 1
+        try:
+            fact = NutritionFact(
+                fact_id=f"food:{profile.profile_id}:{number}",
+                values=new.values,
+                basis_quantity=new.basis_quantity,
+                basis_unit=unit,
+                provenance=NutritionProvenance(
+                    source_type=new.source_type,
+                    accuracy=new.accuracy,
+                    source_reference=new.source_reference,
+                    created_at=self._clock(),
+                ),
+                supersedes_fact_id=previous.fact_id,
+            )
+            history = (*profile.facts, fact)
+            for nutrient in NutrientField:
+                selected = select_preferred_fact(history, unit, nutrient)
+                expected = fact.fact_id if new.values.get(nutrient) is not None else None
+                if (selected.fact_id if selected is not None else None) != expected:
+                    raise NutritionLoggingError(
+                        f"the new fact would not be the active fact for {_FLAG_NAMES[nutrient]} "
+                        f"(the history of {profile.profile_id!r} would select "
+                        f"{selected.fact_id if selected is not None else 'nothing'}). Nothing was changed."
+                    )
+            stored = self._repository.append_nutrition_fact(profile.profile_id, fact)
+        except NutritionLoggingError:
+            raise
+        except ValueError as exc:
+            raise NutritionLoggingError(str(exc)) from exc
+        return AddedFoodFact(stored, fact, previous.fact_id)
 
 
 class ListFoods:
@@ -306,6 +428,13 @@ def offset_name(timezone: tzinfo, day: date) -> str:
     sign = "-" if minutes < 0 else "+"
     hours, rest = divmod(abs(minutes), 60)
     return f"{sign}{hours:02d}:{rest:02d}"
+
+
+def _check_catalog_fact(source_type: NutritionSourceType, values: NutritionValue) -> None:
+    if source_type not in CATALOG_SOURCE_TYPES:
+        raise NutritionLoggingError(f"source {source_type.value!r} cannot be entered into the food catalog")
+    if not values.has_any_value:
+        raise NutritionLoggingError("at least one of kcal/protein/carbohydrate/fat must be a number")
 
 
 def _item_intake(item: MealItem) -> ItemIntake:

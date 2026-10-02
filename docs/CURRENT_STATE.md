@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-10-02
+Last updated: 2026-10-03
 
 ## Project goal
 
@@ -186,10 +186,19 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   집계는 `aggregate_meal`/`aggregate_day` 그대로: 한 item이라도 값이 없으면 해당 nutrient total은 incomplete(known
   subtotal 별도 표기, item별 missing 표시), estimated fact 포함 total은 `(estimated)`. JSON은 exact Decimal 문자열,
   고정 순서, byte-stable.
+- (`feature/nutrition-food-facts`, 미통합) Nutrition fact versioning: `muscle50 nutrition food fact add <food_id> --per QTY UNIT
+  --kcal/--protein/--carbs/--fat N|unknown --source S --accuracy A [--source-ref R] [--json]`(`AddFoodFact`). 기존
+  `append_nutrition_fact` + `supersedes_fact_id`만 사용(migration 없음). 새 fact `food:<id>:<n+1>`가 같은 unit의 현재 fact를
+  supersede해 모든 nutrient에서 active(source priority와 무관), 이전 fact는 history에 그대로(`food show` `(superseded)`/
+  `(active, replaces ...)`, JSON `active`/`supersedes_fact_id`), `food list`는 active만. 거부(아무것도 안 씀): 없는 food,
+  기존에 없는 unit, 현재 known nutrient를 `unknown`으로(nutrient별 supersession이라 옛 fact가 계속 쓰이게 됨), 현재 fact와
+  동일, CLI 밖에서 만든 모호한 history(같은 unit current fact 2개 / 옛 fact가 이기는 nutrient — 추가 후 선택 결과로 검증).
+  과거 식사는 log 시 snapshot이라 불변(`day`/`status`/추천 byte 동일), 이후 식사만 새 fact. Meal item `source:` 줄은 실제
+  선택된 fact의 provenance만 표시(단일 fact item은 출력 불변). 상세 `docs/nutrition-logging.md`.
 
 ## Pending merge
 
-- 현재 pending merge 없음.
+- `feature/nutrition-food-facts`(Nutrition fact versioning, base `55364fc` = local main) — 커밋만, merge/push 안 함.
 - `feature/nutrition-recommendation`(Nutrition → Daily/Recommendation Integration v1, `8f267a2`, `caa7982`)는 2026-10-02
   local main으로 fast-forward 통합됐다(`f07f5a2` → `caa7982`, merge commit/rebase/squash 없음). 통합 전 `git fetch` +
   `git ls-remote`로 origin/main = `f07f5a2` 확인. origin push 안 함(별도 승인). Branch와 Paseo worktree

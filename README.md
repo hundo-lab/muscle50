@@ -160,13 +160,17 @@ muscle50 nutrition food add --id chicken-breast --name 닭가슴살 --per 100 g 
 muscle50 nutrition food add --id egg --name 계란 --per 1 count `
   --kcal <kcal> --protein <g> --carbs <g> --fat <g|unknown> --source user_provided --accuracy estimated
 muscle50 nutrition food list
-muscle50 nutrition food show chicken-breast
+muscle50 nutrition food show chicken-breast   # fact history (active/superseded)
+# 기존 음식에 새 영양 fact version 추가(이전 fact와 이미 기록한 식사는 그대로, 이후 식사부터 새 fact 사용)
+muscle50 nutrition food fact add chicken-breast --per 100 g `
+  --kcal <kcal> --protein <g> --carbs <g> --fat <g> --source food_database --accuracy estimated --source-ref "<출처>"
 muscle50 nutrition log --meal breakfast --item chicken-breast 200 g --item egg 2 count
 muscle50 nutrition day                      # 오늘 섭취량 (--date YYYY-MM-DD, --json)
 ```
 
 `--kcal/--protein/--carbs/--fat`는 모두 필수이며 모르는 값은 `unknown`으로 남깁니다(0으로 채우지 않음). 단위는
-변환하지 않습니다(pack으로 등록한 음식을 g으로 기록할 수 없음). 수정/삭제는 아직 없습니다. 상세: `docs/nutrition-logging.md`.
+변환하지 않습니다(pack으로 등록한 음식을 g으로 기록할 수 없음). 영양 값 변경은 `food fact add`로 새 version을
+append할 때만 가능하고(기존 fact UPDATE/DELETE 없음), 식사·이름 수정/삭제는 아직 없습니다. 상세: `docs/nutrition-logging.md`.
 
 ## Nutrition targets + daily status (v1)
 

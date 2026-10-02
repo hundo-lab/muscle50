@@ -75,6 +75,8 @@ def render_food(profile: FoodNutritionProfile) -> str:
     active = {fact.fact_id for fact in _active_facts(profile)}
     for fact in profile.facts:
         state = "active" if fact.fact_id in active else "superseded"
+        if fact.supersedes_fact_id is not None:
+            state += f", replaces {fact.supersedes_fact_id}"
         lines.append(f"  fact {fact.fact_id} ({state})")
         lines.append(f"    {_fact_line(fact)}")
         lines.append(f"    reference: {fact.provenance.source_reference}")
@@ -180,9 +182,12 @@ def _item_values(item: ItemIntake) -> str:
 
 
 def _item_sources(item: ItemIntake) -> str:
+    # The facts the item's values actually came from; an item snapshotted from a food with
+    # several fact versions also carries the superseded ones, which are not its source.
+    selected = [selection.provenance for selection in item.calculated.nutrients] if item.calculated is not None else []
     labels: list[str] = []
-    for fact in item.item.nutrition_facts:
-        label = f"{fact.provenance.source_type.value}/{fact.provenance.accuracy.value}"
+    for provenance in selected or [fact.provenance for fact in item.item.nutrition_facts]:
+        label = f"{provenance.source_type.value}/{provenance.accuracy.value}"
         if label not in labels:
             labels.append(label)
     return ", ".join(labels) if labels else "no nutrition facts"

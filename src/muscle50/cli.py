@@ -18,10 +18,12 @@ from muscle50.application.ingest_activity_range import IngestGarminActivityRange
 from muscle50.application.nutrition_logging import (
     CATALOG_SOURCE_TYPES,
     AddFood,
+    AddFoodFact,
     ListFoods,
     LogMeal,
     MealEntryItem,
     NewFood,
+    NewFoodFact,
     NutritionLoggingError,
     ShowDailyIntake,
     ShowFood,
@@ -241,41 +243,21 @@ def _add_nutrition_parser(commands: argparse._SubParsersAction[argparse.Argument
         "--id", dest="food_id", required=True, help="stable food ID used when logging, e.g. chicken-breast"
     )
     add.add_argument("--name", required=True, help="display name, e.g. 닭가슴살")
-    add.add_argument(
-        "--per",
-        nargs=2,
-        required=True,
-        metavar=("QTY", "UNIT"),
-        help=f"reference quantity the values describe, e.g. --per 100 g. Units: {_UNITS_TEXT}",
-    )
-    for flag, label in (
-        ("--kcal", "energy in kcal"),
-        ("--protein", "protein in g"),
-        ("--carbs", "carbohydrate in g"),
-        ("--fat", "fat in g"),
-    ):
-        add.add_argument(
-            flag,
-            required=True,
-            metavar="N|unknown",
-            help=f"{label} for the reference quantity; '{_UNKNOWN_NUTRIENT}' records it as missing (never as 0)",
-        )
-    add.add_argument(
-        "--source",
-        required=True,
-        choices=[source.value for source in CATALOG_SOURCE_TYPES],
-        help="where the numbers came from",
-    )
-    add.add_argument(
-        "--accuracy", required=True, choices=[accuracy.value for accuracy in Accuracy], help="exact or estimated"
-    )
-    add.add_argument(
-        "--source-ref",
-        default="entered with muscle50 nutrition food add",
-        help="free-text reference, e.g. 'package label 2026-10'",
-    )
+    _add_fact_arguments(add, "food add")
     add.add_argument("--alias", action="append", default=[], help="another unique name for this food; repeatable")
     add.add_argument("--json", action="store_true", help="print the stored food as JSON")
+    fact = food_commands.add_parser("fact", help="Nutrition fact versions of an existing food")
+    fact_commands = fact.add_subparsers(dest="fact_command", required=True)
+    fact_add = fact_commands.add_parser(
+        "add",
+        help=(
+            "Append a new nutrition fact version to an existing food; it replaces the current fact for meals "
+            "logged from now on (older facts and already logged meals are kept unchanged)"
+        ),
+    )
+    fact_add.add_argument("food_id", help="existing food ID, e.g. chicken-breast")
+    _add_fact_arguments(fact_add, "food fact add")
+    fact_add.add_argument("--json", action="store_true", help="print the stored food as JSON")
     food_list = food_commands.add_parser("list", help="List catalog foods and their active nutrition facts")
     food_list.add_argument("--json", action="store_true", help="print as JSON")
     show = food_commands.add_parser("show", help="Show one food with its full nutrition fact history")
@@ -322,6 +304,43 @@ def _add_nutrition_parser(commands: argparse._SubParsersAction[argparse.Argument
     )
     status.add_argument("--date", dest="as_of", metavar="YYYY-MM-DD", help="date (default: today on this computer)")
     status.add_argument("--json", action="store_true", help="print as JSON with exact decimal strings")
+
+
+def _add_fact_arguments(parser: argparse.ArgumentParser, command: str) -> None:
+    """The nutrition fact flags shared by `food add` and `food fact add`."""
+    parser.add_argument(
+        "--per",
+        nargs=2,
+        required=True,
+        metavar=("QTY", "UNIT"),
+        help=f"reference quantity the values describe, e.g. --per 100 g. Units: {_UNITS_TEXT}",
+    )
+    for flag, label in (
+        ("--kcal", "energy in kcal"),
+        ("--protein", "protein in g"),
+        ("--carbs", "carbohydrate in g"),
+        ("--fat", "fat in g"),
+    ):
+        parser.add_argument(
+            flag,
+            required=True,
+            metavar="N|unknown",
+            help=f"{label} for the reference quantity; '{_UNKNOWN_NUTRIENT}' records it as missing (never as 0)",
+        )
+    parser.add_argument(
+        "--source",
+        required=True,
+        choices=[source.value for source in CATALOG_SOURCE_TYPES],
+        help="where the numbers came from",
+    )
+    parser.add_argument(
+        "--accuracy", required=True, choices=[accuracy.value for accuracy in Accuracy], help="exact or estimated"
+    )
+    parser.add_argument(
+        "--source-ref",
+        default=f"entered with muscle50 nutrition {command}",
+        help="free-text reference, e.g. 'package label 2026-10'",
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -733,6 +752,19 @@ def _nutrition(args: argparse.Namespace) -> int:
                 render_food_json(profile) if args.json else f"Added food {profile.profile_id}.\n{render_food(profile)}"
             )
             return 0
+        if args.nutrition_command == "food" and args.food_command == "fact" and args.fact_command == "add":
+            added = AddFoodFact(foods, clock=lambda: datetime.now().astimezone()).execute(_new_food_fact(args))
+            print(
+                render_food_json(added.profile)
+                if args.json
+                else (
+                    f"Added fact {added.fact.fact_id} to {added.profile.profile_id}; it replaces "
+                    f"{added.superseded_fact_id} for meals logged from now on.\n"
+                    "Meals already logged keep the facts they were logged with.\n"
+                    f"{render_food(added.profile)}"
+                )
+            )
+            return 0
         if args.nutrition_command == "food" and args.food_command == "list":
             profiles = ListFoods(foods).execute()
             print(render_food_list_json(profiles) if args.json else render_food_list(profiles))
@@ -836,10 +868,24 @@ def _nutrient(text: str, flag: str) -> Decimal | None:
 
 
 def _new_food(args: argparse.Namespace) -> NewFood:
-    quantity_text, unit_text = args.per
+    fact = _new_food_fact(args)
     return NewFood(
-        food_id=args.food_id,
+        food_id=fact.food_id,
         name=args.name,
+        basis_quantity=fact.basis_quantity,
+        basis_unit=fact.basis_unit,
+        values=fact.values,
+        source_type=fact.source_type,
+        accuracy=fact.accuracy,
+        source_reference=fact.source_reference,
+        aliases=tuple(args.alias),
+    )
+
+
+def _new_food_fact(args: argparse.Namespace) -> NewFoodFact:
+    quantity_text, unit_text = args.per
+    return NewFoodFact(
+        food_id=args.food_id,
         basis_quantity=_positive_quantity(quantity_text, "--per quantity"),
         basis_unit=_unit(unit_text, "--per"),
         values=NutritionValue(
@@ -851,7 +897,6 @@ def _new_food(args: argparse.Namespace) -> NewFood:
         source_type=next(source for source in CATALOG_SOURCE_TYPES if source.value == args.source),
         accuracy=Accuracy(args.accuracy),
         source_reference=args.source_ref,
-        aliases=tuple(args.alias),
     )
 
 

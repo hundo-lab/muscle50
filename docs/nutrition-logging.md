@@ -21,14 +21,14 @@ No migration: everything fits `003_nutrition.sql`. Reused Nutrition Core pieces:
 | Concept | Reused as |
 | --- | --- |
 | Catalog food | `FoodNutritionProfile` (`profile_id` = food ID, `name` = display name, `aliases`) |
-| Food nutrition | one `NutritionFact` per food (`fact_id` `food:<id>:1`), basis quantity/unit + `NutritionProvenance` |
+| Food nutrition | `NutritionFact` versions per food (`fact_id` `food:<id>:<n>`, `n` = 1, 2, ...), basis quantity/unit + `NutritionProvenance`; a new version supersedes the previous one |
 | Meal / item | `Meal`, `MealItem` (`food_profile_id`, quantity, `QuantityUnit`) |
 | Scaling | `NutritionFact.calculate` (28-digit half-even `Decimal`, same unit only) |
 | Totals | `aggregate_meal`, `aggregate_day` (`totals`, `known_subtotals`, `incomplete_fields`, `estimated_fields`) |
 | Storage | `SqliteFoodNutritionRepository` (+ new `list_all`), `SqliteMealRepository` |
 
-New code: `application/nutrition_logging.py` (use cases `AddFood`, `ListFoods`, `ShowFood`,
-`LogMeal`, `ShowDailyIntake`), `presentation/nutrition_terminal.py` (text + JSON), and the
+New code: `application/nutrition_logging.py` (use cases `AddFood`, `AddFoodFact`, `ListFoods`,
+`ShowFood`, `LogMeal`, `ShowDailyIntake`), `presentation/nutrition_terminal.py` (text + JSON), and the
 `muscle50 nutrition` command group in `cli.py`.
 
 ### Snapshot at log time
@@ -46,8 +46,9 @@ facts used for the historical meal"):
   so copying only the current winners would let the item pick differently from the catalog.
   With the links kept, the item's per-nutrient selection is the catalog's selection.
 
-A later catalog correction (a superseding fact appended to the food) therefore does not
-change meals already logged; new meals use the corrected fact.
+A later catalog correction (a superseding fact appended to the food, see "Add a new
+nutrition fact version") therefore does not change meals already logged; new meals use the
+corrected fact.
 
 ## Commands
 
@@ -85,14 +86,52 @@ muscle50 nutrition food add --id banana --name 바나나 --per 1 piece `
 - `--source-ref`: free text; default `entered with muscle50 nutrition food add`.
 
 Duplicates: an existing food ID is refused, as is a name or alias that already matches any
-food's name or alias (case-insensitive). The existing food is never changed. There is no
-edit command; see Limitations.
+food's name or alias (case-insensitive). The existing food is never changed by `food add`;
+to give it new nutrition numbers, add a new fact version (below).
 
 ```powershell
 muscle50 nutrition food list            # ID, name, active facts per food
 muscle50 nutrition food show egg        # full fact history, reference, recorded time
 muscle50 nutrition food list --json
 ```
+
+### Add a new nutrition fact version
+
+```powershell
+muscle50 nutrition food fact add chicken-breast --per 100 g `
+  --kcal 120 --protein 18 --carbs 2 --fat 4 `
+  --source food_database --accuracy estimated `
+  --source-ref "generic lightly seasoned chicken breast estimate"
+```
+
+Appends fact `food:<id>:<n+1>` to an existing food. Nothing stored is updated or deleted: the
+food ID, name, aliases and every earlier fact stay as they are, and `food show` lists the whole
+history in recorded order (`(superseded)`, `(active, replaces food:<id>:<n>)`). The flags are
+the same as `food add` (`--per`, all four nutrients, `--source`, `--accuracy`, `--source-ref`,
+default reference `entered with muscle50 nutrition food fact add`), with the same validation.
+`--json` prints the stored food like `food show --json`.
+
+Activation: the new fact supersedes the food's current fact in the same unit and becomes the
+fact used for every nutrient it gives, regardless of source priority (a `food_database`
+estimate replaces an earlier `user_provided` exact fact, because you said so). `food list`
+shows only active facts. The basis quantity may change (`per 200 g` -> `per 100 g`); the unit
+may not (a version replaces a fact in the same unit; units are never converted).
+
+Refused, with nothing written:
+
+- unknown food ID, or a unit the food has no fact for;
+- a nutrient the current fact knows given as `unknown` (supersession is per nutrient, so the
+  old fact would silently stay in use for it; unknown cannot replace a known value). Filling
+  in a nutrient that was `unknown` is fine;
+- a version identical to the current fact (same numbers, basis, source, accuracy and
+  reference), e.g. an accidental re-run;
+- a history the CLI did not create where the result would be ambiguous (two current facts in
+  the unit) or where an older fact would still win a nutrient over the new one.
+
+Meals: already logged meals keep the facts they were snapshotted with (see "Snapshot at log
+time"), so their values, `unknown`s, `nutrition day`, `nutrition status` and recommendation
+output do not change. Meals logged afterwards use the new fact. An item's `source:` line shows
+the provenance of the facts its values came from.
 
 ### Log a structured meal
 
@@ -186,13 +225,16 @@ only.
 
 ## Limitations
 
-- **No edit or delete.** Nutrition facts are append-only (`nutrition_facts` update/delete
+- **No edit or delete.** Food names/aliases cannot be changed; nutrition numbers change only by
+  appending a fact version (`food fact add`). Nutrition facts are append-only (`nutrition_facts` update/delete
   triggers) and meal items reference their snapshot facts with `ON DELETE RESTRICT`, so a
   logged meal cannot be deleted without changing the schema's append-only guarantee. A
   correction design (e.g. void/replacement records or appended superseding item facts) is
-  deferred. The duplicate-meal guard exists because of this. Catalog corrections are possible
-  in code via `append_nutrition_fact` (superseding fact), but there is no CLI for it yet.
-- One fact per food from the CLI; no per-food unit conversions (e.g. `1 pack = 210 g`).
+  deferred. The duplicate-meal guard exists because of this.
+- One unit per food from the CLI (`food fact add` versions the existing unit); no per-food unit
+  conversions (e.g. `1 pack = 210 g`).
+- `food fact add` checks the current fact and appends in two steps; two simultaneous runs for
+  the same food could both supersede the same fact (single-user CLI, not guarded).
 - Without `--time` a meal is stored at local 00:00; `--time 00:00` is displayed the same way.
 - The day boundary uses this computer's current UTC offset rules; meals logged under a
   different offset are still found by their absolute time.
