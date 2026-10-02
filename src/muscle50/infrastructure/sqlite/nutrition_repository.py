@@ -223,6 +223,18 @@ class SqliteFoodNutritionRepository:
                 profiles.append(profile)
         return tuple(profiles)
 
+    def list_all(self) -> tuple[FoodNutritionProfile, ...]:
+        """Every profile, ordered by profile_id."""
+        with _connect(self._database_path) as connection:
+            rows = connection.execute("SELECT profile_id FROM nutrition_food_profiles ORDER BY profile_id").fetchall()
+            profiles: list[FoodNutritionProfile] = []
+            for row in rows:
+                profile = _load_profile(connection, row["profile_id"])
+                if profile is None:
+                    raise RuntimeError(f"food profile {row['profile_id']!r} disappeared during listing")
+                profiles.append(profile)
+        return tuple(profiles)
+
     def append_nutrition_fact(self, profile_id: str, fact: NutritionFact) -> FoodNutritionProfile:
         with _connect(self._database_path) as connection:
             connection.execute("BEGIN IMMEDIATE")

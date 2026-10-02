@@ -146,6 +146,24 @@ muscle50 recommend --date 2026-09-24 --focus shoulders   # 오늘 할 focus 직�
 
 규칙과 한계는 `docs/training-recommendation.md`를 참고하세요.
 
+## Nutrition logging (MVP)
+
+개인 음식 catalog에 직접 입력한 영양 정보(라벨/본인 입력)로 식사를 기록하고, 식사별·하루 섭취 kcal/단백질/탄수화물/
+지방을 계산합니다. 외부 DB 조회나 이름 기반 추정은 하지 않습니다. 목표/남은 양, 메뉴 추천, 자유 문장 파싱은 아직
+없습니다.
+
+```powershell
+muscle50 nutrition food add --id chicken-breast --name 닭가슴살 --per 100 g `
+  --kcal 110 --protein 23 --carbs 0 --fat 1.5 --source nutrition_label --accuracy exact
+muscle50 nutrition food list
+muscle50 nutrition food show chicken-breast
+muscle50 nutrition log --meal breakfast --item chicken-breast 200 g --item egg 2 count --item hetbahn 1 pack
+muscle50 nutrition day                      # 오늘 섭취량 (--date YYYY-MM-DD, --json)
+```
+
+`--kcal/--protein/--carbs/--fat`는 모두 필수이며 모르는 값은 `unknown`으로 남깁니다(0으로 채우지 않음). 단위는
+변환하지 않습니다(pack으로 등록한 음식을 g으로 기록할 수 없음). 수정/삭제는 아직 없습니다. 상세: `docs/nutrition-logging.md`.
+
 ## 개발 검증
 
 ```powershell

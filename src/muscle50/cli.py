@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from collections.abc import Sequence
-from datetime import date
+from datetime import UTC, date, datetime, time, timezone, tzinfo
+from decimal import Decimal
 from pathlib import Path
 
 from muscle50.application.backfill_activity_load_metrics import BackfillActivityLoadMetrics
@@ -13,6 +15,18 @@ from muscle50.application.daily_sync import DailyMode, RunDailySync, daily_sync_
 from muscle50.application.inbody_source import InBodySourceError
 from muscle50.application.ingest_activity import ActivitySyncError
 from muscle50.application.ingest_activity_range import IngestGarminActivityRange, InvalidDateRangeError
+from muscle50.application.nutrition_logging import (
+    CATALOG_SOURCE_TYPES,
+    AddFood,
+    ListFoods,
+    LogMeal,
+    MealEntryItem,
+    NewFood,
+    NutritionLoggingError,
+    ShowDailyIntake,
+    ShowFood,
+    offset_name,
+)
 from muscle50.application.recommend_training import BuildTrainingRecommendation
 from muscle50.application.refresh_garmin_activity import (
     ActivityNotFoundError,
@@ -34,9 +48,11 @@ from muscle50.domain.analytics import DEFAULT_LOOKBACK_DAYS, MAX_LOOKBACK_DAYS, 
 from muscle50.domain.exercise_taxonomy import MuscleGroup
 from muscle50.domain.inbody_normalization import InBodyNormalizationError
 from muscle50.domain.normalization import NormalizationError, activity_id_from
+from muscle50.domain.nutrition import Accuracy, MealType, NutritionValue, QuantityUnit
 from muscle50.domain.recovery_normalization import RecoveryNormalizationError, validate_calendar_date
 from muscle50.domain.strength_recommendation import StrengthFocus
 from muscle50.domain.swim_normalization import SwimNormalizationError
+from muscle50.infrastructure.decimal_text import decimal_from_text
 from muscle50.infrastructure.garmin.client import GarminConnectorError, PythonGarminConnector
 from muscle50.infrastructure.inbody.raw_store import InBodyRawStore
 from muscle50.infrastructure.inbody.samsung_health import SamsungHealthInBodySource
@@ -44,6 +60,17 @@ from muscle50.infrastructure.raw_store import RawStore, RawStoreError, RecoveryR
 from muscle50.infrastructure.sqlite.analytics_reader import AnalyticsDatabaseError, SqliteAnalyticsReader
 from muscle50.infrastructure.sqlite.body_composition import SqliteBodyCompositionRepository
 from muscle50.infrastructure.sqlite.database import ActivityRepository, DailyRecoveryRepository
+from muscle50.infrastructure.sqlite.nutrition_repository import SqliteFoodNutritionRepository, SqliteMealRepository
+from muscle50.presentation.nutrition_terminal import (
+    render_daily_intake,
+    render_daily_intake_json,
+    render_food,
+    render_food_json,
+    render_food_list,
+    render_food_list_json,
+    render_logged_meal,
+    render_logged_meal_json,
+)
 from muscle50.presentation.terminal import (
     render_activity_load_backfill_result,
     render_daily_sync,
@@ -62,6 +89,10 @@ from muscle50.presentation.terminal import (
 
 # Longer recovery ranges need --yes because each date costs several Garmin requests.
 _RECOVERY_UNCONFIRMED_MAX_DAYS = 7
+
+_UNITS_TEXT = ", ".join(unit.value for unit in QuantityUnit)
+_UNKNOWN_NUTRIENT = "unknown"
+_TIME_PATTERN = re.compile(r"[0-2][0-9]:[0-5][0-9]\Z")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -162,6 +193,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"same as recommend --focus. Choices: {', '.join(focus.value for focus in StrengthFocus)}",
     )
     daily.add_argument("--json", action="store_true", help="print stage results and the recommendation as JSON")
+    _add_nutrition_parser(commands)
     inbody = commands.add_parser("inbody", help="InBody body-composition commands")
     inbody_commands = inbody.add_subparsers(dest="inbody_command", required=True)
     inbody_sync = inbody_commands.add_parser("sync", help="Import a Samsung Health companion export")
@@ -172,6 +204,84 @@ def build_parser() -> argparse.ArgumentParser:
         help="explicitly print normalized health values; disabled by default",
     )
     return parser
+
+
+def _add_nutrition_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    nutrition = commands.add_parser(
+        "nutrition", help="Personal food catalog, structured meal logging and daily intake (no targets)"
+    )
+    nutrition_commands = nutrition.add_subparsers(dest="nutrition_command", required=True)
+    food = nutrition_commands.add_parser("food", help="Personal food catalog")
+    food_commands = food.add_subparsers(dest="food_command", required=True)
+    add = food_commands.add_parser(
+        "add",
+        help="Add a food with explicitly supplied nutrition for a reference quantity (nothing is looked up or guessed)",
+    )
+    add.add_argument(
+        "--id", dest="food_id", required=True, help="stable food ID used when logging, e.g. chicken-breast"
+    )
+    add.add_argument("--name", required=True, help="display name, e.g. 닭가슴살")
+    add.add_argument(
+        "--per",
+        nargs=2,
+        required=True,
+        metavar=("QTY", "UNIT"),
+        help=f"reference quantity the values describe, e.g. --per 100 g. Units: {_UNITS_TEXT}",
+    )
+    for flag, label in (
+        ("--kcal", "energy in kcal"),
+        ("--protein", "protein in g"),
+        ("--carbs", "carbohydrate in g"),
+        ("--fat", "fat in g"),
+    ):
+        add.add_argument(
+            flag,
+            required=True,
+            metavar="N|unknown",
+            help=f"{label} for the reference quantity; '{_UNKNOWN_NUTRIENT}' records it as missing (never as 0)",
+        )
+    add.add_argument(
+        "--source",
+        required=True,
+        choices=[source.value for source in CATALOG_SOURCE_TYPES],
+        help="where the numbers came from",
+    )
+    add.add_argument(
+        "--accuracy", required=True, choices=[accuracy.value for accuracy in Accuracy], help="exact or estimated"
+    )
+    add.add_argument(
+        "--source-ref",
+        default="entered with muscle50 nutrition food add",
+        help="free-text reference, e.g. 'package label 2026-10'",
+    )
+    add.add_argument("--alias", action="append", default=[], help="another unique name for this food; repeatable")
+    add.add_argument("--json", action="store_true", help="print the stored food as JSON")
+    food_list = food_commands.add_parser("list", help="List catalog foods and their active nutrition facts")
+    food_list.add_argument("--json", action="store_true", help="print as JSON")
+    show = food_commands.add_parser("show", help="Show one food with its full nutrition fact history")
+    show.add_argument("food_id", help="food ID")
+    show.add_argument("--json", action="store_true", help="print as JSON")
+    log = nutrition_commands.add_parser("log", help="Record one meal made of catalog foods")
+    log.add_argument("--meal", required=True, choices=[meal.value for meal in MealType], help="meal type")
+    log.add_argument("--date", dest="as_of", metavar="YYYY-MM-DD", help="meal date (default: today on this computer)")
+    log.add_argument("--time", dest="eaten_time", metavar="HH:MM", help="local time eaten (optional)")
+    log.add_argument(
+        "--item",
+        nargs=3,
+        action="append",
+        required=True,
+        metavar=("FOOD_ID", "QTY", "UNIT"),
+        help="one catalog food and the amount eaten, in a unit the food has nutrition for; repeatable",
+    )
+    log.add_argument(
+        "--additional",
+        action="store_true",
+        help="record another meal of the same type on the same date (otherwise refused to prevent double entry)",
+    )
+    log.add_argument("--json", action="store_true", help="print the recorded meal as JSON")
+    day = nutrition_commands.add_parser("day", help="Meals, per-meal totals and daily consumed totals for a date")
+    day.add_argument("--date", dest="as_of", metavar="YYYY-MM-DD", help="date (default: today on this computer)")
+    day.add_argument("--json", action="store_true", help="print as JSON with exact decimal strings")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -212,6 +322,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if args.command == "inbody" and args.inbody_command == "sync":
         return _inbody_sync(args.file, show_values=args.show_values)
+    if args.command == "nutrition":
+        return _nutrition(args)
     return 2
 
 
@@ -549,6 +661,133 @@ def _daily(
     except KeyboardInterrupt:
         print("\n취소되었습니다.", file=sys.stderr)
         return 130
+
+
+def _local_timezone(day: date) -> tzinfo:
+    """This computer's UTC offset on ``day`` as a fixed offset (no IANA zone lookup)."""
+    offset = datetime.combine(day, time(12)).astimezone().utcoffset()
+    return timezone(offset) if offset is not None else UTC
+
+
+def _nutrition(args: argparse.Namespace) -> int:
+    try:
+        paths = AppPaths.from_environment()
+        paths.ensure_directories()
+        foods = SqliteFoodNutritionRepository(paths.database_path)
+        foods.migrate()
+        meals = SqliteMealRepository(paths.database_path)
+        if args.nutrition_command == "food" and args.food_command == "add":
+            profile = AddFood(foods, clock=lambda: datetime.now().astimezone()).execute(_new_food(args))
+            print(
+                render_food_json(profile) if args.json else f"Added food {profile.profile_id}.\n{render_food(profile)}"
+            )
+            return 0
+        if args.nutrition_command == "food" and args.food_command == "list":
+            profiles = ListFoods(foods).execute()
+            print(render_food_list_json(profiles) if args.json else render_food_list(profiles))
+            return 0
+        if args.nutrition_command == "food" and args.food_command == "show":
+            profile = ShowFood(foods).execute(args.food_id)
+            print(render_food_json(profile) if args.json else render_food(profile))
+            return 0
+        if args.nutrition_command == "log":
+            day = _nutrition_date(args.as_of)
+            meal = LogMeal(meals, foods).execute(
+                day,
+                MealType(args.meal),
+                tuple(_meal_entry(index, raw) for index, raw in enumerate(args.item, start=1)),
+                timezone=_local_timezone(day),
+                eaten_time=_eaten_time(args.eaten_time),
+                additional=args.additional,
+            )
+            print(render_logged_meal_json(meal) if args.json else render_logged_meal(meal))
+            return 0
+        if args.nutrition_command == "day":
+            day = _nutrition_date(args.as_of)
+            zone = _local_timezone(day)
+            intake = ShowDailyIntake(meals).execute(day, zone, timezone_name=offset_name(zone, day))
+            print(render_daily_intake_json(intake) if args.json else render_daily_intake(intake))
+            return 0
+        return 2
+    except (ConfigurationError, NutritionLoggingError) as exc:
+        print(f"오류: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\n취소되었습니다.", file=sys.stderr)
+        return 130
+
+
+def _nutrition_date(text: str | None) -> date:
+    if text is None:
+        return _today()
+    try:
+        return date.fromisoformat(validate_calendar_date(text))
+    except RecoveryNormalizationError as exc:
+        raise NutritionLoggingError("--date는 YYYY-MM-DD 형식이어야 합니다.") from exc
+
+
+def _eaten_time(text: str | None) -> time | None:
+    if text is None:
+        return None
+    try:
+        if _TIME_PATTERN.fullmatch(text) is None:
+            raise ValueError(text)
+        return time.fromisoformat(text)
+    except ValueError as exc:
+        raise NutritionLoggingError(f"--time must be HH:MM (24-hour), got {text!r}") from exc
+
+
+def _decimal_argument(text: str, what: str) -> Decimal:
+    try:
+        return decimal_from_text(text)
+    except ValueError as exc:
+        raise NutritionLoggingError(
+            f"{what} must be a plain non-negative number like 200 or 1.5, got {text!r}"
+        ) from exc
+
+
+def _positive_quantity(text: str, what: str) -> Decimal:
+    value = _decimal_argument(text, what)
+    if value == 0:
+        raise NutritionLoggingError(f"{what} must be greater than 0")
+    return value
+
+
+def _unit(text: str, what: str) -> QuantityUnit:
+    try:
+        return QuantityUnit(text)
+    except ValueError as exc:
+        raise NutritionLoggingError(f"{what} unit {text!r} is not supported; use one of: {_UNITS_TEXT}") from exc
+
+
+def _nutrient(text: str, flag: str) -> Decimal | None:
+    return None if text == _UNKNOWN_NUTRIENT else _decimal_argument(text, flag)
+
+
+def _new_food(args: argparse.Namespace) -> NewFood:
+    quantity_text, unit_text = args.per
+    return NewFood(
+        food_id=args.food_id,
+        name=args.name,
+        basis_quantity=_positive_quantity(quantity_text, "--per quantity"),
+        basis_unit=_unit(unit_text, "--per"),
+        values=NutritionValue(
+            calories_kcal=_nutrient(args.kcal, "--kcal"),
+            protein_g=_nutrient(args.protein, "--protein"),
+            carbohydrate_g=_nutrient(args.carbs, "--carbs"),
+            fat_g=_nutrient(args.fat, "--fat"),
+        ),
+        source_type=next(source for source in CATALOG_SOURCE_TYPES if source.value == args.source),
+        accuracy=Accuracy(args.accuracy),
+        source_reference=args.source_ref,
+        aliases=tuple(args.alias),
+    )
+
+
+def _meal_entry(index: int, raw: list[str]) -> MealEntryItem:
+    food_id, quantity_text, unit_text = raw
+    what = f"--item {index}"
+    return MealEntryItem(food_id, _positive_quantity(quantity_text, f"{what} quantity"), _unit(unit_text, what))
 
 
 def _inbody_sync(payload_path: Path, *, show_values: bool) -> int:

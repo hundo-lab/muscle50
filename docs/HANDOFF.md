@@ -2,7 +2,65 @@
 
 Last updated: 2026-10-02
 
-## Current task: Daily orchestration `muscle50 daily` (2026-10-02)
+## Current task: Nutrition Logging MVP (2026-10-02)
+
+Paseo worktree `nutrition-logging`(branch `feature/nutrition-logging`, base `8845b41` = local main = origin/main).
+**Feature commit 완료. main merge/rebase/push 안 함.** 상세 사용법·규칙: `docs/nutrition-logging.md`.
+
+### What was attempted / completed
+
+- Nutrition Core audit: `FoodNutritionProfile`/`NutritionFact`/`Meal`/`MealItem`, unit-equality scaling, `aggregate_meal`/
+  `aggregate_day`, repository create-only `save`, append-only fact trigger, `003_nutrition.sql`. 새 model/migration 없이 구현.
+- `application/nutrition_logging.py`: `AddFood`, `ListFoods`, `ShowFood`, `LogMeal`(catalog fact snapshot, unit 불일치 거부,
+  같은 날짜·meal type 중복은 `--additional` 필요), `ShowDailyIntake`(item별 missing nutrient 계산 포함).
+- `presentation/nutrition_terminal.py`: text(표시용 0.1 반올림, incomplete/estimated 명시, ASCII + 음식 이름)와 JSON(exact
+  Decimal 문자열, 고정 순서).
+- `cli.py`: `muscle50 nutrition food add|list|show`, `nutrition log`, `nutrition day`; `_local_timezone`(fixed offset).
+- `FoodNutritionRepository.list_all()` port + SQLite 구현.
+- Acceptance(합성 값): 닭가슴살 100 g / 계란 1 count / 햇반 1 pack / 바나나 1 piece → 2026-10-02 breakfast 200 g / 2 count /
+  1 pack / 1 piece. `tests/test_nutrition_cli.py::test_acceptance_*`, `tests/test_nutrition_logging.py::
+  test_breakfast_acceptance_scenario_persists_items_and_totals`.
+
+### Exact commands
+
+```powershell
+uv run muscle50 nutrition food add --id chicken-breast --name 닭가슴살 --per 100 g --kcal N --protein N --carbs N --fat N|unknown --source nutrition_label --accuracy exact [--source-ref TEXT] [--alias NAME]
+uv run muscle50 nutrition food list [--json]
+uv run muscle50 nutrition food show chicken-breast [--json]
+uv run muscle50 nutrition log [--date D] --meal breakfast [--time HH:MM] --item chicken-breast 200 g --item egg 2 count [--additional] [--json]
+uv run muscle50 nutrition day [--date D] [--json]
+```
+
+### Files changed
+
+`src/muscle50/application/nutrition_logging.py`(신규), `src/muscle50/presentation/nutrition_terminal.py`(신규),
+`src/muscle50/cli.py`, `src/muscle50/application/nutrition.py`(`list_all` port), `src/muscle50/infrastructure/sqlite/
+nutrition_repository.py`(`list_all`), `tests/test_nutrition_logging.py`(신규), `tests/test_nutrition_cli.py`(신규),
+`tests/test_nutrition_repository.py`, `docs/nutrition-logging.md`(신규), `docs/nutrition-core.md`, `README.md`,
+`docs/CURRENT_STATE.md`, 이 파일.
+
+### Checks run
+
+- `uv run --extra dev pytest` 681 passed, `ruff check .`, `mypy src tests`(103 files), `git diff --check` 통과. `ruff format`은
+  새 파일과 `cli.py`에만 적용(`nutrition_repository.py`는 base부터 미포맷이라 건드리지 않음). 모든 파일 LF.
+- Production DB/RAW fingerprint before = after(`C:\temp\muscle50-evidence-20261002-nutrition-logging\before.json`/`after.json`).
+  Production에서 nutrition 명령을 실행하지 않았다.
+
+### Known failures or risks
+
+- 수정/삭제 없음(append-only fact + RESTRICT FK). 잘못 기록한 식사는 현재 CLI로 고칠 수 없다 — 중복 기록 guard만 있다.
+- `--time` 없는 식사는 local 00:00로 저장되어 `--time 00:00`과 구분되지 않는다.
+- 실제 production catalog는 비어 있다(사용자가 라벨 값으로 직접 입력해야 함). 실제 음식 값은 repo에 넣지 않았다.
+- `docs/CURRENT_STATE.md`의 이전 기록 "origin/main은 `c06a36c` 그대로"는 현재 git 상태(origin/main = `8845b41`)와 다르다 —
+  이후 push된 것으로 보이며 이번 작업에서 이력 문장은 고치지 않았다.
+
+### Recommended next action
+
+1. 사용자 검토 후 `feature/nutrition-logging`을 main으로 fast-forward 통합(별도 승인), push는 별도 승인.
+2. 실제 라벨 값으로 production catalog 입력 후 하루 기록 사용해 보기.
+3. 다음 기능: nutrition targets(별도 feature). 식사 정정(void/replacement) 설계는 그 전에 필요할 수 있다.
+
+## Previous task: Daily orchestration `muscle50 daily` (2026-10-02)
 
 Paseo worktree `daily-sync`(branch `feature/daily-sync`, base main = origin/main `c06a36c`).
 **완료: 2026-10-02에 local main으로 fast-forward 통합(`c06a36c` → `8b08773`, merge commit/rebase/squash 없음). origin push

@@ -27,7 +27,9 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 - SQLite schema는 package에 포함된 numbered migration을 순서대로 적용한다.
 - Garmin source 값과 corrected/derived 값은 서로 덮어쓰지 않는다.
 - Nutrition Core는 deterministic domain model, JSON interchange schema, 공용 SQLite DB의
-  append-only nutrition fact history를 제공한다.
+  append-only nutrition fact history를 제공한다. Nutrition Logging MVP(`application/nutrition_logging.py`,
+  `presentation/nutrition_terminal.py`, CLI `muscle50 nutrition`)가 그 위의 food catalog / 구조화 식사 기록 / 하루 섭취
+  계산 경로다(migration 없음, 목표·추천 없음). 상세는 `docs/nutrition-logging.md`.
 - Activity-load metric(training load/effect, HR zone, intensity minutes)은 shared
   `normalize_activity`가 아니라 전용 RAW-only backfill(`garmin backfill-load-metrics`)이 초기 flat
   `summary.json`에서 `activity_metrics`로 쓴다. Refresh 출력은 변하지 않고, refresh는 자신이
@@ -137,10 +139,23 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   local 무결성 오류)는 명령 전체를 중단한다. 출력: ASCII 단계 블록 + `Stored data now` freshness 줄 + 기존
   `recommend` text 그대로. `--json`은 단계 요약 + `"recommendation"`에 standalone `recommend --json` 문서를 그대로 넣고
   recovery row timestamp는 넣지 않아 같은 입력이면 byte-identical. 진행 안내와 Garmin 재로그인 prompt는 stderr.
+- (branch `feature/nutrition-logging`, base `8845b41`, main 미통합) Nutrition Logging MVP — intake only:
+  `muscle50 nutrition food add|list|show`, `muscle50 nutrition log`, `muscle50 nutrition day [--date D] [--json]`.
+  Food = 기존 `FoodNutritionProfile` + fact 1개(`food:<id>:1`, 사용자/라벨이 준 값, source/accuracy/reference 필수 보존).
+  `--kcal/--protein/--carbs/--fat` 모두 필수, 모르면 `unknown`(None, 0 아님). Source는 `nutrition_label`/`user_provided`/
+  `known_product`/`food_database`만(추정 source 거부). 중복 food ID와 이미 쓰인 name/alias(대소문자 무시)는 거부.
+  식사 기록 시 음식의 unit별 preferred fact를 meal item 소유 fact로 snapshot(`<meal_id>:<seq>:<catalog fact_id>`, provenance
+  그대로, supersession 미복사) → 이후 catalog 수정이 과거 식사를 바꾸지 않는다. 단위 변환 없음(맞는 unit fact가 없으면
+  거부). 같은 날짜·같은 meal type 두 번째 기록은 `--additional` 없으면 거부(삭제 경로가 없어 이중 기록 방지). `--time`
+  없으면 local 00:00 저장, 기본 날짜는 이 컴퓨터 오늘, 하루 경계는 이 컴퓨터 UTC offset(fixed offset, tzdata 불필요).
+  집계는 `aggregate_meal`/`aggregate_day` 그대로: 한 item이라도 값이 없으면 해당 nutrient total은 incomplete(known
+  subtotal 별도 표기, item별 missing 표시), estimated fact 포함 total은 `(estimated)`. JSON은 exact Decimal 문자열,
+  고정 순서, byte-stable.
 
 ## Pending merge
 
-- 현재 pending merge 없음.
+- `feature/nutrition-logging`(Nutrition Logging MVP)은 commit만 했고 main merge/push 안 함. Base `8845b41`
+  (= local main = origin/main, 2026-10-02 `git rev-parse` 확인).
 - Daily orchestration(`c3f5842`, `8b08773`)은 2026-10-02에 local main으로 fast-forward(`c06a36c` → `8b08773`, merge
   commit/rebase/squash 없음)됐다. origin/main은 `c06a36c` 그대로(push는 별도 승인). Branch `feature/daily-sync`와 Paseo
   worktree `daily-sync`는 유지한다.
@@ -187,6 +202,15 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 - `tests/test_refresh_activity.py`, `tests/test_swim_normalization.py`, `tests/test_sync_recovery.py`
 
 ## Verification
+
+2026-10-02 Nutrition Logging MVP(`feature/nutrition-logging`, base `8845b41`):
+
+- `uv run --extra dev pytest` 681 passed(신규 `tests/test_nutrition_logging.py` 41, `tests/test_nutrition_cli.py` 25,
+  `tests/test_nutrition_repository.py` +1), `ruff check .`, `mypy src tests`(103 files), `git diff --check` 통과.
+- 테스트는 임시 DB/`MUSCLE50_HOME`(`tmp_path`)만 사용. Production에 nutrition 명령을 실행하지 않았다(read 명령도
+  `_connect`가 WAL/디렉터리를 만들 수 있어 금지). Production DB/WAL/SHM sha256·size·mtime, 28 table, RAW 974 files
+  fingerprint before = after, nutrition table 5개 모두 0 rows 유지. Evidence `C:\temp\muscle50-evidence-20261002-nutrition-logging\`.
+- Migration 없음(`schema_migrations` 7 그대로).
 
 2026-10-02 Daily orchestration production live 검증(사용자 실행, 실제 Garmin 계정, `feature/daily-sync` `8b08773`):
 
@@ -561,7 +585,11 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
 - Analytics v1 gap: muscle-group mapping 없음, `swim_lengths.length_type` 전부 NULL, `pool_length`
   activity metric unit NULL, lap duration vs length duration 불일치 규칙 미정, swim pace/SWOLF
   progression과 기간 비교(trend)는 아직 없다.
-- Nutrition은 아직 public CLI command에 연결되지 않았다.
+- (Nutrition Logging MVP, `feature/nutrition-logging`) Nutrition target/남은 양, 메뉴·운동 전후 식사 추천, 자유 문장
+  meal parser(`MealParser` 구현), 외부 food DB/barcode/사진, 주간 분석은 아직 없다. 식사/음식 수정·삭제 CLI 없음 —
+  nutrition fact는 append-only trigger, meal item → fact는 `ON DELETE RESTRICT`라 기록된 식사를 schema 변경 없이 지울 수
+  없다(정정 설계는 보류; catalog는 code에서 `append_nutrition_fact` superseding fact로만 정정 가능). 음식당 CLI fact 1개,
+  unit 간 변환(예: 1 pack = 210 g) 없음. `--time` 없는 식사와 `--time 00:00`은 구분되지 않는다.
 - 기존 provisional nutrition schema로 직접 만든 외부 DB가 있다면 정식 migration marker가
   없으므로 별도 호환성 검토가 필요하다.
 - 날짜 범위 동기화의 pagination은 안전장치로 50페이지(최대 1000개 activity)까지만 조회한다.

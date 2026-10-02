@@ -543,3 +543,16 @@ def test_search_matches_profile_with_no_aliases_by_name(tmp_path: Path) -> None:
     repository.save(profile)
 
     assert [found.profile_id for found in repository.search("plain rice")] == ["profile-no-aliases"]
+
+
+def test_list_all_returns_every_profile_ordered_by_id_with_facts(tmp_path: Path) -> None:
+    repository = _food_repo(tmp_path)
+    assert repository.list_all() == ()
+    repository.save(FoodNutritionProfile(profile_id="b-food", name="바나나", facts=(_fact("fact-b"),)))
+    repository.save(FoodNutritionProfile(profile_id="a-food", name="Apple", facts=(), aliases=("사과",)))
+
+    profiles = repository.list_all()
+
+    assert [profile.profile_id for profile in profiles] == ["a-food", "b-food"]
+    assert profiles[0].aliases == ("사과",)
+    assert profiles[1].facts == (_fact("fact-b"),)
