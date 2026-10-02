@@ -144,7 +144,7 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   local 무결성 오류)는 명령 전체를 중단한다. 출력: ASCII 단계 블록 + `Stored data now` freshness 줄 + 기존
   `recommend` text 그대로. `--json`은 단계 요약 + `"recommendation"`에 standalone `recommend --json` 문서를 그대로 넣고
   recovery row timestamp는 넣지 않아 같은 입력이면 byte-identical. 진행 안내와 Garmin 재로그인 prompt는 stderr.
-- (branch `feature/nutrition-targets`, base `7f4a4ef`, main 미통합) Nutrition Targets + Daily Status v1:
+- (local main `1549c4a`에 fast-forward 통합, origin 미push) Nutrition Targets + Daily Status v1:
   `muscle50 nutrition target set {kcal,protein,carbs,fat} (--exact N | --range MIN MAX | --unset)`,
   `muscle50 nutrition target show [--json]`, `muscle50 nutrition status [--date D] [--json]`. 목표는 Decimal, > 0,
   range는 inclusive(min <= max, 같아도 됨), unset ≠ 0, 자동 계산 없음. 저장: `<home>\config\nutrition_targets.json`
@@ -172,8 +172,9 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 
 ## Pending merge
 
-- `feature/nutrition-targets`(Nutrition Targets + Daily Status v1)는 commit만 했고 main merge/rebase/push 안 함. Base
-  `7f4a4ef`(2026-10-02 local `main` = local `origin/main` tracking ref, `git rev-parse` 확인; `git ls-remote`는 실행하지 않음).
+- `feature/nutrition-targets`(Nutrition Targets + Daily Status v1, `c77de0d`, `1549c4a`)는 2026-10-02 local main으로
+  fast-forward 통합됐다(`7f4a4ef` → `1549c4a`, merge commit/rebase/squash 없음). 통합 전 `git fetch` + `git ls-remote`로
+  origin/main = `7f4a4ef` 확인. origin push 안 함(별도 승인). Branch와 Paseo worktree `nutrition-targets`는 유지한다.
 - Nutrition Logging MVP(`9ec54d1`, `7f4a4ef`)는 main에 포함됐다(2026-10-02 local `main` = `origin/main` = `7f4a4ef`).
 - Daily orchestration(`c3f5842`, `8b08773`)은 2026-10-02에 local main으로 fast-forward(`c06a36c` → `8b08773`, merge
   commit/rebase/squash 없음)됐다. 당시 origin/main은 `c06a36c`였으나 이후 push되어 2026-10-02 `git ls-remote origin

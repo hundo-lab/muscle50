@@ -5,7 +5,9 @@ Last updated: 2026-10-02
 ## Current task: Nutrition Targets + Daily Nutrition Status v1 (2026-10-02)
 
 Paseo worktree `nutrition-targets`(branch `feature/nutrition-targets`, base `7f4a4ef` = local main = local origin/main ref).
-**Feature commit 완료. main merge/rebase/push 안 함.** 상세 규칙·JSON 계약: `docs/nutrition-targets.md`.
+**2026-10-02 local main으로 fast-forward 통합 완료(`7f4a4ef` → `1549c4a`, merge commit/rebase/squash 없음). origin push 안
+함(별도 승인).** 통합 후 main에서 pytest 789 passed, ruff/mypy/`git diff --check` 통과, production fingerprint before = after
+(`C:\temp\muscle50-evidence-20261002-nutrition-targets-integration\`). 상세 규칙·JSON 계약: `docs/nutrition-targets.md`.
 
 ### What was attempted / completed
 
@@ -57,7 +59,7 @@ uv run muscle50 nutrition status [--date D] [--json]
 
 ### Recommended next action
 
-1. 사용자 검토 후 `feature/nutrition-targets`를 main으로 fast-forward 통합(별도 승인), push는 별도 승인.
+1. origin push 여부 결정(별도 승인; local main은 origin/main보다 앞서 있다).
 2. 사용자 본인 목표를 production에서 직접 설정(`nutrition target set ...`) — agent가 대신 설정하지 않는다.
 3. 후속 후보: 식사 정정(void/replacement) 설계, 목표 history(effective date), 요일/운동일 목표, recommend 연동.
 
