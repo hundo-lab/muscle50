@@ -5,7 +5,8 @@ Last updated: 2026-10-02
 ## Current task: Nutrition → Daily/Recommendation Integration v1 (2026-10-02)
 
 Paseo worktree `nutrition-recommendation`(branch `feature/nutrition-recommendation`, base `f07f5a2` = local main = origin/main).
-Branch에 commit만 했다. **Merge/rebase/push 안 함**(별도 승인 필요). 규칙·JSON 계약: `docs/nutrition-recommendation.md`.
+**2026-10-02 local main으로 fast-forward 통합 완료(`f07f5a2` → `caa7982`, merge commit/rebase/squash 없음). origin push 안
+함(별도 승인).** 통합 검증은 CURRENT_STATE Verification 참고. 규칙·JSON 계약: `docs/nutrition-recommendation.md`.
 
 ### What was attempted / completed
 
@@ -47,9 +48,8 @@ Branch에 commit만 했다. **Merge/rebase/push 안 함**(별도 승인 필요).
 
 ### Recommended next action
 
-사용자 검토 후 `feature/nutrition-recommendation`을 main으로 fast-forward(현재 main = base `f07f5a2`라 가능). 통합 후 main에서
-전체 게이트 재실행 + production fingerprint. 실제 목표를 설정한 뒤(`nutrition target set`) 하루 동안 `recommend` 문구가 과하거나
-부족하지 않은지 확인하는 것을 권장.
+main 통합은 완료됐다. origin push 여부 결정(별도 승인). 실제 목표를 설정한 뒤(`nutrition target set`) 하루 동안
+`recommend` 문구가 과하거나 부족하지 않은지 확인하는 것을 권장.
 
 ## Previous task: Nutrition Targets + Daily Nutrition Status v1 (2026-10-02)
 

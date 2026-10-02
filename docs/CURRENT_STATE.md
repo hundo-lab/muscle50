@@ -34,7 +34,7 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   `infrastructure/nutrition_target_store.py`, CLI `muscle50 nutrition target set|show`, `muscle50 nutrition status`)은
   사용자가 직접 정한 하루 목표(exact/range/unset)를 `<home>\config\nutrition_targets.json`(versioned JSON, migration 없음)에
   두고, `ShowDailyIntake` 결과를 그대로 목표와 비교한다. 상세는 `docs/nutrition-targets.md`.
-- (branch `feature/nutrition-recommendation`, main 미통합) Nutrition → Daily/Recommendation Integration v1: 추천이 먼저
+- (`8f267a2`/`caa7982`, 2026-10-02 local main으로 fast-forward 통합, origin push 안 함) Nutrition → Daily/Recommendation Integration v1: 추천이 먼저
   만들어진 뒤 `BuildNutritionContext`(`application/nutrition_recommendation.py`)가 같은 날짜의 `ShowDailyNutritionStatus`를
   그대로 실행하고, 순수 규칙 `domain/nutrition_guidance.py`가 status를 행동 안내로 바꾼다. 추천은 nutrition을 입력으로 받지
   않는다(운동 계획 불변). Read-only meal reader `infrastructure/sqlite/nutrition_reader.py`. 상세는
@@ -148,7 +148,7 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   local 무결성 오류)는 명령 전체를 중단한다. 출력: ASCII 단계 블록 + `Stored data now` freshness 줄 + 기존
   `recommend` text 그대로. `--json`은 단계 요약 + `"recommendation"`에 standalone `recommend --json` 문서를 그대로 넣고
   recovery row timestamp는 넣지 않아 같은 입력이면 byte-identical. 진행 안내와 Garmin 재로그인 prompt는 stderr.
-- (branch `feature/nutrition-recommendation`, 미통합) Nutrition → Daily/Recommendation Integration v1:
+- (`8f267a2`/`caa7982`, local main 통합) Nutrition → Daily/Recommendation Integration v1:
   `recommend`/`daily`가 추천 날짜의 nutrition status를 보여 준다. `availability`: `no_targets_configured`(목표 전부 unset —
   text 절 없음, 기존 text와 동일), `no_intake_logged`(식사 0개 — "0 kcal/0 g 아님" 한 줄, 행동 없음), `evaluated`, `unavailable`
   (목표 파일 손상/DB 읽기 불가 — 이유 한 줄, 추천 유지, exit 0). 행동은 complete total의 `below_*`에서만: protein
@@ -189,8 +189,11 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 
 ## Pending merge
 
-- `feature/nutrition-recommendation`(Nutrition → Daily/Recommendation Integration v1, base `f07f5a2` = main)은 branch에만
-  commit됐다. Merge/rebase/push 안 함(별도 승인).
+- 현재 pending merge 없음.
+- `feature/nutrition-recommendation`(Nutrition → Daily/Recommendation Integration v1, `8f267a2`, `caa7982`)는 2026-10-02
+  local main으로 fast-forward 통합됐다(`f07f5a2` → `caa7982`, merge commit/rebase/squash 없음). 통합 전 `git fetch` +
+  `git ls-remote`로 origin/main = `f07f5a2` 확인. origin push 안 함(별도 승인). Branch와 Paseo worktree
+  `nutrition-recommendation`은 유지한다.
 
 - `feature/nutrition-targets`(Nutrition Targets + Daily Status v1, `c77de0d`, `1549c4a`)는 2026-10-02 local main으로
   fast-forward 통합됐다(`7f4a4ef` → `1549c4a`, merge commit/rebase/squash 없음). 통합 전 `git fetch` + `git ls-remote`로
@@ -243,6 +246,16 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 - `tests/test_refresh_activity.py`, `tests/test_swim_normalization.py`, `tests/test_sync_recovery.py`
 
 ## Verification
+
+2026-10-02 Nutrition → Daily/Recommendation Integration v1 main 통합(`f07f5a2` → `caa7982` fast-forward, push 안 함):
+
+- 통합 후 main: `uv run --extra dev pytest` 842 passed, `ruff check .`, `mypy src tests`(115 files), `git diff --check` 통과.
+- 임시 home(production DB 파일 복사본 + 합성 nutrition) acceptance 26/26: 목표 없음/목표만/평가/unavailable(non-UTF-8, 디렉터리,
+  byte-range lock) 모두 training JSON이 통합 전 `f07f5a2`의 `recommend --json`과 동일(nutrition 절을 뺀 text도 동일),
+  `daily`가 standalone `recommend` 문서를 그대로 포함, sync 실패/`--after-workout`이면 추천과 nutrition 없음.
+- Production fingerprint 통합 전후 완전 동일(DB/WAL/SHM sha·size·mtime, 28 table, migration 1~7, RAW 974, 그 밖의 home
+  파일 27개, `config\` 없음). Production에 `daily`/Garmin/nutrition 명령 실행 안 함. Evidence
+  `C:\temp\muscle50-evidence-20261002-nutrition-recommendation-integration\`.
 
 2026-10-02 Nutrition → Daily/Recommendation Integration v1(`feature/nutrition-recommendation`, base `f07f5a2`):
 
