@@ -90,14 +90,14 @@ def test_acceptance_breakfast_text_output(capsys: pytest.CaptureFixture[str]) ->
 
     assert code == 0, err
     assert "Nutrition intake 2026-10-02 (UTC+09:00)" in out
-    assert "Nutrition targets and remaining amounts are not implemented." in out
+    assert "Consumed intake only. Compare with targets: muscle50 nutrition status" in out
     assert "Consumed (1 meal, 4 items):" in out
     assert "  kcal          750 (estimated)" in out
     assert "  Protein       54 g (estimated)" in out
     assert "  Carbohydrate  94 g (estimated)" in out
     assert "  Fat           incomplete (known items only: 16.3 g (estimated))" in out
     assert "  fat: 2026-10-02-breakfast-1 item 3 햇반 (hetbahn)" in out
-    assert "target" not in out.replace("Nutrition targets and remaining amounts are not implemented.", "")
+    assert "target" not in out.replace("Consumed intake only. Compare with targets: muscle50 nutrition status", "")
 
 
 def test_acceptance_day_json_is_exact_and_deterministic(capsys: pytest.CaptureFixture[str]) -> None:

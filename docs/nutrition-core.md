@@ -44,7 +44,8 @@ complete the schema without adding duplicate migration markers.
 
 The SQLite repositories share the same database and migration chain as Garmin
 activity persistence. The public CLI is `muscle50 nutrition` (food catalog, structured
-meal logging, daily intake; see `nutrition-logging.md`); application code can also
+meal logging, daily intake; see `nutrition-logging.md`; explicit daily targets and status, see
+`nutrition-targets.md`); application code can also
 construct either repository with the configured database path and call `migrate()`
 before use. The append-only fact history, exact Decimal text storage, and repository
 contracts remain independently tested.

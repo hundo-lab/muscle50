@@ -1,4 +1,4 @@
-"""Terminal and JSON output for Nutrition Logging (intake only; no targets).
+"""Terminal and JSON output for Nutrition Logging, targets and daily status.
 
 Text rounds to 0.1 for display only. JSON carries the exact Decimal values as canonical
 strings, lists nutrient sets in NutrientField order, and is byte-stable for identical data.
@@ -13,6 +13,7 @@ from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any
 
 from muscle50.application.nutrition_logging import DailyIntake, ItemIntake, MealIntake
+from muscle50.application.nutrition_targets import DailyNutritionStatus, NutrientDayStatus
 from muscle50.domain.nutrition import (
     FoodNutritionProfile,
     NutrientField,
@@ -20,7 +21,15 @@ from muscle50.domain.nutrition import (
     NutritionFact,
     NutritionValue,
 )
+from muscle50.domain.nutrition_targets import (
+    NutrientTarget,
+    NutrientTargetStatus,
+    NutritionTargets,
+    RangeTarget,
+    TargetStatus,
+)
 from muscle50.infrastructure.decimal_text import decimal_to_text
+from muscle50.infrastructure.nutrition_target_store import target_payload
 
 _LABELS = {
     NutrientField.CALORIES_KCAL: "kcal",
@@ -40,7 +49,7 @@ _NAMES = {
     NutrientField.CARBOHYDRATE_G: "carbohydrate",
     NutrientField.FAT_G: "fat",
 }
-_SCOPE_NOTE = "Consumed intake only. Nutrition targets and remaining amounts are not implemented."
+_SCOPE_NOTE = "Consumed intake only. Compare with targets: muscle50 nutrition status"
 
 
 # --- food catalog -------------------------------------------------------------------------
@@ -237,6 +246,124 @@ def _ordered(fields: frozenset[NutrientField]) -> list[NutrientField]:
     return [nutrient for nutrient in NutrientField if nutrient in fields]
 
 
+# --- targets and daily status --------------------------------------------------------------
+
+
+def render_targets(targets: NutritionTargets) -> str:
+    lines = ["Daily nutrition targets (the same targets apply to every date):"]
+    for nutrient in NutrientField:
+        lines.append(f"  {_LABELS[nutrient]:<13} {_target_text(targets.get(nutrient), nutrient)}")
+    if all(targets.get(nutrient) is None for nutrient in NutrientField):
+        lines.append("No targets set. See: muscle50 nutrition target set --help")
+    return "\n".join(lines)
+
+
+def render_targets_json(targets: NutritionTargets) -> str:
+    return _dumps({"targets": _targets_payload(targets)})
+
+
+def render_nutrition_status(status: DailyNutritionStatus) -> str:
+    intake = status.intake
+    nutrition = intake.summary.nutrition
+    lines = [
+        f"Nutrition status {intake.day.isoformat()} (UTC{intake.timezone_name})",
+        "Logged intake compared with the currently configured daily targets.",
+        "",
+    ]
+    if intake.meals:
+        meal_word = "meal" if len(intake.meals) == 1 else "meals"
+        item_word = "item" if nutrition.item_count == 1 else "items"
+        lines.append(f"Logged: {len(intake.meals)} {meal_word}, {nutrition.item_count} {item_word}")
+    else:
+        lines.append("No meals recorded for this day.")
+    for day_status in status.nutrients:
+        nutrient = day_status.status.nutrient
+        target = day_status.status.target
+        consumed = _aggregate_value(nutrition, nutrient)
+        if target is None:
+            lines.append(f"  {_LABELS[nutrient]:<13} {consumed}; no target")
+        else:
+            lines.append(
+                f"  {_LABELS[nutrient]:<13} {consumed}; target {_target_text(target, nutrient)}: "
+                f"{_status_text(day_status.status)}"
+            )
+    incomplete = [day_status for day_status in status.nutrients if day_status.missing_items]
+    if incomplete:
+        lines.append("Incomplete: no exact total or remaining amount, because an item has no value for:")
+        for day_status in incomplete:
+            sources = [
+                f"{item.meal_id} item {item.sequence} "
+                + (f"{item.food_name} ({item.food_id})" if item.food_id is not None else item.food_name)
+                for item in day_status.missing_items
+            ]
+            lines.append(f"  {_NAMES[day_status.status.nutrient]}: {'; '.join(sources)}")
+    if nutrition.estimated_fields:
+        names = ", ".join(_NAMES[nutrient] for nutrient in _ordered(nutrition.estimated_fields))
+        lines.append(f"Estimated: {names} include values from facts marked estimated.")
+    if all(status.targets.get(nutrient) is None for nutrient in NutrientField):
+        lines.append("No targets set. See: muscle50 nutrition target set --help")
+    return "\n".join(lines)
+
+
+def render_nutrition_status_json(status: DailyNutritionStatus) -> str:
+    intake = status.intake
+    return _dumps(
+        {
+            "date": intake.day.isoformat(),
+            "timezone": intake.timezone_name,
+            "scope": "intake_vs_current_targets",
+            "meal_count": len(intake.meals),
+            "item_count": intake.summary.nutrition.item_count,
+            "nutrients": {
+                day_status.status.nutrient.value: _nutrient_status_payload(day_status)
+                for day_status in status.nutrients
+            },
+        }
+    )
+
+
+def _target_text(target: NutrientTarget | None, nutrient: NutrientField) -> str:
+    # Targets are user-entered, so they are shown exactly rather than rounded.
+    unit = "" if nutrient is NutrientField.CALORIES_KCAL else " g"
+    if target is None:
+        return "not set"
+    if isinstance(target, RangeTarget):
+        return f"{decimal_to_text(target.minimum)}-{decimal_to_text(target.maximum)}{unit} (range)"
+    return f"{decimal_to_text(target.value)}{unit} (exact)"
+
+
+def _status_text(status: NutrientTargetStatus) -> str:
+    nutrient = status.nutrient
+
+    def amount(value: Decimal | None) -> str:
+        if value is None:
+            return "unknown"
+        # A non-zero gap must not display as 0 ("below target, 0 g to go").
+        if 0 < value < Decimal("0.05"):
+            return "<0.1" if nutrient is NutrientField.CALORIES_KCAL else "<0.1 g"
+        return _amount(value, nutrient)
+
+    kind = status.status
+    if kind is TargetStatus.NO_INTAKE_LOGGED:
+        return "no meals logged"
+    if kind is TargetStatus.INDETERMINATE:
+        return "cannot tell yet (incomplete); remaining unknown"
+    if kind is TargetStatus.BELOW_TARGET:
+        return f"below target, {amount(status.remaining)} to go"
+    if kind is TargetStatus.TARGET_REACHED:
+        return "target reached"
+    if kind is TargetStatus.BELOW_RANGE:
+        return f"below range, {amount(status.remaining)} to minimum, {amount(status.remaining_to_maximum)} to maximum"
+    if kind is TargetStatus.WITHIN_RANGE:
+        return f"within range, {amount(status.remaining_to_maximum)} left to maximum"
+    if kind in (TargetStatus.ABOVE_TARGET, TargetStatus.ABOVE_RANGE):
+        label = "above target" if kind is TargetStatus.ABOVE_TARGET else "above range"
+        if not status.complete:
+            return f"{label} (the known items alone exceed it; exact excess unknown)"
+        return f"{label} by {amount(status.excess)}"
+    return kind.value
+
+
 # --- JSON payloads ------------------------------------------------------------------------
 
 
@@ -337,5 +464,28 @@ def _aggregate_payload(nutrition: NutritionAggregate) -> dict[str, Any]:
         },
         "uncalculated_items": [
             {"meal_id": reference.meal_id, "sequence": reference.sequence} for reference in nutrition.uncalculated_items
+        ],
+    }
+
+
+def _targets_payload(targets: NutritionTargets) -> dict[str, Any]:
+    return {nutrient.value: target_payload(targets.get(nutrient)) for nutrient in NutrientField}
+
+
+def _nutrient_status_payload(day_status: NutrientDayStatus) -> dict[str, Any]:
+    status = day_status.status
+    return {
+        "target": target_payload(status.target),
+        "status": status.status.value,
+        "complete": status.complete,
+        "estimated": status.estimated,
+        "consumed": _decimal(status.consumed),
+        "known_subtotal": _decimal(status.known_subtotal),
+        "remaining": _decimal(status.remaining),
+        "remaining_to_maximum": _decimal(status.remaining_to_maximum),
+        "excess": _decimal(status.excess),
+        "missing_items": [
+            {"meal_id": item.meal_id, "sequence": item.sequence, "food_id": item.food_id, "food_name": item.food_name}
+            for item in day_status.missing_items
         ],
     }

@@ -30,6 +30,11 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   append-only nutrition fact history를 제공한다. Nutrition Logging MVP(`application/nutrition_logging.py`,
   `presentation/nutrition_terminal.py`, CLI `muscle50 nutrition`)가 그 위의 food catalog / 구조화 식사 기록 / 하루 섭취
   계산 경로다(migration 없음, 목표·추천 없음). 상세는 `docs/nutrition-logging.md`.
+- Nutrition Targets + Daily Status v1(`domain/nutrition_targets.py`, `application/nutrition_targets.py`,
+  `infrastructure/nutrition_target_store.py`, CLI `muscle50 nutrition target set|show`, `muscle50 nutrition status`)은
+  사용자가 직접 정한 하루 목표(exact/range/unset)를 `<home>\config\nutrition_targets.json`(versioned JSON, migration 없음)에
+  두고, `ShowDailyIntake` 결과를 그대로 목표와 비교한다. Recommend/daily는 아직 nutrition-aware가 아니다. 상세는
+  `docs/nutrition-targets.md`.
 - Activity-load metric(training load/effect, HR zone, intensity minutes)은 shared
   `normalize_activity`가 아니라 전용 RAW-only backfill(`garmin backfill-load-metrics`)이 초기 flat
   `summary.json`에서 `activity_metrics`로 쓴다. Refresh 출력은 변하지 않고, refresh는 자신이
@@ -139,7 +144,19 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   local 무결성 오류)는 명령 전체를 중단한다. 출력: ASCII 단계 블록 + `Stored data now` freshness 줄 + 기존
   `recommend` text 그대로. `--json`은 단계 요약 + `"recommendation"`에 standalone `recommend --json` 문서를 그대로 넣고
   recovery row timestamp는 넣지 않아 같은 입력이면 byte-identical. 진행 안내와 Garmin 재로그인 prompt는 stderr.
-- (branch `feature/nutrition-logging`, base `8845b41`, main 미통합) Nutrition Logging MVP — intake only:
+- (branch `feature/nutrition-targets`, base `7f4a4ef`, main 미통합) Nutrition Targets + Daily Status v1:
+  `muscle50 nutrition target set {kcal,protein,carbs,fat} (--exact N | --range MIN MAX | --unset)`,
+  `muscle50 nutrition target show [--json]`, `muscle50 nutrition status [--date D] [--json]`. 목표는 Decimal, > 0,
+  range는 inclusive(min <= max, 같아도 됨), unset ≠ 0, 자동 계산 없음. 저장: `<home>\config\nutrition_targets.json`
+  (`schema_version` 1, 값은 decimal 문자열만 — JSON number 거부, 모든 nutrient에 명시적 kind, 원자적 write, 읽기는
+  파일을 만들지 않음, 손상된 파일은 오류). 목표 history 없음 — 과거 날짜도 현재 목표와 비교(출력에 사용한 목표 표시).
+  Status: `no_target`, `no_intake_logged`(식사 0개 = core 규칙대로 incomplete, 0 아님), exact `below_target`/
+  `target_reached`(Decimal 동등, tolerance 없음)/`above_target`, range `below_range`/`within_range`/`above_range`,
+  `indeterminate`. 값이 없는 item이 있으면 `consumed`/`remaining`/`excess`는 null, `known_subtotal`과 `missing_items`
+  (meal/sequence/food) 표시. Known subtotal은 하한(nutrient 값은 non-negative 검증)이므로 known > exact 값 또는 range
+  상한일 때만 `above_*` 확정. `remaining`/`remaining_to_maximum`/`excess`는 음수 없음. `nutrition day` 출력은 scope 안내
+  문장만 바뀜(JSON 불변).
+- (main `7f4a4ef`에 포함) Nutrition Logging MVP — intake only:
   `muscle50 nutrition food add|list|show`, `muscle50 nutrition log`, `muscle50 nutrition day [--date D] [--json]`.
   Food = 기존 `FoodNutritionProfile` + fact 1개(`food:<id>:1`, 사용자/라벨이 준 값, source/accuracy/reference 필수 보존).
   `--kcal/--protein/--carbs/--fat` 모두 필수, 모르면 `unknown`(None, 0 아님). Source는 `nutrition_label`/`user_provided`/
@@ -155,8 +172,9 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 
 ## Pending merge
 
-- `feature/nutrition-logging`(Nutrition Logging MVP)은 commit만 했고 main merge/push 안 함. Base `8845b41`
-  (= local main = origin/main, 2026-10-02 `git rev-parse`와 `git ls-remote` 확인).
+- `feature/nutrition-targets`(Nutrition Targets + Daily Status v1)는 commit만 했고 main merge/rebase/push 안 함. Base
+  `7f4a4ef`(2026-10-02 local `main` = local `origin/main` tracking ref, `git rev-parse` 확인; `git ls-remote`는 실행하지 않음).
+- Nutrition Logging MVP(`9ec54d1`, `7f4a4ef`)는 main에 포함됐다(2026-10-02 local `main` = `origin/main` = `7f4a4ef`).
 - Daily orchestration(`c3f5842`, `8b08773`)은 2026-10-02에 local main으로 fast-forward(`c06a36c` → `8b08773`, merge
   commit/rebase/squash 없음)됐다. 당시 origin/main은 `c06a36c`였으나 이후 push되어 2026-10-02 `git ls-remote origin
   refs/heads/main` = `8845b41`(= local main)로 확인했다. Branch `feature/daily-sync`와 Paseo
@@ -204,6 +222,16 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 - `tests/test_refresh_activity.py`, `tests/test_swim_normalization.py`, `tests/test_sync_recovery.py`
 
 ## Verification
+
+2026-10-02 Nutrition Targets + Daily Status v1(`feature/nutrition-targets`, base `7f4a4ef`):
+
+- `uv run --extra dev pytest` 787 passed(신규 `tests/test_nutrition_targets.py` 45, `tests/test_nutrition_target_store.py` 30,
+  `tests/test_nutrition_target_cli.py` 31; `tests/test_nutrition_cli.py`는 바뀐 `day` scope 문장만 갱신), `ruff check .`,
+  `mypy src tests`(109 files), `git diff --check` 통과.
+- 테스트와 CLI acceptance는 임시 home만 사용(acceptance: `C:\temp\muscle50-evidence-20261002-nutrition-targets\acceptance-home`,
+  합성 값). Production에 nutrition 명령을 실행하지 않았다. Production DB/WAL/SHM, 28 table, RAW 974 files, 그 밖의 home
+  파일(`config\` 생성 여부 포함) fingerprint before = after. Evidence `C:\temp\muscle50-evidence-20261002-nutrition-targets\`.
+- Migration 없음(`schema_migrations` 7 그대로).
 
 2026-10-02 Nutrition Logging MVP(`feature/nutrition-logging`, base `8845b41`):
 
@@ -587,7 +615,10 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
 - Analytics v1 gap: muscle-group mapping 없음, `swim_lengths.length_type` 전부 NULL, `pool_length`
   activity metric unit NULL, lap duration vs length duration 불일치 규칙 미정, swim pace/SWOLF
   progression과 기간 비교(trend)는 아직 없다.
-- (Nutrition Logging MVP, `feature/nutrition-logging`) Nutrition target/남은 양, 메뉴·운동 전후 식사 추천, 자유 문장
+- (Nutrition Targets v1) 목표 history 없음(과거 날짜도 현재 목표로 비교), 요일/운동일별 목표 없음, 목표 자동 계산 없음,
+  `recommend`/`daily`는 nutrition 미반영. 식사 0개인 날은 `no_intake_logged`이며 "기록했고 먹지 않음"을 표시할 방법이
+  없다. Estimated total은 point 값으로 비교한다. Text는 0.1 반올림(정확한 값은 `--json`).
+- (Nutrition Logging MVP) 계산된 nutrition target, 메뉴·운동 전후 식사 추천, 자유 문장
   meal parser(`MealParser` 구현), 외부 food DB/barcode/사진, 주간 분석은 아직 없다. 식사/음식 수정·삭제 CLI 없음 —
   nutrition fact는 append-only trigger, meal item → fact는 `ON DELETE RESTRICT`라 기록된 식사를 schema 변경 없이 지울 수
   없다(정정 설계는 보류; catalog는 code에서 `append_nutrition_fact` superseding fact로만 정정 가능). 음식당 CLI fact 1개,
@@ -611,6 +642,9 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
 - `feature/nutrition-core`의 provisional schema는 migration 3으로 승격하고 공용 loader에
   연결했다.
 - 원본 feature branch와 Paseo worktree는 삭제하거나 수정하지 않는다.
+- Nutrition 목표는 SQLite table이 아니라 `<home>\config\nutrition_targets.json`에 둔다 — fact history가 아닌 작은 사용자
+  설정이라 migration이 필요 없고, 식사 data와 분리돼 목표 변경이 기록을 바꾸지 않는다. `config\`는 `ensure_directories`가
+  아니라 첫 `target set`에서만 만든다(모든 명령이 production에 디렉터리를 만들지 않도록).
 - `feature/garmin-recovery`의 provisional migration 2는 가져오지 않고 최신 global chain의
   `005_daily_recovery.sql`로 재통합했다.
 - Recovery endpoint는 개별 실패를 warning으로 격리하되 인증 오류와 전 endpoint 실패는 전체

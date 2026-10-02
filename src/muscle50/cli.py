@@ -27,6 +27,11 @@ from muscle50.application.nutrition_logging import (
     ShowFood,
     offset_name,
 )
+from muscle50.application.nutrition_targets import (
+    SetNutritionTarget,
+    ShowDailyNutritionStatus,
+    ShowNutritionTargets,
+)
 from muscle50.application.recommend_training import BuildTrainingRecommendation
 from muscle50.application.refresh_garmin_activity import (
     ActivityNotFoundError,
@@ -48,7 +53,8 @@ from muscle50.domain.analytics import DEFAULT_LOOKBACK_DAYS, MAX_LOOKBACK_DAYS, 
 from muscle50.domain.exercise_taxonomy import MuscleGroup
 from muscle50.domain.inbody_normalization import InBodyNormalizationError
 from muscle50.domain.normalization import NormalizationError, activity_id_from
-from muscle50.domain.nutrition import Accuracy, MealType, NutritionValue, QuantityUnit
+from muscle50.domain.nutrition import Accuracy, MealType, NutrientField, NutritionValue, QuantityUnit
+from muscle50.domain.nutrition_targets import ExactTarget, NutrientTarget, NutritionTargetError, RangeTarget
 from muscle50.domain.recovery_normalization import RecoveryNormalizationError, validate_calendar_date
 from muscle50.domain.strength_recommendation import StrengthFocus
 from muscle50.domain.swim_normalization import SwimNormalizationError
@@ -56,6 +62,7 @@ from muscle50.infrastructure.decimal_text import decimal_from_text
 from muscle50.infrastructure.garmin.client import GarminConnectorError, PythonGarminConnector
 from muscle50.infrastructure.inbody.raw_store import InBodyRawStore
 from muscle50.infrastructure.inbody.samsung_health import SamsungHealthInBodySource
+from muscle50.infrastructure.nutrition_target_store import JsonNutritionTargetRepository
 from muscle50.infrastructure.raw_store import RawStore, RawStoreError, RecoveryRawStore
 from muscle50.infrastructure.sqlite.analytics_reader import AnalyticsDatabaseError, SqliteAnalyticsReader
 from muscle50.infrastructure.sqlite.body_composition import SqliteBodyCompositionRepository
@@ -70,6 +77,10 @@ from muscle50.presentation.nutrition_terminal import (
     render_food_list_json,
     render_logged_meal,
     render_logged_meal_json,
+    render_nutrition_status,
+    render_nutrition_status_json,
+    render_targets,
+    render_targets_json,
 )
 from muscle50.presentation.terminal import (
     render_activity_load_backfill_result,
@@ -93,6 +104,13 @@ _RECOVERY_UNCONFIRMED_MAX_DAYS = 7
 _UNITS_TEXT = ", ".join(unit.value for unit in QuantityUnit)
 _UNKNOWN_NUTRIENT = "unknown"
 _TIME_PATTERN = re.compile(r"[0-2][0-9]:[0-5][0-9]\Z")
+# Same nutrient names as the `food add` flags.
+_TARGET_NUTRIENTS: dict[str, NutrientField] = {
+    "kcal": NutrientField.CALORIES_KCAL,
+    "protein": NutrientField.PROTEIN_G,
+    "carbs": NutrientField.CARBOHYDRATE_G,
+    "fat": NutrientField.FAT_G,
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -208,7 +226,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _add_nutrition_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     nutrition = commands.add_parser(
-        "nutrition", help="Personal food catalog, structured meal logging and daily intake (no targets)"
+        "nutrition", help="Personal food catalog, structured meal logging, daily intake, targets and daily status"
     )
     nutrition_commands = nutrition.add_subparsers(dest="nutrition_command", required=True)
     food = nutrition_commands.add_parser("food", help="Personal food catalog")
@@ -282,6 +300,26 @@ def _add_nutrition_parser(commands: argparse._SubParsersAction[argparse.Argument
     day = nutrition_commands.add_parser("day", help="Meals, per-meal totals and daily consumed totals for a date")
     day.add_argument("--date", dest="as_of", metavar="YYYY-MM-DD", help="date (default: today on this computer)")
     day.add_argument("--json", action="store_true", help="print as JSON with exact decimal strings")
+    target = nutrition_commands.add_parser("target", help="Daily nutrition targets you set explicitly")
+    target_commands = target.add_subparsers(dest="target_command", required=True)
+    target_set = target_commands.add_parser(
+        "set", help="Set one nutrient's daily target to an exact value or an inclusive range, or unset it"
+    )
+    target_set.add_argument("nutrient", choices=list(_TARGET_NUTRIENTS), help="kcal, or protein/carbs/fat in g")
+    target_value = target_set.add_mutually_exclusive_group(required=True)
+    target_value.add_argument("--exact", metavar="N", help="one target value, e.g. --exact 80")
+    target_value.add_argument(
+        "--range", nargs=2, metavar=("MIN", "MAX"), help="inclusive range, MIN <= MAX, e.g. --range 170 180"
+    )
+    target_value.add_argument("--unset", action="store_true", help="remove the target (unset is not 0)")
+    target_set.add_argument("--json", action="store_true", help="print all targets as JSON")
+    target_show = target_commands.add_parser("show", help="Show the configured daily targets")
+    target_show.add_argument("--json", action="store_true", help="print as JSON")
+    status = nutrition_commands.add_parser(
+        "status", help="Logged intake for a date compared with the configured daily targets"
+    )
+    status.add_argument("--date", dest="as_of", metavar="YYYY-MM-DD", help="date (default: today on this computer)")
+    status.add_argument("--json", action="store_true", help="print as JSON with exact decimal strings")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -708,8 +746,28 @@ def _nutrition(args: argparse.Namespace) -> int:
             intake = ShowDailyIntake(meals).execute(day, zone, timezone_name=offset_name(zone, day))
             print(render_daily_intake_json(intake) if args.json else render_daily_intake(intake))
             return 0
+        targets = JsonNutritionTargetRepository(paths.nutrition_targets_path)
+        if args.nutrition_command == "target" and args.target_command == "set":
+            nutrient = _TARGET_NUTRIENTS[args.nutrient]
+            stored = SetNutritionTarget(targets).execute(nutrient, _target(args))
+            if args.json:
+                print(render_targets_json(stored))
+            else:
+                state = "unset" if stored.get(nutrient) is None else "set"
+                print(f"{args.nutrient} target {state}.\n{render_targets(stored)}")
+            return 0
+        if args.nutrition_command == "target" and args.target_command == "show":
+            configured = ShowNutritionTargets(targets).execute()
+            print(render_targets_json(configured) if args.json else render_targets(configured))
+            return 0
+        if args.nutrition_command == "status":
+            day = _nutrition_date(args.as_of)
+            zone = _local_timezone(day)
+            status = ShowDailyNutritionStatus(meals, targets).execute(day, zone, timezone_name=offset_name(zone, day))
+            print(render_nutrition_status_json(status) if args.json else render_nutrition_status(status))
+            return 0
         return 2
-    except (ConfigurationError, NutritionLoggingError) as exc:
+    except (ConfigurationError, NutritionLoggingError, NutritionTargetError) as exc:
         print(f"오류: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
@@ -782,6 +840,22 @@ def _new_food(args: argparse.Namespace) -> NewFood:
         source_reference=args.source_ref,
         aliases=tuple(args.alias),
     )
+
+
+def _target(args: argparse.Namespace) -> NutrientTarget | None:
+    if args.unset:
+        return None
+    if args.range is not None:
+        minimum_text, maximum_text = args.range
+        return RangeTarget(_target_value(minimum_text, "--range MIN"), _target_value(maximum_text, "--range MAX"))
+    return ExactTarget(_target_value(args.exact, "--exact"))
+
+
+def _target_value(text: str, what: str) -> Decimal:
+    value = _decimal_argument(text, what)
+    if value == 0:
+        raise NutritionTargetError(f"{what} must be greater than 0 (to remove a target use --unset)")
+    return value
 
 
 def _meal_entry(index: int, raw: list[str]) -> MealEntryItem:

@@ -28,6 +28,11 @@ class AppPaths:
     def inbody_raw_dir(self) -> Path:
         return self.root / "raw" / "inbody" / "samsung_health"
 
+    @property
+    def nutrition_targets_path(self) -> Path:
+        # Created only when a target is first set (not by ensure_directories).
+        return self.root / "config" / "nutrition_targets.json"
+
     @classmethod
     def from_environment(cls) -> AppPaths:
         override = os.environ.get("MUSCLE50_HOME")

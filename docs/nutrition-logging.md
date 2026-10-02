@@ -4,10 +4,11 @@ Nutrition Logging turns Nutrition Core into a usable intake log: a small persona
 catalog, structured meal entry, and per-meal / daily consumed totals for kcal, protein,
 carbohydrate and fat.
 
-**Intake only.** Not implemented yet:
+**Intake only.** Explicit daily targets and the comparison with intake (`muscle50 nutrition
+target`, `muscle50 nutrition status`) are a separate layer on top: see `nutrition-targets.md`.
+Not implemented yet:
 
-- nutrition targets (protein per kg, calorie targets, training/swim/rest day targets),
-  remaining amounts;
+- calculated targets (protein per kg, calorie targets, training/swim/rest day targets);
 - menu or pre/post-workout meal recommendations;
 - free-text meal parsing (`"아침: 닭가슴살 200g, 계란 2개..."`). The `MealParser` port stays
   unimplemented; input is structured CLI flags only.
@@ -126,7 +127,7 @@ Text output (synthetic example values):
 
 ```text
 Nutrition intake 2026-10-02 (UTC+09:00)
-Consumed intake only. Nutrition targets and remaining amounts are not implemented.
+Consumed intake only. Compare with targets: muscle50 nutrition status
 
 [breakfast] 2026-10-02-breakfast-1 (2026-10-02, time not recorded)
   1. 닭가슴살 (chicken-breast) 200 g: kcal 220 | P 36 g | C 2 g | F 6 g
@@ -195,5 +196,5 @@ only.
 - Without `--time` a meal is stored at local 00:00; `--time 00:00` is displayed the same way.
 - The day boundary uses this computer's current UTC offset rules; meals logged under a
   different offset are still found by their absolute time.
-- No targets, remaining amounts, recommendations, weekly analytics, parser, Telegram,
-  external databases.
+- No recommendations, weekly analytics, parser, Telegram, external databases. Targets and
+  remaining amounts are in `muscle50 nutrition status` (`nutrition-targets.md`), not in `day`.

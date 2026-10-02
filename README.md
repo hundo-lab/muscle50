@@ -38,7 +38,8 @@ muscle50 garmin latest
 ├─ auth\garmin\                 # Garmin token
 ├─ raw\garmin\activities\      # initial RAW와 content-addressed refresh snapshots
 ├─ raw\garmin\recovery\        # 날짜별 immutable recovery snapshot history
-└─ db\muscle50.sqlite3          # normalized activity/recovery, nutrition, correction
+├─ db\muscle50.sqlite3          # normalized activity/recovery, nutrition, correction
+└─ config\nutrition_targets.json # nutrition 목표 (처음 설정할 때 생성)
 ```
 
 `MUSCLE50_HOME` 환경 변수로 데이터 위치를 바꿀 수 있지만 Git worktree 내부 경로는 안전을
@@ -149,8 +150,8 @@ muscle50 recommend --date 2026-09-24 --focus shoulders   # 오늘 할 focus 직�
 ## Nutrition logging (MVP)
 
 개인 음식 catalog에 직접 입력한 영양 정보(라벨/본인 입력)로 식사를 기록하고, 식사별·하루 섭취 kcal/단백질/탄수화물/
-지방을 계산합니다. 외부 DB 조회나 이름 기반 추정은 하지 않습니다. 목표/남은 양, 메뉴 추천, 자유 문장 파싱은 아직
-없습니다.
+지방을 계산합니다. 외부 DB 조회나 이름 기반 추정은 하지 않습니다. 메뉴 추천, 자유 문장 파싱은 아직 없습니다(목표와
+남은 양은 아래 Nutrition targets).
 
 ```powershell
 # <...>에는 포장 라벨 등 본인이 가진 값을 넣습니다(예시 값 없음). 모르는 값은 unknown.
@@ -166,6 +167,25 @@ muscle50 nutrition day                      # 오늘 섭취량 (--date YYYY-MM-D
 
 `--kcal/--protein/--carbs/--fat`는 모두 필수이며 모르는 값은 `unknown`으로 남깁니다(0으로 채우지 않음). 단위는
 변환하지 않습니다(pack으로 등록한 음식을 g으로 기록할 수 없음). 수정/삭제는 아직 없습니다. 상세: `docs/nutrition-logging.md`.
+
+## Nutrition targets + daily status (v1)
+
+하루 목표를 영양소별로 직접 정하고(정확한 값 / 범위 / 없음), 그 날짜에 기록한 섭취량과 비교합니다. 목표를 계산하거나
+추정하지 않습니다. 목표는 `%LOCALAPPDATA%\muscle50\config\nutrition_targets.json`에 저장됩니다(DB migration 없음).
+
+```powershell
+# 예시 값입니다. 본인 목표를 넣으세요.
+muscle50 nutrition target set protein --range 170 180     # 범위(양 끝 포함)
+muscle50 nutrition target set fat --exact 80              # 정확한 값
+muscle50 nutrition target set kcal --unset                # 목표 없음 (0이 아님)
+muscle50 nutrition target show                            # --json 가능
+muscle50 nutrition status                                 # 오늘 섭취 vs 목표 (--date YYYY-MM-DD, --json)
+```
+
+어느 식사 item에 해당 영양소 값이 없으면(`unknown`) 그 영양소의 총량과 남은 양은 모른다고 표시하고(0으로 계산하지 않음),
+아는 item 합계와 값이 없는 item을 보여 줍니다. 아는 item 합계만으로 이미 목표/범위 상한을 넘으면 "above"만 확정합니다.
+목표 기록은 하나뿐이라 과거 날짜도 현재 목표와 비교합니다. `muscle50 recommend`와 `muscle50 daily`는 아직 영양 목표/섭취를
+반영하지 않습니다. 상세: `docs/nutrition-targets.md`.
 
 ## 개발 검증
 

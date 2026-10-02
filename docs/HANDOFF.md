@@ -2,7 +2,66 @@
 
 Last updated: 2026-10-02
 
-## Current task: Nutrition Logging MVP (2026-10-02)
+## Current task: Nutrition Targets + Daily Nutrition Status v1 (2026-10-02)
+
+Paseo worktree `nutrition-targets`(branch `feature/nutrition-targets`, base `7f4a4ef` = local main = local origin/main ref).
+**Feature commit 완료. main merge/rebase/push 안 함.** 상세 규칙·JSON 계약: `docs/nutrition-targets.md`.
+
+### What was attempted / completed
+
+- Audit: Nutrition Core aggregate(`totals`/`known_subtotals`/`incomplete_fields`/`estimated_fields`, 빈 날 = 전부 incomplete),
+  `ShowDailyIntake`/`ItemIntake.missing_fields`, migration 003(목표용 table 없음), 설정 관례(`TrainingGoals`는 code default,
+  `AppPaths` 아래 local data). **Migration 불필요**: 목표는 fact history가 아닌 작은 사용자 설정 → `<home>\config\
+  nutrition_targets.json`(schema_version 1, decimal 문자열, 원자적 write, strict read, 읽기는 파일 생성 안 함).
+- Domain `ExactTarget`/`RangeTarget`/`NutritionTargets`(unset = None, 0 거부), `evaluate_nutrient`(aggregate 재사용, 재집계
+  없음). Application `SetNutritionTarget`/`ShowNutritionTargets`/`ShowDailyNutritionStatus`(missing item provenance).
+  Presentation text/JSON. CLI `nutrition target set|show`, `nutrition status`.
+- 불완전 데이터: consumed/remaining/excess null, known subtotal + missing items 표시, known > 상한일 때만 `above_*` 확정.
+- 기존 출력 변경은 `nutrition day` text scope 문장 1줄("Consumed intake only. Compare with targets: muscle50 nutrition
+  status")과 `nutrition` help 문구뿐(day JSON 불변, `scope: intake_only` 유지).
+
+### Exact commands
+
+```powershell
+uv run muscle50 nutrition target set protein --range 170 180   # 예시 값
+uv run muscle50 nutrition target set fat --exact 80
+uv run muscle50 nutrition target set kcal --unset
+uv run muscle50 nutrition target show [--json]
+uv run muscle50 nutrition status [--date D] [--json]
+```
+
+### Files changed
+
+신규: `src/muscle50/domain/nutrition_targets.py`, `src/muscle50/application/nutrition_targets.py`,
+`src/muscle50/infrastructure/nutrition_target_store.py`, `tests/test_nutrition_targets.py`, `tests/test_nutrition_target_store.py`,
+`tests/test_nutrition_target_cli.py`, `docs/nutrition-targets.md`. 수정: `src/muscle50/cli.py`, `src/muscle50/config.py`
+(`nutrition_targets_path`, `ensure_directories`는 불변), `src/muscle50/presentation/nutrition_terminal.py`,
+`tests/test_nutrition_cli.py`(scope 문장), `README.md`, `docs/nutrition-logging.md`, `docs/nutrition-core.md`,
+`docs/CURRENT_STATE.md`, 이 파일.
+
+### Checks run
+
+- `uv run --extra dev pytest` 787 passed, `ruff check .`, `mypy src tests`(109 files), `git diff --check` 통과. `ruff format`은
+  새/수정한 파일에만 적용, 모든 파일 LF.
+- CLI acceptance(합성 값, 임시 home `C:\temp\muscle50-evidence-20261002-nutrition-targets\acceptance-home`): exact/range 설정,
+  0/역범위 거부, 합성 음식 3개(fat unknown 1개) + 식사 2개, status text/JSON(below, within range, indeterminate, known
+  subtotal로 확정된 above_target, 식사 없는 날), JSON 2회 sha256 동일. 출력 `acceptance.txt`.
+- Production fingerprint before = after(`before.json`/`after.json`, 같은 폴더). Production에서 nutrition 명령 실행 안 함.
+
+### Known failures or risks
+
+- 목표 history 없음: 목표를 바꾸면 과거 날짜 status도 새 목표로 비교된다(meal data는 불변).
+- 식사 0개인 날은 `no_intake_logged`; "먹지 않음" 기록 방법 없음.
+- Text는 0.1 반올림(0 < gap < 0.05는 `<0.1`로 표시), 정확한 값은 `--json`.
+- Recommend/daily는 nutrition-aware 아님. 식사/음식 수정·삭제, 단위 변환은 여전히 없음.
+
+### Recommended next action
+
+1. 사용자 검토 후 `feature/nutrition-targets`를 main으로 fast-forward 통합(별도 승인), push는 별도 승인.
+2. 사용자 본인 목표를 production에서 직접 설정(`nutrition target set ...`) — agent가 대신 설정하지 않는다.
+3. 후속 후보: 식사 정정(void/replacement) 설계, 목표 history(effective date), 요일/운동일 목표, recommend 연동.
+
+## Previous task: Nutrition Logging MVP (2026-10-02)
 
 Paseo worktree `nutrition-logging`(branch `feature/nutrition-logging`, base `8845b41` = local main = origin/main).
 **Feature commit 완료. main merge/rebase/push 안 함.** 상세 사용법·규칙: `docs/nutrition-logging.md`.
