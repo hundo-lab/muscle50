@@ -32,15 +32,18 @@ New code: `application/nutrition_logging.py` (use cases `AddFood`, `ListFoods`, 
 
 ### Snapshot at log time
 
-When a meal is logged, for each item the food's preferred active fact for the logged unit
-(per nutrient, via `select_preferred_fact`) is copied onto the meal item as an item-owned fact,
-as `nutrition-core.md` intends ("snapshotting the facts used for the historical meal"):
+When a meal is logged, for each item the food's fact history for the logged unit is copied
+onto the meal item as item-owned facts, as `nutrition-core.md` intends ("snapshotting the
+facts used for the historical meal"):
 
 - numbers, basis, estimate range and provenance (source type, accuracy, reference,
   created_at) are copied verbatim;
 - the copy's `fact_id` is `<meal_id>:<sequence>:<catalog fact_id>`, so each item names the
   exact catalog fact it came from, and `food_profile_id` names the food;
-- `supersedes_fact_id` is not copied (supersession must stay within one owner).
+- `supersedes_fact_id` is remapped to the copy of the superseded fact. Supersession is
+  decided per nutrient (a protein-only correction supersedes the old fact for protein only),
+  so copying only the current winners would let the item pick differently from the catalog.
+  With the links kept, the item's per-nutrient selection is the catalog's selection.
 
 A later catalog correction (a superseding fact appended to the food) therefore does not
 change meals already logged; new meals use the corrected fact.

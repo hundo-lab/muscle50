@@ -11,7 +11,8 @@ Paseo worktree `nutrition-logging`(branch `feature/nutrition-logging`, base `884
 
 - Nutrition Core audit: `FoodNutritionProfile`/`NutritionFact`/`Meal`/`MealItem`, unit-equality scaling, `aggregate_meal`/
   `aggregate_day`, repository create-only `save`, append-only fact trigger, `003_nutrition.sql`. 새 model/migration 없이 구현.
-- `application/nutrition_logging.py`: `AddFood`, `ListFoods`, `ShowFood`, `LogMeal`(catalog fact snapshot, unit 불일치 거부,
+- `application/nutrition_logging.py`: `AddFood`, `ListFoods`, `ShowFood`, `LogMeal`(logged unit의 catalog fact history를
+  supersession link 재매핑과 함께 snapshot, unit 불일치 거부,
   같은 날짜·meal type 중복은 `--additional` 필요), `ShowDailyIntake`(item별 missing nutrient 계산 포함).
 - `presentation/nutrition_terminal.py`: text(표시용 0.1 반올림, incomplete/estimated 명시, ASCII + 음식 이름)와 JSON(exact
   Decimal 문자열, 고정 순서).
@@ -41,7 +42,7 @@ nutrition_repository.py`(`list_all`), `tests/test_nutrition_logging.py`(신규),
 
 ### Checks run
 
-- `uv run --extra dev pytest` 681 passed, `ruff check .`, `mypy src tests`(103 files), `git diff --check` 통과. `ruff format`은
+- `uv run --extra dev pytest` 682 passed, `ruff check .`, `mypy src tests`(103 files), `git diff --check` 통과. `ruff format`은
   새 파일과 `cli.py`에만 적용(`nutrition_repository.py`는 base부터 미포맷이라 건드리지 않음). 모든 파일 LF.
 - Production DB/RAW fingerprint before = after(`C:\temp\muscle50-evidence-20261002-nutrition-logging\before.json`/`after.json`).
   Production에서 nutrition 명령을 실행하지 않았다.
@@ -51,8 +52,12 @@ nutrition_repository.py`(`list_all`), `tests/test_nutrition_logging.py`(신규),
 - 수정/삭제 없음(append-only fact + RESTRICT FK). 잘못 기록한 식사는 현재 CLI로 고칠 수 없다 — 중복 기록 guard만 있다.
 - `--time` 없는 식사는 local 00:00로 저장되어 `--time 00:00`과 구분되지 않는다.
 - 실제 production catalog는 비어 있다(사용자가 라벨 값으로 직접 입력해야 함). 실제 음식 값은 repo에 넣지 않았다.
-- `docs/CURRENT_STATE.md`의 이전 기록 "origin/main은 `c06a36c` 그대로"는 현재 git 상태(origin/main = `8845b41`)와 다르다 —
-  이후 push된 것으로 보이며 이번 작업에서 이력 문장은 고치지 않았다.
+- `docs/CURRENT_STATE.md`의 Daily orchestration "origin/main은 `c06a36c` 그대로" 문장은 stale이었다 — 2026-10-02
+  `git ls-remote origin refs/heads/main` = `8845b41`로 확인해 정정했다.
+- Snapshot은 처음에 nutrient별 winner fact만 supersession 없이 복사했는데, 일부 nutrient만 덮는 catalog 정정(예:
+  protein-only user fact가 label fact를 supersede)에서 item 선택이 catalog와 달라질 수 있었다(CLI로는 도달 불가). 같은 unit의
+  fact history 전체를 link 재매핑과 함께 복사하도록 follow-up commit에서 수정했고 회귀 테스트
+  (`test_partial_correction_selects_per_nutrient_exactly_as_the_catalog_does`, 수정 전 코드에서 실패 확인)를 추가했다.
 
 ### Recommended next action
 

@@ -1,8 +1,8 @@
 """Nutrition Logging MVP: a personal food catalog, structured meal entry and daily intake.
 
 Every nutrient comes from a fact the user supplied for a catalog food. Logging a meal
-snapshots the food's preferred facts for the logged unit onto the meal item (provenance
-copied verbatim), so a later catalog correction never rewrites a historical meal. Units are
+snapshots the food's fact history for the logged unit onto the meal item (provenance and
+supersession copied verbatim), so a later catalog correction never rewrites a historical meal. Units are
 never converted: a food declared per 100 g cannot be logged in packs. Missing nutrients stay
 missing; totals are reported only when every item contributes the nutrient.
 
@@ -233,29 +233,32 @@ class LogMeal:
             raise NutritionLoggingError(
                 f"item {sequence}: no food with id {entry.food_id!r} (see `muscle50 nutrition food list`)"
             )
-        selected: dict[str, NutritionFact] = {}
-        for nutrient in NutrientField:
-            fact = profile.preferred_fact(entry.unit, nutrient)
-            if fact is not None:
-                selected.setdefault(fact.fact_id, fact)
-        if not selected:
+        if all(profile.preferred_fact(entry.unit, nutrient) is None for nutrient in NutrientField):
             units = sorted({fact.basis_unit.value for fact in profile.facts})
             raise NutritionLoggingError(
                 f"item {sequence}: food {profile.profile_id!r} has nutrition per {', '.join(units) or 'nothing'}, "
                 f"not per {entry.unit.value}; units are never converted. Nothing was changed."
             )
-        # The copy keeps the catalog fact's numbers and provenance verbatim; its ID names the
-        # source fact. It cannot keep supersession links because those must stay within one owner.
+
+        # Copy the whole same-unit fact history, not only today's winners: supersession is decided
+        # per nutrient, so the item must keep the links to select exactly what the catalog selects.
+        # Numbers and provenance are verbatim; each copy's ID names its catalog fact. Supersession
+        # never crosses units, so every link target is part of this copy.
+        def snapshot_id(fact_id: str) -> str:
+            return f"{meal_id}:{sequence}:{fact_id}"
+
         snapshots = tuple(
             NutritionFact(
-                fact_id=f"{meal_id}:{sequence}:{fact.fact_id}",
+                fact_id=snapshot_id(fact.fact_id),
                 values=fact.values,
                 basis_quantity=fact.basis_quantity,
                 basis_unit=fact.basis_unit,
                 provenance=fact.provenance,
                 value_range=fact.value_range,
+                supersedes_fact_id=snapshot_id(fact.supersedes_fact_id) if fact.supersedes_fact_id else None,
             )
-            for fact in selected.values()
+            for fact in profile.facts
+            if fact.basis_unit is entry.unit
         )
         try:
             return MealItem(

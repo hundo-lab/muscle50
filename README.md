@@ -153,11 +153,14 @@ muscle50 recommend --date 2026-09-24 --focus shoulders   # 오늘 할 focus 직�
 없습니다.
 
 ```powershell
+# <...>에는 포장 라벨 등 본인이 가진 값을 넣습니다(예시 값 없음). 모르는 값은 unknown.
 muscle50 nutrition food add --id chicken-breast --name 닭가슴살 --per 100 g `
-  --kcal 110 --protein 23 --carbs 0 --fat 1.5 --source nutrition_label --accuracy exact
+  --kcal <kcal> --protein <g> --carbs <g> --fat <g|unknown> --source nutrition_label --accuracy exact
+muscle50 nutrition food add --id egg --name 계란 --per 1 count `
+  --kcal <kcal> --protein <g> --carbs <g> --fat <g|unknown> --source user_provided --accuracy estimated
 muscle50 nutrition food list
 muscle50 nutrition food show chicken-breast
-muscle50 nutrition log --meal breakfast --item chicken-breast 200 g --item egg 2 count --item hetbahn 1 pack
+muscle50 nutrition log --meal breakfast --item chicken-breast 200 g --item egg 2 count
 muscle50 nutrition day                      # 오늘 섭취량 (--date YYYY-MM-DD, --json)
 ```
 

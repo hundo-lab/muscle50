@@ -493,8 +493,50 @@ def test_later_catalog_correction_does_not_rewrite_a_logged_meal(
     breakfast, lunch = _day(meals).meals
 
     assert breakfast.summary.nutrition.totals.protein_g == Decimal("36")
+    assert [fact.fact_id for fact in breakfast.items[0].item.nutrition_facts] == [
+        "2026-10-02-breakfast-1:1:food:chicken-breast:1"
+    ]
     assert lunch.summary.nutrition.totals.protein_g == Decimal("40")
-    assert lunch.items[0].item.nutrition_facts[0].fact_id == "2026-10-02-lunch-1:1:food:chicken-breast:2"
+    lunch_facts = {fact.fact_id: fact for fact in lunch.items[0].item.nutrition_facts}
+    assert lunch_facts["2026-10-02-lunch-1:1:food:chicken-breast:2"].supersedes_fact_id == (
+        "2026-10-02-lunch-1:1:food:chicken-breast:1"
+    )
+    lunch_protein = lunch.items[0].calculated.get(NutrientField.PROTEIN_G) if lunch.items[0].calculated else None
+    assert lunch_protein is not None
+    assert lunch_protein.fact_id == "2026-10-02-lunch-1:1:food:chicken-breast:2"
+
+
+def test_partial_correction_selects_per_nutrient_exactly_as_the_catalog_does(
+    foods: SqliteFoodNutritionRepository, meals: SqliteMealRepository
+) -> None:
+    # A protein-only user correction supersedes the label fact for protein only; the label keeps
+    # winning the other nutrients. The logged item must make the same per-nutrient choice.
+    _catalog(foods)
+    foods.append_nutrition_fact(
+        "chicken-breast",
+        NutritionFact(
+            fact_id="food:chicken-breast:2",
+            values=_values(None, "25", None, None),
+            basis_quantity=Decimal("100"),
+            basis_unit=QuantityUnit.GRAM,
+            provenance=NutritionProvenance(
+                NutritionSourceType.USER_PROVIDED, Accuracy.EXACT, "synthetic:protein-fix", CREATED_AT
+            ),
+            supersedes_fact_id="food:chicken-breast:1",
+        ),
+    )
+    _log(meals, foods, MealType.LUNCH, ("chicken-breast", "200", QuantityUnit.GRAM))
+    profile = ShowFood(foods).execute("chicken-breast")
+
+    (item,) = _day(meals).meals[0].items
+
+    assert item.calculated is not None
+    assert item.calculated.values == _values("220", "50", "2", "6")
+    for nutrient in NutrientField:
+        catalog_fact = profile.preferred_fact(QuantityUnit.GRAM, nutrient)
+        selection = item.calculated.get(nutrient)
+        assert catalog_fact is not None and selection is not None
+        assert selection.fact_id == f"2026-10-02-lunch-1:1:{catalog_fact.fact_id}"
 
 
 # --- aggregation and missing data ---------------------------------------------------------

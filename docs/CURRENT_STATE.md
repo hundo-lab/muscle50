@@ -123,7 +123,7 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   `TRICEPS_EXTENSION/BENCH_DIP`는 항상 숫자 없음 + `smallest_available_direction_unknown` + assistance/추가 저항 양방향
   안내. Regression, recovery hold/reduce, 48 h rest rule은 기존대로 숫자 `maintain`으로 덮는다. 15%는 사용자 history로
   보정한 숫자 목표 신뢰 기준(생리학적 최적값 아님). 상세는 `docs/training-recommendation.md` "증량 step".
-- (`c3f5842`/`8b08773`, 2026-10-02 local main으로 fast-forward 통합, origin push 안 함; production live 검증 완료 —
+- (`c3f5842`/`8b08773`, 2026-10-02 local main으로 fast-forward 통합, 이후 origin에 포함(`8845b41`, ls-remote 확인); production live 검증 완료 —
   아래 Verification) Daily orchestration
   `muscle50 daily [--date D] [--focus F] [--avoid M ...] [--json]`과 `muscle50 daily --after-workout [--date D] [--json]`.
   `application/daily_sync.py`의 `RunDailySync`가 기존 use case만 조합한다: Garmin 로그인 1회 → `IngestGarminActivityRange`
@@ -144,8 +144,9 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   Food = 기존 `FoodNutritionProfile` + fact 1개(`food:<id>:1`, 사용자/라벨이 준 값, source/accuracy/reference 필수 보존).
   `--kcal/--protein/--carbs/--fat` 모두 필수, 모르면 `unknown`(None, 0 아님). Source는 `nutrition_label`/`user_provided`/
   `known_product`/`food_database`만(추정 source 거부). 중복 food ID와 이미 쓰인 name/alias(대소문자 무시)는 거부.
-  식사 기록 시 음식의 unit별 preferred fact를 meal item 소유 fact로 snapshot(`<meal_id>:<seq>:<catalog fact_id>`, provenance
-  그대로, supersession 미복사) → 이후 catalog 수정이 과거 식사를 바꾸지 않는다. 단위 변환 없음(맞는 unit fact가 없으면
+  식사 기록 시 음식의 logged unit fact history 전체를 meal item 소유 fact로 snapshot(`<meal_id>:<seq>:<catalog fact_id>`,
+  provenance 그대로, supersession link도 snapshot ID로 재매핑 — nutrient별 supersession이라 winner만 복사하면 선택이 달라질
+  수 있음) → item의 nutrient별 선택 = catalog 선택, 이후 catalog 수정이 과거 식사를 바꾸지 않는다. 단위 변환 없음(맞는 unit fact가 없으면
   거부). 같은 날짜·같은 meal type 두 번째 기록은 `--additional` 없으면 거부(삭제 경로가 없어 이중 기록 방지). `--time`
   없으면 local 00:00 저장, 기본 날짜는 이 컴퓨터 오늘, 하루 경계는 이 컴퓨터 UTC offset(fixed offset, tzdata 불필요).
   집계는 `aggregate_meal`/`aggregate_day` 그대로: 한 item이라도 값이 없으면 해당 nutrient total은 incomplete(known
@@ -155,9 +156,10 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 ## Pending merge
 
 - `feature/nutrition-logging`(Nutrition Logging MVP)은 commit만 했고 main merge/push 안 함. Base `8845b41`
-  (= local main = origin/main, 2026-10-02 `git rev-parse` 확인).
+  (= local main = origin/main, 2026-10-02 `git rev-parse`와 `git ls-remote` 확인).
 - Daily orchestration(`c3f5842`, `8b08773`)은 2026-10-02에 local main으로 fast-forward(`c06a36c` → `8b08773`, merge
-  commit/rebase/squash 없음)됐다. origin/main은 `c06a36c` 그대로(push는 별도 승인). Branch `feature/daily-sync`와 Paseo
+  commit/rebase/squash 없음)됐다. 당시 origin/main은 `c06a36c`였으나 이후 push되어 2026-10-02 `git ls-remote origin
+  refs/heads/main` = `8845b41`(= local main)로 확인했다. Branch `feature/daily-sync`와 Paseo
   worktree `daily-sync`는 유지한다.
 - Progression Hardening v1(`13d5ed2`)은 2026-10-02에 main으로 fast-forward(`4f26ec2` → `13d5ed2`, merge commit/rebase/
   cherry-pick 없음)되고 origin에 일반 push됐다. main = origin/main = GitHub main `13d5ed2`(`git ls-remote` 확인).
@@ -205,7 +207,7 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 
 2026-10-02 Nutrition Logging MVP(`feature/nutrition-logging`, base `8845b41`):
 
-- `uv run --extra dev pytest` 681 passed(신규 `tests/test_nutrition_logging.py` 41, `tests/test_nutrition_cli.py` 25,
+- `uv run --extra dev pytest` 682 passed(신규 `tests/test_nutrition_logging.py` 42, `tests/test_nutrition_cli.py` 25,
   `tests/test_nutrition_repository.py` +1), `ruff check .`, `mypy src tests`(103 files), `git diff --check` 통과.
 - 테스트는 임시 DB/`MUSCLE50_HOME`(`tmp_path`)만 사용. Production에 nutrition 명령을 실행하지 않았다(read 명령도
   `_connect`가 WAL/디렉터리를 만들 수 있어 금지). Production DB/WAL/SHM sha256·size·mtime, 28 table, RAW 974 files
