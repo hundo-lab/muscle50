@@ -323,7 +323,8 @@ class LogMeal:
             )
         meal_id = self._next_meal_id(day, meal_type)
         meal_items = tuple(
-            self._snapshot_item(meal_id, sequence, entry) for sequence, entry in enumerate(items, start=1)
+            snapshot_item(self._foods, meal_id, sequence, entry, label=f"item {sequence}")
+            for sequence, entry in enumerate(items, start=1)
         )
         # Without --time the meal is dated, not timed: it is stored at local 00:00 of the day.
         eaten_at = datetime.combine(day, eaten_time or time(0), tzinfo=timezone)
@@ -349,51 +350,139 @@ class LogMeal:
             number += 1
         return f"{day.isoformat()}-{meal_type.value}-{number}"
 
-    def _snapshot_item(self, meal_id: str, sequence: int, entry: MealEntryItem) -> MealItem:
-        profile = self._foods.get(entry.food_id)
-        if profile is None:
-            raise NutritionLoggingError(
-                f"item {sequence}: no food with id {entry.food_id!r} (see `muscle50 nutrition food list`)"
-            )
-        if all(profile.preferred_fact(entry.unit, nutrient) is None for nutrient in NutrientField):
-            units = sorted({fact.basis_unit.value for fact in profile.facts})
-            raise NutritionLoggingError(
-                f"item {sequence}: food {profile.profile_id!r} has nutrition per {', '.join(units) or 'nothing'}, "
-                f"not per {entry.unit.value}; units are never converted. Nothing was changed."
-            )
 
-        # Copy the whole same-unit fact history, not only today's winners: supersession is decided
-        # per nutrient, so the item must keep the links to select exactly what the catalog selects.
-        # Numbers and provenance are verbatim; each copy's ID names its catalog fact. Supersession
-        # never crosses units, so every link target is part of this copy.
-        def snapshot_id(fact_id: str) -> str:
-            return f"{meal_id}:{sequence}:{fact_id}"
+class ShowMeal:
+    def __init__(self, meals: MealRepository) -> None:
+        self._meals = meals
 
-        snapshots = tuple(
-            NutritionFact(
-                fact_id=snapshot_id(fact.fact_id),
-                values=fact.values,
-                basis_quantity=fact.basis_quantity,
-                basis_unit=fact.basis_unit,
-                provenance=fact.provenance,
-                value_range=fact.value_range,
-                supersedes_fact_id=snapshot_id(fact.supersedes_fact_id) if fact.supersedes_fact_id else None,
-            )
-            for fact in profile.facts
-            if fact.basis_unit is entry.unit
-        )
+    def execute(self, meal_id: str) -> MealIntake:
+        return meal_intake(_existing_meal(self._meals, meal_id))
+
+
+class AddMealItems:
+    """Add catalog foods to an already logged meal; the meal ID and its other items are unchanged.
+
+    Each new item snapshots the food's facts exactly as `LogMeal` does, at the time it is added:
+    an item added after a new fact version uses that version, while items already in the meal
+    keep their own snapshots. All items are added in one transaction, or none is.
+    """
+
+    def __init__(self, meals: MealRepository, foods: FoodNutritionRepository) -> None:
+        self._meals = meals
+        self._foods = foods
+
+    def execute(self, meal_id: str, items: tuple[MealEntryItem, ...]) -> MealIntake:
+        if not items:
+            raise NutritionLoggingError("give at least one --item to add. Nothing was changed.")
+        _existing_meal(self._meals, meal_id)
+        first = self._meals.next_item_sequence(meal_id)
         try:
-            return MealItem(
-                meal_id=meal_id,
-                sequence=sequence,
-                food_name=profile.name,
-                food_profile_id=profile.profile_id,
-                quantity=entry.quantity,
-                quantity_unit=entry.unit,
-                nutrition_facts=snapshots,
+            new_items = tuple(
+                snapshot_item(self._foods, meal_id, first + index - 1, entry, label=f"--item {index}")
+                for index, entry in enumerate(items, start=1)
             )
+            meal = self._meals.add_items(meal_id, new_items)
         except ValueError as exc:
-            raise NutritionLoggingError(f"item {sequence}: {exc}") from exc
+            raise _nothing_changed(exc) from exc
+        return meal_intake(meal)
+
+
+class RemoveMealItem:
+    """Remove one item from a logged meal; it stays stored for audit but no longer counts anywhere.
+
+    The meal's last item cannot be removed: like `LogMeal`, a meal always has at least one item.
+    """
+
+    def __init__(self, meals: MealRepository, clock: Callable[[], datetime]) -> None:
+        self._meals = meals
+        self._clock = clock
+
+    def execute(self, meal_id: str, item_number: int) -> MealIntake:
+        meal = _existing_meal(self._meals, meal_id)
+        _require_item(meal, item_number)
+        if len(meal.items) == 1:
+            raise NutritionLoggingError(
+                f"item {item_number} is the only item of meal {meal_id}; a meal cannot be left empty. "
+                "Use `muscle50 nutrition meal replace-item` to change it. Nothing was changed."
+            )
+        try:
+            stored = self._meals.remove_item(meal_id, item_number, self._clock())
+        except ValueError as exc:
+            raise _nothing_changed(exc) from exc
+        return meal_intake(stored)
+
+
+class ReplaceMealItem:
+    """Replace one item of a logged meal with a new catalog item, atomically.
+
+    The new item gets the next item number (numbers are never reused) and a fresh fact snapshot;
+    the old item is removed in the same transaction, so either both happen or nothing does.
+    """
+
+    def __init__(self, meals: MealRepository, foods: FoodNutritionRepository, clock: Callable[[], datetime]) -> None:
+        self._meals = meals
+        self._foods = foods
+        self._clock = clock
+
+    def execute(self, meal_id: str, item_number: int, entry: MealEntryItem) -> MealIntake:
+        meal = _existing_meal(self._meals, meal_id)
+        _require_item(meal, item_number)
+        try:
+            new_item = snapshot_item(
+                self._foods, meal_id, self._meals.next_item_sequence(meal_id), entry, label="--item"
+            )
+            stored = self._meals.replace_item(meal_id, item_number, new_item, self._clock())
+        except ValueError as exc:
+            raise _nothing_changed(exc) from exc
+        return meal_intake(stored)
+
+
+def snapshot_item(
+    foods: FoodNutritionRepository, meal_id: str, sequence: int, entry: MealEntryItem, *, label: str
+) -> MealItem:
+    """A meal item for `entry` carrying a snapshot of the food's current fact history in its unit."""
+    profile = foods.get(entry.food_id)
+    if profile is None:
+        raise NutritionLoggingError(f"{label}: no food with id {entry.food_id!r} (see `muscle50 nutrition food list`)")
+    if all(profile.preferred_fact(entry.unit, nutrient) is None for nutrient in NutrientField):
+        units = sorted({fact.basis_unit.value for fact in profile.facts})
+        raise NutritionLoggingError(
+            f"{label}: food {profile.profile_id!r} has nutrition per {', '.join(units) or 'nothing'}, "
+            f"not per {entry.unit.value}; units are never converted. Nothing was changed."
+        )
+
+    # Copy the whole same-unit fact history, not only today's winners: supersession is decided
+    # per nutrient, so the item must keep the links to select exactly what the catalog selects.
+    # Numbers and provenance are verbatim; each copy's ID names its catalog fact. Supersession
+    # never crosses units, so every link target is part of this copy.
+    def snapshot_id(fact_id: str) -> str:
+        return f"{meal_id}:{sequence}:{fact_id}"
+
+    snapshots = tuple(
+        NutritionFact(
+            fact_id=snapshot_id(fact.fact_id),
+            values=fact.values,
+            basis_quantity=fact.basis_quantity,
+            basis_unit=fact.basis_unit,
+            provenance=fact.provenance,
+            value_range=fact.value_range,
+            supersedes_fact_id=snapshot_id(fact.supersedes_fact_id) if fact.supersedes_fact_id else None,
+        )
+        for fact in profile.facts
+        if fact.basis_unit is entry.unit
+    )
+    try:
+        return MealItem(
+            meal_id=meal_id,
+            sequence=sequence,
+            food_name=profile.name,
+            food_profile_id=profile.profile_id,
+            quantity=entry.quantity,
+            quantity_unit=entry.unit,
+            nutrition_facts=snapshots,
+        )
+    except ValueError as exc:
+        raise NutritionLoggingError(f"{label}: {exc}") from exc
 
 
 class ShowDailyIntake:
@@ -435,6 +524,31 @@ def _check_catalog_fact(source_type: NutritionSourceType, values: NutritionValue
         raise NutritionLoggingError(f"source {source_type.value!r} cannot be entered into the food catalog")
     if not values.has_any_value:
         raise NutritionLoggingError("at least one of kcal/protein/carbohydrate/fat must be a number")
+
+
+def _existing_meal(meals: MealRepository, meal_id: str) -> Meal:
+    meal = meals.get(meal_id)
+    if meal is None:
+        raise NutritionLoggingError(
+            f"no meal with id {meal_id!r} (meal IDs are listed by `muscle50 nutrition day`). Nothing was changed."
+        )
+    return meal
+
+
+def _require_item(meal: Meal, item_number: int) -> None:
+    numbers = [item.sequence for item in meal.items]
+    if item_number not in numbers:
+        listed = ", ".join(str(number) for number in numbers)
+        raise NutritionLoggingError(
+            f"meal {meal.meal_id} has no item {item_number} (its items are {listed}). Nothing was changed."
+        )
+
+
+def _nothing_changed(exc: ValueError) -> NutritionLoggingError:
+    message = str(exc)
+    return NutritionLoggingError(
+        message if message.endswith("Nothing was changed.") else f"{message}. Nothing was changed."
+    )
 
 
 def _item_intake(item: MealItem) -> ItemIntake:

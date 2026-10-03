@@ -19,14 +19,18 @@ from muscle50.application.nutrition_logging import (
     CATALOG_SOURCE_TYPES,
     AddFood,
     AddFoodFact,
+    AddMealItems,
     ListFoods,
     LogMeal,
     MealEntryItem,
     NewFood,
     NewFoodFact,
     NutritionLoggingError,
+    RemoveMealItem,
+    ReplaceMealItem,
     ShowDailyIntake,
     ShowFood,
+    ShowMeal,
     offset_name,
 )
 from muscle50.application.nutrition_recommendation import BuildNutritionContext
@@ -75,12 +79,14 @@ from muscle50.infrastructure.sqlite.nutrition_repository import SqliteFoodNutrit
 from muscle50.presentation.nutrition_terminal import (
     render_daily_intake,
     render_daily_intake_json,
+    render_edited_meal,
     render_food,
     render_food_json,
     render_food_list,
     render_food_list_json,
     render_logged_meal,
     render_logged_meal_json,
+    render_meal,
     render_nutrition_status,
     render_nutrition_status_json,
     render_targets,
@@ -281,6 +287,47 @@ def _add_nutrition_parser(commands: argparse._SubParsersAction[argparse.Argument
         help="record another meal of the same type on the same date (otherwise refused to prevent double entry)",
     )
     log.add_argument("--json", action="store_true", help="print the recorded meal as JSON")
+    meal = nutrition_commands.add_parser(
+        "meal", help="Show or correct the items of a logged meal (the meal ID never changes)"
+    )
+    meal_commands = meal.add_subparsers(dest="meal_command", required=True)
+    meal_show = meal_commands.add_parser("show", help="Show one logged meal with its items and their fact versions")
+    meal_show.add_argument("meal_id", help="meal ID as printed by `nutrition log`/`nutrition day`")
+    meal_show.add_argument("--json", action="store_true", help="print as JSON with exact decimal strings")
+    add_item = meal_commands.add_parser(
+        "add-item",
+        help="Add catalog foods to a logged meal, with the foods' current nutrition facts (all or nothing)",
+    )
+    add_item.add_argument("meal_id", help="meal ID, e.g. 2026-10-02-breakfast-1")
+    add_item.add_argument(
+        "--item",
+        nargs=3,
+        action="append",
+        required=True,
+        metavar=("FOOD_ID", "QTY", "UNIT"),
+        help="one catalog food and the amount eaten, as in `nutrition log`; repeatable",
+    )
+    add_item.add_argument("--json", action="store_true", help="print the edited meal as JSON")
+    remove_item = meal_commands.add_parser(
+        "remove-item", help="Remove one item from a logged meal (the last item cannot be removed)"
+    )
+    remove_item.add_argument("meal_id", help="meal ID, e.g. 2026-10-02-breakfast-1")
+    _add_item_number_argument(remove_item, "item to remove")
+    remove_item.add_argument("--json", action="store_true", help="print the edited meal as JSON")
+    replace_item = meal_commands.add_parser(
+        "replace-item",
+        help="Replace one item of a logged meal with a new catalog item in one step (both happen or neither)",
+    )
+    replace_item.add_argument("meal_id", help="meal ID, e.g. 2026-10-02-breakfast-1")
+    _add_item_number_argument(replace_item, "item to replace")
+    replace_item.add_argument(
+        "--item",
+        nargs=3,
+        required=True,
+        metavar=("FOOD_ID", "QTY", "UNIT"),
+        help="the catalog food and amount that replace it, as in `nutrition log`",
+    )
+    replace_item.add_argument("--json", action="store_true", help="print the edited meal as JSON")
     day = nutrition_commands.add_parser("day", help="Meals, per-meal totals and daily consumed totals for a date")
     day.add_argument("--date", dest="as_of", metavar="YYYY-MM-DD", help="date (default: today on this computer)")
     day.add_argument("--json", action="store_true", help="print as JSON with exact decimal strings")
@@ -304,6 +351,16 @@ def _add_nutrition_parser(commands: argparse._SubParsersAction[argparse.Argument
     )
     status.add_argument("--date", dest="as_of", metavar="YYYY-MM-DD", help="date (default: today on this computer)")
     status.add_argument("--json", action="store_true", help="print as JSON with exact decimal strings")
+
+
+def _add_item_number_argument(parser: argparse.ArgumentParser, what: str) -> None:
+    parser.add_argument(
+        "--item-number",
+        required=True,
+        type=int,
+        metavar="N",
+        help=f"{what}: its number as listed by `nutrition meal show` / `nutrition day`",
+    )
 
 
 def _add_fact_arguments(parser: argparse.ArgumentParser, command: str) -> None:
@@ -785,6 +842,8 @@ def _nutrition(args: argparse.Namespace) -> int:
             )
             print(render_logged_meal_json(meal) if args.json else render_logged_meal(meal))
             return 0
+        if args.nutrition_command == "meal":
+            return _nutrition_meal(args, meals, foods)
         if args.nutrition_command == "day":
             day = _nutrition_date(args.as_of)
             zone = _local_timezone(day)
@@ -818,6 +877,34 @@ def _nutrition(args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         print("\n취소되었습니다.", file=sys.stderr)
         return 130
+
+
+def _nutrition_meal(args: argparse.Namespace, meals: SqliteMealRepository, foods: SqliteFoodNutritionRepository) -> int:
+    if args.meal_command == "show":
+        intake = ShowMeal(meals).execute(args.meal_id)
+        print(render_logged_meal_json(intake) if args.json else render_meal(intake))
+        return 0
+    if args.meal_command == "add-item":
+        entries = tuple(_meal_entry(index, raw) for index, raw in enumerate(args.item, start=1))
+        intake = AddMealItems(meals, foods).execute(args.meal_id, entries)
+        added = intake.meal.items[-len(entries) :]
+        word = "item" if len(added) == 1 else "items"
+        headline = f"Added {word} {', '.join(str(item.sequence) for item in added)} to meal {intake.meal.meal_id}."
+    elif args.meal_command == "remove-item":
+        intake = RemoveMealItem(meals, clock=lambda: datetime.now().astimezone()).execute(
+            args.meal_id, args.item_number
+        )
+        headline = f"Removed item {args.item_number} from meal {intake.meal.meal_id}."
+    elif args.meal_command == "replace-item":
+        intake = ReplaceMealItem(meals, foods, clock=lambda: datetime.now().astimezone()).execute(
+            args.meal_id, args.item_number, _meal_entry(1, args.item)
+        )
+        new_number = intake.meal.items[-1].sequence
+        headline = f"Replaced item {args.item_number} of meal {intake.meal.meal_id} with item {new_number}."
+    else:
+        return 2
+    print(render_logged_meal_json(intake) if args.json else render_edited_meal(intake, headline))
+    return 0
 
 
 def _nutrition_date(text: str | None) -> date:

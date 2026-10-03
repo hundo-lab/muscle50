@@ -50,6 +50,11 @@ class SqliteMealRepository:
     or fact state, because nutrition_facts rows must never be mutated or
     dropped. Use ``append_nutrition_fact`` to add facts to a saved meal.
 
+    Items of a saved meal are edited with ``add_items``, ``remove_item`` and ``replace_item``,
+    each one ``BEGIN IMMEDIATE`` transaction. A removed item is never deleted (its facts are
+    append-only and restrict deletion): a row in nutrition_meal_item_removals hides it from
+    every meal read, and its sequence number is never reused.
+
     Any item's ``food_profile_id`` must already exist in nutrition_food_profiles
     (insert the profile via SqliteFoodNutritionRepository first); otherwise
     ``save`` raises a raw ``sqlite3.IntegrityError`` from the foreign key.
@@ -88,30 +93,7 @@ class SqliteMealRepository:
                 ),
             )
             for item in meal.items:
-                connection.execute(
-                    """
-                    INSERT INTO nutrition_meal_items (
-                        meal_id, item_sequence, food_name, food_profile_id,
-                        quantity, quantity_unit, serving_description
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        item.meal_id,
-                        item.sequence,
-                        item.food_name,
-                        item.food_profile_id,
-                        decimal_to_text(item.quantity) if item.quantity is not None else None,
-                        item.quantity_unit.value if item.quantity_unit is not None else None,
-                        item.serving_description,
-                    ),
-                )
-                _insert_facts_in_dependency_order(
-                    connection,
-                    item.nutrition_facts,
-                    meal_id=item.meal_id,
-                    item_sequence=item.sequence,
-                    profile_id=None,
-                )
+                _insert_item(connection, item)
 
     def get(self, meal_id: str) -> Meal | None:
         with _connect(self._database_path) as connection:
@@ -149,7 +131,7 @@ class SqliteMealRepository:
                 "SELECT 1 FROM nutrition_meal_items WHERE meal_id = ? AND item_sequence = ?",
                 (meal_id, item_sequence),
             ).fetchone()
-            if item_row is None:
+            if item_row is None or item_sequence in _removed_sequences(connection, meal_id):
                 raise ValueError(f"no meal item {meal_id!r}/{item_sequence} to attach a nutrition fact to")
             connection.execute(
                 _FACT_INSERT_SQL,
@@ -159,6 +141,44 @@ class SqliteMealRepository:
         if meal is None:
             raise RuntimeError(f"meal {meal_id!r} disappeared after appending a nutrition fact")
         return meal
+
+    def next_item_sequence(self, meal_id: str) -> int:
+        """The sequence the next added item gets: removed items keep their numbers, so they count."""
+        with _connect(self._database_path) as connection:
+            return _next_item_sequence(connection, meal_id)
+
+    def add_items(self, meal_id: str, items: tuple[MealItem, ...]) -> Meal:
+        """Add items to a saved meal; their sequences must continue from ``next_item_sequence``."""
+        with _connect(self._database_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            _require_meal(connection, meal_id)
+            _insert_new_items(connection, meal_id, items)
+            return _reload_meal(connection, meal_id)
+
+    def remove_item(self, meal_id: str, item_sequence: int, removed_at: datetime) -> Meal:
+        """Hide one item; refused when it is the meal's last item (a meal is never left empty)."""
+        _require_aware(removed_at, "removed_at")
+        with _connect(self._database_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            _require_meal(connection, meal_id)
+            _require_active_item(connection, meal_id, item_sequence)
+            if len(_active_sequences(connection, meal_id)) == 1:
+                raise ValueError(
+                    f"item {item_sequence} is the only item of meal {meal_id!r}; a meal cannot be left empty"
+                )
+            _insert_removal(connection, meal_id, item_sequence, removed_at, replaced_by=None)
+            return _reload_meal(connection, meal_id)
+
+    def replace_item(self, meal_id: str, item_sequence: int, item: MealItem, removed_at: datetime) -> Meal:
+        """Add ``item`` and hide ``item_sequence`` in one transaction: both happen or neither."""
+        _require_aware(removed_at, "removed_at")
+        with _connect(self._database_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            _require_meal(connection, meal_id)
+            _require_active_item(connection, meal_id, item_sequence)
+            _insert_new_items(connection, meal_id, (item,))
+            _insert_removal(connection, meal_id, item_sequence, removed_at, replaced_by=item.sequence)
+            return _reload_meal(connection, meal_id)
 
 
 class SqliteFoodNutritionRepository:
@@ -257,13 +277,23 @@ def _load_meal(connection: sqlite3.Connection, meal_id: str) -> Meal | None:
     meal_row = connection.execute("SELECT * FROM nutrition_meals WHERE meal_id = ?", (meal_id,)).fetchone()
     if meal_row is None:
         return None
-    item_rows = connection.execute(
-        "SELECT * FROM nutrition_meal_items WHERE meal_id = ? ORDER BY item_sequence", (meal_id,)
-    ).fetchall()
-    fact_rows = connection.execute(
-        "SELECT * FROM nutrition_facts WHERE meal_id = ? ORDER BY item_sequence",
-        (meal_id,),
-    ).fetchall()
+    # Removed items stay stored for audit but are no longer part of the meal.
+    removed = _removed_sequences(connection, meal_id)
+    item_rows = [
+        row
+        for row in connection.execute(
+            "SELECT * FROM nutrition_meal_items WHERE meal_id = ? ORDER BY item_sequence", (meal_id,)
+        ).fetchall()
+        if row["item_sequence"] not in removed
+    ]
+    fact_rows = [
+        row
+        for row in connection.execute(
+            "SELECT * FROM nutrition_facts WHERE meal_id = ? ORDER BY item_sequence",
+            (meal_id,),
+        ).fetchall()
+        if row["item_sequence"] not in removed
+    ]
     facts_by_item: dict[int, list[NutritionFact]] = {}
     for fact_row in fact_rows:
         facts_by_item.setdefault(fact_row["item_sequence"], []).append(_fact_from_row(fact_row))
@@ -287,6 +317,107 @@ def _load_meal(connection: sqlite3.Connection, meal_id: str) -> Meal | None:
         items=items,
     )
 
+
+def _removed_sequences(connection: sqlite3.Connection, meal_id: str) -> frozenset[int]:
+    # The read-only reader never migrates, so a database not yet at migration 8 has no
+    # removals table; it can have no removed items either.
+    has_table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'nutrition_meal_item_removals'"
+    ).fetchone()
+    if has_table is None:
+        return frozenset()
+    rows = connection.execute(
+        "SELECT item_sequence FROM nutrition_meal_item_removals WHERE meal_id = ?", (meal_id,)
+    ).fetchall()
+    return frozenset(row["item_sequence"] for row in rows)
+
+
+def _active_sequences(connection: sqlite3.Connection, meal_id: str) -> tuple[int, ...]:
+    removed = _removed_sequences(connection, meal_id)
+    rows = connection.execute(
+        "SELECT item_sequence FROM nutrition_meal_items WHERE meal_id = ? ORDER BY item_sequence", (meal_id,)
+    ).fetchall()
+    return tuple(row["item_sequence"] for row in rows if row["item_sequence"] not in removed)
+
+
+def _next_item_sequence(connection: sqlite3.Connection, meal_id: str) -> int:
+    row = connection.execute(
+        "SELECT MAX(item_sequence) FROM nutrition_meal_items WHERE meal_id = ?", (meal_id,)
+    ).fetchone()
+    return int(row[0] or 0) + 1
+
+
+def _require_meal(connection: sqlite3.Connection, meal_id: str) -> None:
+    if connection.execute("SELECT 1 FROM nutrition_meals WHERE meal_id = ?", (meal_id,)).fetchone() is None:
+        raise ValueError(f"no meal with id {meal_id!r}")
+
+
+def _require_active_item(connection: sqlite3.Connection, meal_id: str, item_sequence: int) -> None:
+    exists = connection.execute(
+        "SELECT 1 FROM nutrition_meal_items WHERE meal_id = ? AND item_sequence = ?", (meal_id, item_sequence)
+    ).fetchone()
+    if exists is None:
+        raise ValueError(f"meal {meal_id!r} has no item {item_sequence}")
+    if item_sequence in _removed_sequences(connection, meal_id):
+        raise ValueError(f"item {item_sequence} of meal {meal_id!r} was already removed")
+
+
+def _insert_new_items(connection: sqlite3.Connection, meal_id: str, items: tuple[MealItem, ...]) -> None:
+    if not items:
+        raise ValueError("no items to add")
+    expected = _next_item_sequence(connection, meal_id)
+    for offset, item in enumerate(items):
+        if item.meal_id != meal_id:
+            raise ValueError(f"item {item.sequence} belongs to meal {item.meal_id!r}, not {meal_id!r}")
+        # Sequences are allocated before the snapshot fact IDs are built from them; anything else
+        # means the meal changed in between, or a removed item's number would be reused.
+        if item.sequence != expected + offset:
+            raise ValueError(
+                f"meal {meal_id!r} changed while the item was being prepared (expected item {expected + offset})"
+            )
+        _insert_item(connection, item)
+
+
+def _insert_item(connection: sqlite3.Connection, item: MealItem) -> None:
+    connection.execute(
+        """
+        INSERT INTO nutrition_meal_items (
+            meal_id, item_sequence, food_name, food_profile_id,
+            quantity, quantity_unit, serving_description
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            item.meal_id,
+            item.sequence,
+            item.food_name,
+            item.food_profile_id,
+            decimal_to_text(item.quantity) if item.quantity is not None else None,
+            item.quantity_unit.value if item.quantity_unit is not None else None,
+            item.serving_description,
+        ),
+    )
+    _insert_facts_in_dependency_order(
+        connection, item.nutrition_facts, meal_id=item.meal_id, item_sequence=item.sequence, profile_id=None
+    )
+
+
+def _insert_removal(
+    connection: sqlite3.Connection, meal_id: str, item_sequence: int, removed_at: datetime, *, replaced_by: int | None
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO nutrition_meal_item_removals (meal_id, item_sequence, removed_at, replaced_by_item_sequence)
+        VALUES (?, ?, ?, ?)
+        """,
+        (meal_id, item_sequence, removed_at.isoformat(), replaced_by),
+    )
+
+
+def _reload_meal(connection: sqlite3.Connection, meal_id: str) -> Meal:
+    meal = _load_meal(connection, meal_id)
+    if meal is None:
+        raise RuntimeError(f"meal {meal_id!r} disappeared while editing its items")
+    return meal
 
 def _load_profile(connection: sqlite3.Connection, profile_id: str) -> FoodNutritionProfile | None:
     profile_row = connection.execute(

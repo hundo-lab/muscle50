@@ -107,6 +107,20 @@ def render_logged_meal_json(intake: MealIntake) -> str:
     return _dumps(_meal_payload(intake))
 
 
+def render_meal(intake: MealIntake) -> str:
+    """`nutrition meal show`: the meal as `nutrition day` prints it, plus each item's fact versions."""
+    return "\n".join(_meal_lines(intake, facts=True))
+
+
+def render_edited_meal(intake: MealIntake, headline: str) -> str:
+    """Output of `nutrition meal add-item/remove-item/replace-item`; JSON is `render_logged_meal_json`."""
+    day = intake.meal.eaten_at.date().isoformat()
+    lines = [headline, ""]
+    lines.extend(_meal_lines(intake, facts=True))
+    lines.extend(["", f"Whole day: muscle50 nutrition day --date {day}"])
+    return "\n".join(lines)
+
+
 def render_daily_intake(intake: DailyIntake) -> str:
     lines = [f"Nutrition intake {intake.day.isoformat()} (UTC{intake.timezone_name})", _SCOPE_NOTE]
     if not intake.meals:
@@ -149,7 +163,7 @@ def render_daily_intake_json(intake: DailyIntake) -> str:
     )
 
 
-def _meal_lines(intake: MealIntake) -> list[str]:
+def _meal_lines(intake: MealIntake, *, facts: bool = False) -> list[str]:
     meal = intake.meal
     local = meal.eaten_at
     when = (
@@ -161,6 +175,8 @@ def _meal_lines(intake: MealIntake) -> list[str]:
     for item in intake.items:
         lines.append(f"  {item.item.sequence}. {_item_name(item)} {_quantity(item)}: {_item_values(item)}")
         lines.append(f"     source: {_item_sources(item)}")
+        if facts:
+            lines.append(f"     facts: {_item_fact_versions(item)}")
         if item.missing_fields:
             lines.append(f"     missing: {', '.join(_NAMES[nutrient] for nutrient in item.missing_fields)}")
     nutrition = intake.summary.nutrition
@@ -191,6 +207,19 @@ def _item_sources(item: ItemIntake) -> str:
         if label not in labels:
             labels.append(label)
     return ", ".join(labels) if labels else "no nutrition facts"
+
+
+def _item_fact_versions(item: ItemIntake) -> str:
+    # The catalog fact each selected snapshot was copied from (snapshot IDs are
+    # "<meal_id>:<item>:<catalog fact ID>"), so an item logged with an older version shows it.
+    prefix = f"{item.item.meal_id}:{item.item.sequence}:"
+    selected = [selection.fact_id for selection in item.calculated.nutrients] if item.calculated is not None else []
+    versions: list[str] = []
+    for fact_id in selected:
+        version = fact_id.removeprefix(prefix)
+        if version not in versions:
+            versions.append(version)
+    return ", ".join(versions) if versions else "none selected"
 
 
 def _aggregate_value(nutrition: NutritionAggregate, nutrient: NutrientField) -> str:

@@ -2,7 +2,55 @@
 
 Last updated: 2026-10-03
 
-## Current task: Nutrition fact versioning (2026-10-03)
+## Current task: Nutrition Meal Edit v1 (2026-10-03)
+
+Paseo worktree `nutrition-meal-edit`(branch `feature/nutrition-meal-edit`, base `e1e66ed` = local main). Feature commit 하나.
+merge/rebase/push 안 함. Production DB/RAW/config 쓰기 없음(테스트·smoke는 모두 임시 `MUSCLE50_HOME`).
+
+### What was attempted / completed
+
+- Audit: 모든 meal 읽기(repository, `status`, read-only reader → `recommend`/`daily`)는 `_load_meal` 하나를 거치고 totals는
+  매번 계산(cache 없음). Item은 snapshot fact를 소유하고 fact는 append-only(UPDATE/DELETE trigger) + item FK
+  `ON DELETE RESTRICT` → item 삭제·재번호 불가. Migration 없이 제거하려면 trigger를 끄거나 기존 column을 숨은 flag로 써야
+  해서 배제. **Migration 8**: append-only `nutrition_meal_item_removals`(PK `(meal_id, item_sequence)`, `removed_at`,
+  `replaced_by_item_sequence`, update/delete trigger). 기존 table ALTER 없음.
+- CLI `muscle50 nutrition meal show|add-item|remove-item|replace-item`(`food fact add`/`target set` 같은 nested group;
+  `--item` 3-token은 `log`와 동일, `add-item`은 반복 가능·all-or-nothing). Repository `next_item_sequence`/`add_items`/
+  `remove_item`/`replace_item`(각각 `BEGIN IMMEDIATE`, meal/item/번호/빈 식사 guard를 transaction 안에서 재확인).
+  `LogMeal._snapshot_item` → 공용 `snapshot_item`(LogMeal 오류 메시지 불변).
+- 결정: 빈 식사는 A(마지막 item 제거 거부). Item 번호 재사용 안 함(fact ID가 번호를 포함하고 global PK). `original_text`는
+  log 시점 기록으로 유지. 같은 add 재실행은 item 2개(문서화). Metadata 수정·식사 삭제·병합·제거 취소는 범위 밖.
+- `day` text/`_meal_lines` 기본 출력은 byte 불변; `facts:` 줄은 `meal show`/edit 출력에만.
+
+### Files changed
+
+신규 `src/muscle50/infrastructure/sqlite/migrations/008_nutrition_meal_item_removals.sql`, `tests/test_nutrition_meal_edit.py`(39).
+수정 `src/muscle50/infrastructure/sqlite/nutrition_repository.py`, `src/muscle50/application/nutrition.py`(port),
+`src/muscle50/application/nutrition_logging.py`, `src/muscle50/presentation/nutrition_terminal.py`, `src/muscle50/cli.py`,
+`tests/test_database.py`/`tests/test_cli.py`(migration 1~8 기대값), `docs/nutrition-logging.md`, `README.md`,
+`docs/CURRENT_STATE.md`, 이 파일.
+
+### Checks run
+
+- pytest 900 passed(861 + 39), `ruff check .`, `mypy src tests`(117 files), `git diff --check`. `ruff format`은 신규 test와
+  `cli.py`/`nutrition_logging.py`/`nutrition.py`에만(`nutrition_repository.py`/`nutrition_terminal.py`의 기존 format 차이는 base에도
+  있어 건드리지 않음). LF 유지.
+- Mutation 8종 모두 검출(CURRENT_STATE Verification). 임시 home CLI smoke: 사용자 예시(닭가슴살 200 g → 햇반·바나나 추가 →
+  1 meal 3 items, 제거/교체/오류 메시지).
+
+### Known failures or risks
+
+- **통합하면 다음 nutrition/garmin 명령이 production DB에 migration 8을 적용한다.** 통합 전 production DB 백업 권장.
+  Read-only `recommend`는 migration 8 전 DB도 읽음(test 있음).
+- 제거는 되돌릴 수 없음(append-only). Storage 오류(sqlite3.Error)는 기존처럼 CLI traceback(rollback은 검증됨).
+- 이미 `--additional`로 쪼개진 2026-10-02 식사는 그대로(Meal Merge는 별도 feature). 원하면 add-item으로 한 식사를 완성할 수
+  있지만 남은 별도 식사를 지울 방법은 없음(마지막 item 제거 거부).
+
+### Recommended next action
+
+Diff review 후 production DB 백업 → local main fast-forward 통합(별도 승인). 이후 필요하면 Meal Merge / meal metadata edit 설계.
+
+## Previous task: Nutrition fact versioning (2026-10-03)
 
 Paseo worktree `nutrition-food-facts`(branch `feature/nutrition-food-facts`, base `55364fc` = local main). 하나의 feature
 commit만 만들었다. Production DB/RAW/config 쓰기 없음(테스트·smoke는 모두 임시 `MUSCLE50_HOME`).

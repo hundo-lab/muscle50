@@ -16,7 +16,8 @@ Not implemented yet:
 
 ## Architecture
 
-No migration: everything fits `003_nutrition.sql`. Reused Nutrition Core pieces:
+Logging fits `003_nutrition.sql`. The only later migration is `008_nutrition_meal_item_removals.sql`,
+which records items removed by Meal Edit. Reused Nutrition Core pieces:
 
 | Concept | Reused as |
 | --- | --- |
@@ -28,7 +29,8 @@ No migration: everything fits `003_nutrition.sql`. Reused Nutrition Core pieces:
 | Storage | `SqliteFoodNutritionRepository` (+ new `list_all`), `SqliteMealRepository` |
 
 New code: `application/nutrition_logging.py` (use cases `AddFood`, `AddFoodFact`, `ListFoods`,
-`ShowFood`, `LogMeal`, `ShowDailyIntake`), `presentation/nutrition_terminal.py` (text + JSON), and the
+`ShowFood`, `LogMeal`, `ShowDailyIntake`, and for Meal Edit `ShowMeal`, `AddMealItems`, `RemoveMealItem`,
+`ReplaceMealItem`), `presentation/nutrition_terminal.py` (text + JSON), and the
 `muscle50 nutrition` command group in `cli.py`.
 
 ### Snapshot at log time
@@ -149,10 +151,63 @@ muscle50 nutrition log --meal snack --additional --item banana 1 piece
 - `--item FOOD_ID QTY UNIT`: repeatable; the unit must be one the food has nutrition for.
   Fractional quantities are allowed for every unit (`0.5 pack`, `1.5 piece`).
 - A second meal of the same type on the same date is refused unless `--additional` is given
-  (prevents an accidental re-run from doubling intake). Meal IDs are
+  (prevents an accidental re-run from doubling intake). To complete or correct a meal that is
+  already logged, edit it with `nutrition meal add-item` (see below) instead. Meal IDs are
   `<date>-<meal>-<n>`, e.g. `2026-10-02-breakfast-1`, `2026-10-02-snack-2`.
 - The command prints the stored meal (re-read from the database) with per-item nutrients and
   the meal total; `--json` prints the same as JSON.
+
+### Edit a logged meal's items
+
+When a meal is incomplete or has a wrong item, fix the existing meal rather than adding an
+`--additional` one. The meal ID, date, type and time stay the same.
+
+```powershell
+muscle50 nutrition meal show 2026-10-02-breakfast-1            # items, quantities, fact versions (--json)
+muscle50 nutrition meal add-item 2026-10-02-breakfast-1 --item hetbahn-white-210 210 g
+muscle50 nutrition meal add-item 2026-10-02-breakfast-1 --item banana-medium 1 count
+muscle50 nutrition meal remove-item 2026-10-02-breakfast-1 --item-number 3
+muscle50 nutrition meal replace-item 2026-10-02-breakfast-1 --item-number 2 --item hetbahn-white-210 105 g
+```
+
+- **Item numbers** are the numbers `nutrition day` and `meal show` print. A number is never
+  reused: new items get the next number after every item the meal ever had, including removed
+  ones. After removing item 2 of 1, 2, 3, the meal has items 1 and 3, and the next added item
+  is 4.
+- **`add-item`** accepts `--item FOOD_ID QTY UNIT` as in `nutrition log`, and it can be repeated.
+  Several items are added together or not at all. Each new item is snapshotted exactly like a
+  logged item (see "Snapshot at log time") from the catalog **as it is now**. If the food got a
+  new fact version after the meal was logged, the new item uses the new version. Items already in
+  the meal keep their own snapshot, and nothing is recalculated or upgraded. `meal show` prints a
+  `facts:` line per item with the catalog fact version(s) its values came from (for example
+  `food:chicken-breast:1` for the old item and `food:chicken-breast:2` for one added later).
+- **`remove-item`** removes one item. It disappears from `meal show`, `nutrition day`,
+  `nutrition status`, `recommend` and `daily` at once, because totals are always computed from
+  the stored items and nothing is cached. **The last item cannot be removed.** A meal always has
+  at least one item, just as `nutrition log` refuses an empty meal. To change a one-item meal,
+  use `replace-item`. Deleting a whole meal is not supported.
+- **`replace-item`** adds the new item, with a fresh snapshot and the next number, and removes
+  the old one in a single transaction, so either both happen or neither does. It also works on
+  a one-item meal.
+- Errors change nothing. A missing meal, unknown or removed item number, unknown food, a unit
+  the food has no nutrition for, a bad quantity, or a storage failure leaves the meal exactly as
+  it was. Errors print `오류: ...` and exit 1. A storage error (`sqlite3.Error`) is rolled back but,
+  as with `food add`, appears as a traceback.
+- **Retrying is not idempotent.** Running the same `add-item` twice adds the food twice: two
+  items, both counted. The command prints the whole meal after every edit, so a duplicate is
+  visible right away. Undo it with `remove-item`.
+- Output is the edited meal, as in `meal show`, plus a headline such as `Added item 2 to meal ...`.
+  `--json` prints the same document as `nutrition log --json`.
+- `original_text` (in JSON) keeps the structured text the meal was first logged with. It is a
+  record of the original entry, not a description of the current items.
+
+Storage (migration `008_nutrition_meal_item_removals.sql`): a logged item owns append-only
+snapshot facts that reference it with `ON DELETE RESTRICT`, so an item can never be deleted or
+renumbered. Removing one appends a row to `nutrition_meal_item_removals`, keyed by
+`(meal_id, item_sequence)` with `removed_at` and, for a replace, `replaced_by_item_sequence`.
+That table is append-only too (update/delete triggers). Every meal read skips removed items. The
+item row and its facts stay stored for audit, and a removal cannot be undone. The read-only
+reader used by `recommend` also works on a database that has not yet run migration 8.
 
 ### View a day's intake
 
@@ -225,12 +280,15 @@ only.
 
 ## Limitations
 
-- **No edit or delete.** Food names/aliases cannot be changed; nutrition numbers change only by
-  appending a fact version (`food fact add`). Nutrition facts are append-only (`nutrition_facts` update/delete
-  triggers) and meal items reference their snapshot facts with `ON DELETE RESTRICT`, so a
-  logged meal cannot be deleted without changing the schema's append-only guarantee. A
-  correction design (e.g. void/replacement records or appended superseding item facts) is
-  deferred. The duplicate-meal guard exists because of this.
+- **Limited editing.** Food names/aliases cannot be changed; nutrition numbers change only by
+  appending a fact version (`food fact add`). A meal's items can be added, removed or replaced
+  (`nutrition meal`, see "Edit a logged meal's items"), but a meal's date, type and time cannot
+  be changed, a whole meal cannot be deleted, a removal cannot be undone, and separate meals
+  (e.g. ones created earlier with `--additional`) cannot be merged. The duplicate-meal guard
+  still applies to `nutrition log`.
+- An item edit reads the meal and the catalog, then writes in one transaction. The write
+  re-checks the meal, item and next item number under its lock, so two simultaneous edits of the
+  same meal cannot interleave. The loser is refused and changes nothing.
 - One unit per food from the CLI (`food fact add` versions the existing unit); no per-food unit
   conversions (e.g. `1 pack = 210 g`).
 - `food fact add` checks the current fact and appends in two steps; two simultaneous runs for

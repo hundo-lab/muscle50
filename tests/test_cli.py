@@ -181,7 +181,7 @@ def test_cli_inbody_sync_is_private_idempotent_and_uses_shared_database(
     assert measurement_count == 1
     assert detail_raw_count == 1
     assert raw_json_count == 2
-    assert migration_versions == [(1,), (2,), (3,), (4,), (5,), (6,), (7,)]
+    assert migration_versions == [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,)]
 
 
 def test_cli_inbody_show_values_requires_explicit_option(
