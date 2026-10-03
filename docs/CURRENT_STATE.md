@@ -186,7 +186,7 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   집계는 `aggregate_meal`/`aggregate_day` 그대로: 한 item이라도 값이 없으면 해당 nutrient total은 incomplete(known
   subtotal 별도 표기, item별 missing 표시), estimated fact 포함 total은 `(estimated)`. JSON은 exact Decimal 문자열,
   고정 순서, byte-stable.
-- (`feature/nutrition-food-facts`, 미통합) Nutrition fact versioning: `muscle50 nutrition food fact add <food_id> --per QTY UNIT
+- (`feature/nutrition-food-facts`, local main 통합·미push) Nutrition fact versioning: `muscle50 nutrition food fact add <food_id> --per QTY UNIT
   --kcal/--protein/--carbs/--fat N|unknown --source S --accuracy A [--source-ref R] [--json]`(`AddFoodFact`). 기존
   `append_nutrition_fact` + `supersedes_fact_id`만 사용(migration 없음). 새 fact `food:<id>:<n+1>`가 같은 unit의 현재 fact를
   supersede해 모든 nutrient에서 active(source priority와 무관), 이전 fact는 history에 그대로(`food show` `(superseded)`/
@@ -198,7 +198,9 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 
 ## Pending merge
 
-- `feature/nutrition-food-facts`(Nutrition fact versioning, base `55364fc` = local main) — 커밋만, merge/push 안 함.
+- `feature/nutrition-food-facts`(Nutrition Food Fact Versioning, `5e3a2c8`)는 2026-10-03 local main으로 fast-forward
+  통합됐다(`55364fc` → `5e3a2c8`, merge commit/rebase/squash 없음). 통합 전 `git fetch`로 origin/main = `55364fc` 확인.
+  origin push 안 함(별도 승인). Branch와 Paseo worktree `nutrition-food-facts`는 유지한다.
 - `feature/nutrition-recommendation`(Nutrition → Daily/Recommendation Integration v1, `8f267a2`, `caa7982`)는 2026-10-02
   local main으로 fast-forward 통합됐다(`f07f5a2` → `caa7982`, merge commit/rebase/squash 없음). 통합 전 `git fetch` +
   `git ls-remote`로 origin/main = `f07f5a2` 확인. origin push 안 함(별도 승인). Branch와 Paseo worktree

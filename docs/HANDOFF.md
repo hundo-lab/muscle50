@@ -5,7 +5,9 @@ Last updated: 2026-10-03
 ## Current task: Nutrition fact versioning (2026-10-03)
 
 Paseo worktree `nutrition-food-facts`(branch `feature/nutrition-food-facts`, base `55364fc` = local main). 하나의 feature
-commit만 만들었다. merge/rebase/push 안 함. Production DB/RAW/config 쓰기 없음(테스트·smoke는 모두 임시 `MUSCLE50_HOME`).
+commit만 만들었다. Production DB/RAW/config 쓰기 없음(테스트·smoke는 모두 임시 `MUSCLE50_HOME`).
+**2026-10-03 local main으로 fast-forward 통합 완료(`55364fc` → `5e3a2c8`, merge commit/rebase/squash 없음). origin push 안
+함(별도 승인).** 통합 후 pytest 861 passed, `ruff check .`, `mypy src tests`, `git diff --check` 통과.
 
 ### What was attempted / completed
 
@@ -45,8 +47,7 @@ commit만 만들었다. merge/rebase/push 안 함. Production DB/RAW/config 쓰�
 
 ### Recommended next action
 
-Review 후 local main으로 fast-forward 통합 여부 결정(별도 승인). 통합 후 실제 `chicken-breast`에 v2를 추가하기 전에 production
-DB 백업 권장.
+origin push 여부 결정(별도 승인). 실제 `chicken-breast`에 v2를 추가하기 전에 production DB 백업 권장.
 
 ## Previous task: Nutrition → Daily/Recommendation Integration v1 (2026-10-02)
 
