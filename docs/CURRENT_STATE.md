@@ -29,7 +29,7 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 - Nutrition Core는 deterministic domain model, JSON interchange schema, 공용 SQLite DB의
   append-only nutrition fact history를 제공한다. Nutrition Logging MVP(`application/nutrition_logging.py`,
   `presentation/nutrition_terminal.py`, CLI `muscle50 nutrition`)가 그 위의 food catalog / 구조화 식사 기록 / 하루 섭취
-  계산 경로다(migration 없음, 목표·추천 없음). Meal Edit v1(`muscle50 nutrition meal ...`, 미통합 branch)은 item 제거를
+  계산 경로다(migration 없음, 목표·추천 없음). Meal Edit v1(`muscle50 nutrition meal ...`, `b234ac8`)은 item 제거를
   append-only tombstone(migration 8)으로 기록한다. 상세는 `docs/nutrition-logging.md`.
 - Nutrition Targets + Daily Status v1(`domain/nutrition_targets.py`, `application/nutrition_targets.py`,
   `infrastructure/nutrition_target_store.py`, CLI `muscle50 nutrition target set|show`, `muscle50 nutrition status`)은
@@ -187,7 +187,7 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   집계는 `aggregate_meal`/`aggregate_day` 그대로: 한 item이라도 값이 없으면 해당 nutrient total은 incomplete(known
   subtotal 별도 표기, item별 missing 표시), estimated fact 포함 total은 `(estimated)`. JSON은 exact Decimal 문자열,
   고정 순서, byte-stable.
-- (`feature/nutrition-food-facts`, local main 통합·미push) Nutrition fact versioning: `muscle50 nutrition food fact add <food_id> --per QTY UNIT
+- (`5e3a2c8`, main/origin 포함) Nutrition fact versioning: `muscle50 nutrition food fact add <food_id> --per QTY UNIT
   --kcal/--protein/--carbs/--fat N|unknown --source S --accuracy A [--source-ref R] [--json]`(`AddFoodFact`). 기존
   `append_nutrition_fact` + `supersedes_fact_id`만 사용(migration 없음). 새 fact `food:<id>:<n+1>`가 같은 unit의 현재 fact를
   supersede해 모든 nutrient에서 active(source priority와 무관), 이전 fact는 history에 그대로(`food show` `(superseded)`/
@@ -196,7 +196,7 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   동일, CLI 밖에서 만든 모호한 history(같은 unit current fact 2개 / 옛 fact가 이기는 nutrient — 추가 후 선택 결과로 검증).
   과거 식사는 log 시 snapshot이라 불변(`day`/`status`/추천 byte 동일), 이후 식사만 새 fact. Meal item `source:` 줄은 실제
   선택된 fact의 provenance만 표시(단일 fact item은 출력 불변). 상세 `docs/nutrition-logging.md`.
-- (`feature/nutrition-meal-edit`, 미통합) Nutrition Meal Edit v1: `muscle50 nutrition meal show <meal_id>`,
+- (`b234ac8`, 2026-10-03 main 통합, production migration 8 적용) Nutrition Meal Edit v1: `muscle50 nutrition meal show <meal_id>`,
   `meal add-item <meal_id> --item FOOD_ID QTY UNIT [--item ...]`, `meal remove-item <meal_id> --item-number N`,
   `meal replace-item <meal_id> --item-number N --item FOOD_ID QTY UNIT`(모두 `--json`; use case `ShowMeal`/`AddMealItems`/
   `RemoveMealItem`/`ReplaceMealItem`). Meal ID·날짜·종류·시간·`original_text` 불변, 새 `--additional` 식사 안 만듦. 새 item은
@@ -211,13 +211,14 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 
 ## Pending merge
 
-- `feature/nutrition-meal-edit`(Nutrition Meal Edit v1, base `e1e66ed` = local main)는 feature commit 하나로 커밋됐고
-  아직 main에 통합되지 않았다(merge/rebase/push 안 함). **통합하면 다음 nutrition/garmin 명령이 production DB에 migration 8을
-  적용한다** — 통합 전 production DB 백업 권장.
-
+- 현재 pending merge 없음.
+- `feature/nutrition-meal-edit`(Nutrition Meal Edit v1, `b234ac8`)는 2026-10-03 local main으로 fast-forward 통합됐다
+  (`e1e66ed` → `b234ac8`, merge commit/rebase/squash 없음). Production DB 백업 `db_backup_20261003a_pre_migration8`(migration
+  1~7, SHA-256 = 당시 production DB) 후 `uv run muscle50 nutrition food list`로 production에 migration 8을 적용했다(검증은
+  Verification). 이 docs commit과 함께 origin/main에 push. Branch와 Paseo worktree `nutrition-meal-edit`는 유지한다.
 - `feature/nutrition-food-facts`(Nutrition Food Fact Versioning, `5e3a2c8`)는 2026-10-03 local main으로 fast-forward
-  통합됐다(`55364fc` → `5e3a2c8`, merge commit/rebase/squash 없음). 통합 전 `git fetch`로 origin/main = `55364fc` 확인.
-  origin push 안 함(별도 승인). Branch와 Paseo worktree `nutrition-food-facts`는 유지한다.
+  통합됐다(`55364fc` → `5e3a2c8`, merge commit/rebase/squash 없음). 이후 push되어 origin/main `e1e66ed`에 포함됐다.
+  Branch와 Paseo worktree `nutrition-food-facts`는 유지한다.
 - `feature/nutrition-recommendation`(Nutrition → Daily/Recommendation Integration v1, `8f267a2`, `caa7982`)는 2026-10-02
   local main으로 fast-forward 통합됐다(`f07f5a2` → `caa7982`, merge commit/rebase/squash 없음). 통합 전 `git fetch` +
   `git ls-remote`로 origin/main = `f07f5a2` 확인. origin push 안 함(별도 승인). Branch와 Paseo worktree
@@ -276,6 +277,19 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 - `tests/test_refresh_activity.py`, `tests/test_swim_normalization.py`, `tests/test_sync_recovery.py`
 
 ## Verification
+
+2026-10-03 Production migration 8(Meal Edit v1 main 통합 후, `uv run muscle50 nutrition food list`):
+
+- `schema_migrations` 1~8(8은 한 번), `nutrition_meal_item_removals` 0 rows, meals 6 / items 7 / facts 13 / food profiles 5.
+  Backup DB의 28개 table 전체 row 비교 결과 차이 0(`schema_migrations` row 8 추가만). 새 schema object는
+  `nutrition_meal_item_removals` table과 autoindex, update/delete trigger 2개뿐이다. `integrity_check` ok, `foreign_key_check`
+  clean.
+- 2026-10-02 `nutrition day`/`nutrition status`(text·JSON)는 migration 전 데이터(backup 사본 + `e1e66ed` 코드)의 출력과 byte
+  동일하고, `recommend --date 2026-10-02`(text·JSON)는 migration 전 production 출력과 byte 동일하다. `meal show
+  2026-10-02-dinner-1`(item 1·2, snapshot fact `food:...:1`)은 migration한 backup 사본의 출력과 byte 동일하다. `daily`는 Garmin sync를
+  하므로 production에서 실행하지 않았다.
+- RAW 974 files와 config, backup은 hash·size·mtime 그대로다. Read-only reader(`recommend`)를 쓰면 production DB 옆에 빈
+  `-wal`(0 B)과 `-shm`이 남는데, 이는 기존 동작이다(임시 사본에서 재현).
 
 2026-10-03 Nutrition Meal Edit v1(`feature/nutrition-meal-edit`, base `e1e66ed`):
 
@@ -608,7 +622,7 @@ narrowing, source error annotation만 수정했다. `uv run pytest -q` 241 passe
 5. `005_daily_recovery.sql` — recovery RAW capture history와 날짜별 normalized latest row
 6. `006_activity_refresh.sql` — activity refresh RAW capture history와 canonical accepted-capture pointer
 7. `007_inbody.sql` — InBody RAW provenance, source identity, normalized body composition
-8. `008_nutrition_meal_item_removals.sql` — Meal Edit item 제거 기록(append-only tombstone; `feature/nutrition-meal-edit`, 미통합)
+8. `008_nutrition_meal_item_removals.sql` — Meal Edit item 제거 기록(append-only tombstone; `b234ac8`, production 2026-10-03 적용)
 
 `SqliteMealRepository`와 `SqliteFoodNutritionRepository`의 `migrate()`는 공용 numbered
 migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거되어 schema source는

@@ -4,8 +4,12 @@ Last updated: 2026-10-03
 
 ## Current task: Nutrition Meal Edit v1 (2026-10-03)
 
-Paseo worktree `nutrition-meal-edit`(branch `feature/nutrition-meal-edit`, base `e1e66ed` = local main). Feature commit 하나.
-merge/rebase/push 안 함. Production DB/RAW/config 쓰기 없음(테스트·smoke는 모두 임시 `MUSCLE50_HOME`).
+Paseo worktree `nutrition-meal-edit`(branch `feature/nutrition-meal-edit`, base `e1e66ed` = local main). Feature commit 하나
+(`b234ac8`). 개발 중 production DB/RAW/config 쓰기 없음(테스트·smoke는 모두 임시 `MUSCLE50_HOME`).
+**2026-10-03 local main으로 fast-forward 통합(`e1e66ed` → `b234ac8`, merge commit/rebase/squash 없음). Backup
+`db_backup_20261003a_pre_migration8` 후 `uv run muscle50 nutrition food list`로 production에 migration 8을 적용했다. 기존 data는
+backup과 동일했고 2026-10-02 day/status/recommend 출력도 byte 동일했다(CURRENT_STATE Verification). 이 docs commit과 함께
+origin/main에 push.**
 
 ### What was attempted / completed
 
@@ -40,22 +44,22 @@ merge/rebase/push 안 함. Production DB/RAW/config 쓰기 없음(테스트·smo
 
 ### Known failures or risks
 
-- **통합하면 다음 nutrition/garmin 명령이 production DB에 migration 8을 적용한다.** 통합 전 production DB 백업 권장.
-  Read-only `recommend`는 migration 8 전 DB도 읽음(test 있음).
+- Production DB는 이제 migration 8이다. 되돌리려면 `db_backup_20261003a_pre_migration8`(migration 1~7)을 쓴다. Read-only
+  `recommend`는 migration 8 전 DB도 읽음(test 있음).
 - 제거는 되돌릴 수 없음(append-only). Storage 오류(sqlite3.Error)는 기존처럼 CLI traceback(rollback은 검증됨).
 - 이미 `--additional`로 쪼개진 2026-10-02 식사는 그대로(Meal Merge는 별도 feature). 원하면 add-item으로 한 식사를 완성할 수
   있지만 남은 별도 식사를 지울 방법은 없음(마지막 item 제거 거부).
 
 ### Recommended next action
 
-Diff review 후 production DB 백업 → local main fast-forward 통합(별도 승인). 이후 필요하면 Meal Merge / meal metadata edit 설계.
+필요하면 Meal Merge / meal metadata edit 설계.
 
 ## Previous task: Nutrition fact versioning (2026-10-03)
 
 Paseo worktree `nutrition-food-facts`(branch `feature/nutrition-food-facts`, base `55364fc` = local main). 하나의 feature
 commit만 만들었다. Production DB/RAW/config 쓰기 없음(테스트·smoke는 모두 임시 `MUSCLE50_HOME`).
-**2026-10-03 local main으로 fast-forward 통합 완료(`55364fc` → `5e3a2c8`, merge commit/rebase/squash 없음). origin push 안
-함(별도 승인).** 통합 후 pytest 861 passed, `ruff check .`, `mypy src tests`, `git diff --check` 통과.
+**2026-10-03 local main으로 fast-forward 통합 완료(`55364fc` → `5e3a2c8`, merge commit/rebase/squash 없음). 이후 push되어
+origin/main `e1e66ed`에 포함.** 통합 후 pytest 861 passed, `ruff check .`, `mypy src tests`, `git diff --check` 통과.
 
 ### What was attempted / completed
 
