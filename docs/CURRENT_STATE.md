@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-10-04
+Last updated: 2026-10-05
 
 ## Project goal
 
@@ -209,7 +209,7 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   Replace는 새 item + tombstone 한 transaction. 오류(없는 meal/item/food, 단위, quantity, 이미 제거된 item, storage 실패)는
   아무것도 안 씀. 같은 `add-item` 재실행은 item 2개(자동 dedupe 없음, `remove-item`으로 되돌림). Read-only reader는
   migration 8 이전 DB도 읽음(table 존재 확인). 상세 `docs/nutrition-logging.md` "Edit a logged meal's items".
-- (`feature/nutrition-meal-repeat`, main 미통합) Nutrition Meal Repeat v1: `muscle50 nutrition repeat <meal_id> [--date D]
+- (`2d2ea84`/`42cf410`, local main으로 fast-forward 통합) Nutrition Meal Repeat v1: `muscle50 nutrition repeat <meal_id> [--date D]
   [--time HH:MM] [--meal T] [--additional] [--json]`(use case `RepeatMeal`). 원본 식사의 active item(제거 item 제외, 교체 item
   포함)에서 음식 ID/quantity/unit만 가져와 `LogMeal.execute`를 그대로 실행 → 각 item은 **repeat 시점** catalog fact history를
   snapshot(원본 snapshot 복사 없음), unknown은 missing 유지, duplicate guard/`--additional` 동작 불변. 기본값: 날짜 = 이 컴퓨터
@@ -221,9 +221,11 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
 
 ## Pending merge
 
-- `feature/nutrition-meal-repeat`(Nutrition Meal Repeat v1): base `e13acfa`(= main = origin/main), feature commit 1개, main
-  미통합·push 안 함. Paseo worktree `nutrition-quick-log`(branch를 `feature/nutrition-quick-log`에서 rename). Migration 없음.
 - 현재 pending merge 없음.
+- `feature/nutrition-meal-repeat`(Nutrition Meal Repeat v1, `2d2ea84`, `42cf410`)는 local main으로 fast-forward 통합됐다
+  (`e13acfa` → `42cf410`, merge commit/rebase/squash/amend 없음). Migration 없음(schema migration 1~8 유지). 이 integration
+  docs commit 시점에 origin/main은 `e13acfa`이고 origin push는 하지 않았다(별도 승인). Paseo worktree `nutrition-quick-log`
+  (branch를 `feature/nutrition-quick-log`에서 rename)는 유지한다.
 - `feature/nutrition-meal-edit`(Nutrition Meal Edit v1, `b234ac8`)는 2026-10-03 local main으로 fast-forward 통합됐다
   (`e1e66ed` → `b234ac8`, merge commit/rebase/squash 없음). Production DB 백업 `db_backup_20261003a_pre_migration8`(migration
   1~7, SHA-256 = 당시 production DB) 후 `uv run muscle50 nutrition food list`로 production에 migration 8을 적용했다(검증은
@@ -290,6 +292,12 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 - `tests/test_refresh_activity.py`, `tests/test_swim_normalization.py`, `tests/test_sync_recovery.py`
 
 ## Verification
+
+Nutrition Meal Repeat v1 main 통합(`e13acfa` → `42cf410` fast-forward only, push 안 함):
+
+- 통합 후 main: `uv run --extra dev pytest` 917 passed, `ruff check .`, `mypy src tests`(118 files), `git diff --check` 통과.
+- 임시 `MUSCLE50_HOME` smoke 통과. Production DB/WAL/SHM/RAW fingerprint 통합 전후 byte-identical, production에 write
+  명령 실행 없음, migration 1~8 그대로. Evidence `C:\temp\muscle50-evidence-20261004-nutrition-meal-repeat-integration\`.
 
 2026-10-04 Nutrition Meal Repeat v1(`feature/nutrition-meal-repeat`, base `e13acfa`):
 

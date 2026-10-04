@@ -1,12 +1,15 @@
 # Session Handoff
 
-Last updated: 2026-10-04
+Last updated: 2026-10-05
 
 ## Current task: Nutrition Meal Repeat v1 (2026-10-04)
 
 Paseo worktree `nutrition-quick-log`(branch는 `feature/nutrition-quick-log`에서 `feature/nutrition-meal-repeat`으로 rename, base
-`e13acfa` = main = origin/main). Feature commit 하나. **main 미통합, merge/rebase/push 안 함.** 개발 중 production DB/RAW/config
-쓰기 없음(테스트·smoke는 모두 임시 `MUSCLE50_HOME`).
+`e13acfa` = main = origin/main). **local main으로 fast-forward 통합 완료(`e13acfa` → `42cf410`; commits `2d2ea84`, `42cf410`;
+merge/rebase/squash/amend 없음, migration 없음).** 통합 후 main에서 pytest 917 passed, Ruff, mypy 118 files, `git diff --check`
+통과, 임시 `MUSCLE50_HOME` smoke 통과, production DB/WAL/SHM/RAW untouched(evidence
+`C:\temp\muscle50-evidence-20261004-nutrition-meal-repeat-integration\`). 이 integration docs commit 시점에 origin push는 하지
+않았다(origin/main `e13acfa`). 개발 중 production DB/RAW/config 쓰기 없음(테스트·smoke는 모두 임시 `MUSCLE50_HOME`).
 
 ### What was attempted / completed
 
@@ -41,8 +44,7 @@ Paseo worktree `nutrition-quick-log`(branch는 `feature/nutrition-quick-log`에�
 
 ### Recommended next action
 
-Review 후 main으로 fast-forward 통합 여부 결정(별도 승인; migration 없음이라 production backup 불필요하지만 통합 후 read-only
-확인 권장). 이후 후보: `--item`에서 이름/alias 조회(alias가 다른 food ID와 겹칠 수 있어 모호성 규칙 필요), meal void/merge.
+main 통합은 완료됐다. origin push 여부 결정(별도 승인). 이후 후보: `--item`에서 이름/alias 조회(alias가 다른 food ID와 겹칠 수 있어 모호성 규칙 필요), meal void/merge.
 
 ## Previous task: Nutrition Meal Edit v1 (2026-10-03)
 
