@@ -121,6 +121,26 @@ class MealIntake:
 
 
 @dataclass(frozen=True)
+class FactVersionChange:
+    """A repeated item whose values come from other catalog fact versions than the source item's."""
+
+    source_sequence: int
+    new_sequence: int
+    food_id: str
+    food_name: str
+    source_versions: tuple[str, ...]
+    new_versions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RepeatedMeal:
+    source_meal_id: str
+    intake: MealIntake
+    # In item order; empty when every item uses the same catalog fact versions as its source.
+    fact_changes: tuple[FactVersionChange, ...]
+
+
+@dataclass(frozen=True)
 class DailyIntake:
     day: date
     timezone_name: str
@@ -307,6 +327,7 @@ class LogMeal:
         timezone: tzinfo,
         eaten_time: time | None = None,
         additional: bool = False,
+        repeated_from: str | None = None,
     ) -> MealIntake:
         if not items:
             raise NutritionLoggingError("a meal needs at least one item")
@@ -328,12 +349,15 @@ class LogMeal:
         )
         # Without --time the meal is dated, not timed: it is stored at local 00:00 of the day.
         eaten_at = datetime.combine(day, eaten_time or time(0), tzinfo=timezone)
+        original_text = _structured_text(meal_type, day, eaten_time, items)
+        if repeated_from is not None:
+            original_text = f"repeated from {repeated_from}; {original_text}"
         try:
             meal = Meal(
                 meal_id=meal_id,
                 eaten_at=eaten_at,
                 meal_type=meal_type,
-                original_text=_structured_text(meal_type, day, eaten_time, items),
+                original_text=original_text,
                 items=meal_items,
             )
             self._meals.save(meal)
@@ -349,6 +373,66 @@ class LogMeal:
         while self._meals.get(f"{day.isoformat()}-{meal_type.value}-{number}") is not None:
             number += 1
         return f"{day.isoformat()}-{meal_type.value}-{number}"
+
+
+class RepeatMeal:
+    """Log a new meal with the same foods, quantities and units as an already logged meal.
+
+    Only the source's active items are repeated (removed items are skipped, replacement items
+    included), and only their food ID, quantity and unit are reused: the new meal is logged by
+    `LogMeal`, so every item snapshots the catalog facts as they are now (a newer fact version
+    is used, never the source's snapshot), and the duplicate-meal guard applies unchanged. The
+    source meal is only read.
+    """
+
+    def __init__(self, meals: MealRepository, foods: FoodNutritionRepository) -> None:
+        self._meals = meals
+        self._foods = foods
+
+    def execute(
+        self,
+        source_meal_id: str,
+        day: date,
+        *,
+        timezone: tzinfo,
+        meal_type: MealType | None = None,
+        eaten_time: time | None = None,
+        additional: bool = False,
+    ) -> RepeatedMeal:
+        source = _existing_meal(self._meals, source_meal_id)
+        entries: list[MealEntryItem] = []
+        for item in source.items:
+            if item.food_profile_id is None or item.quantity is None or item.quantity_unit is None:
+                raise NutritionLoggingError(
+                    f"item {item.sequence} of meal {source.meal_id} ({item.food_name}) has no catalog food and "
+                    "quantity to repeat. Nothing was changed."
+                )
+            entries.append(MealEntryItem(item.food_profile_id, item.quantity, item.quantity_unit))
+        intake = LogMeal(self._meals, self._foods).execute(
+            day,
+            meal_type or source.meal_type,
+            tuple(entries),
+            timezone=timezone,
+            eaten_time=eaten_time,
+            additional=additional,
+            repeated_from=source.meal_id,
+        )
+        changes = []
+        # LogMeal numbers the items 1..n in entry order, so they pair with the source items in order.
+        for old, new in zip(meal_intake(source).items, intake.items, strict=True):
+            old_versions, new_versions = catalog_fact_versions(old), catalog_fact_versions(new)
+            if old_versions != new_versions:
+                changes.append(
+                    FactVersionChange(
+                        old.item.sequence,
+                        new.item.sequence,
+                        new.item.food_profile_id or "",
+                        new.item.food_name,
+                        old_versions,
+                        new_versions,
+                    )
+                )
+        return RepeatedMeal(source.meal_id, intake, tuple(changes))
 
 
 class ShowMeal:
@@ -502,6 +586,21 @@ class ShowDailyIntake:
 
 def meal_intake(meal: Meal) -> MealIntake:
     return MealIntake(meal, aggregate_meal(meal), tuple(_item_intake(item) for item in meal.items))
+
+
+def catalog_fact_versions(item: ItemIntake) -> tuple[str, ...]:
+    """The catalog facts the item's selected values were snapshotted from, in nutrient order.
+
+    Snapshot fact IDs are "<meal_id>:<item>:<catalog fact ID>", so the catalog version is the rest.
+    """
+    prefix = f"{item.item.meal_id}:{item.item.sequence}:"
+    selected = [selection.fact_id for selection in item.calculated.nutrients] if item.calculated is not None else []
+    versions: list[str] = []
+    for fact_id in selected:
+        version = fact_id.removeprefix(prefix)
+        if version not in versions:
+            versions.append(version)
+    return tuple(versions)
 
 
 def local_day_bounds(day: date, timezone: tzinfo) -> tuple[datetime, datetime]:

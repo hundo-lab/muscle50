@@ -7,7 +7,8 @@ status that compares a date's logged intake (Nutrition Logging) with those targe
 a short action (Nutrition Recommendation Integration v1, `docs/nutrition-recommendation.md`);
 they reuse `ShowDailyNutritionStatus` unchanged. Not implemented: automatic target calculation (per kg, TDEE, ...), training/rest-day
 target cycling, Garmin-based adjustment, food or meal suggestions, free-text meal parsing,
-meal/food edit or delete, unit conversion.
+meal deletion, food name/alias edits, unit conversion (meal items can be edited and foods get new
+fact versions: `nutrition-logging.md`).
 
 ## Architecture
 

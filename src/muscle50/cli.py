@@ -27,6 +27,7 @@ from muscle50.application.nutrition_logging import (
     NewFoodFact,
     NutritionLoggingError,
     RemoveMealItem,
+    RepeatMeal,
     ReplaceMealItem,
     ShowDailyIntake,
     ShowFood,
@@ -89,6 +90,7 @@ from muscle50.presentation.nutrition_terminal import (
     render_meal,
     render_nutrition_status,
     render_nutrition_status_json,
+    render_repeated_meal,
     render_targets,
     render_targets_json,
 )
@@ -287,6 +289,27 @@ def _add_nutrition_parser(commands: argparse._SubParsersAction[argparse.Argument
         help="record another meal of the same type on the same date (otherwise refused to prevent double entry)",
     )
     log.add_argument("--json", action="store_true", help="print the recorded meal as JSON")
+    repeat = nutrition_commands.add_parser(
+        "repeat",
+        help=(
+            "Record a new meal with the same foods and amounts as a logged meal, using the foods' current "
+            "nutrition facts (the source meal is not changed)"
+        ),
+    )
+    repeat.add_argument("meal_id", help="meal to repeat, as printed by `nutrition log`/`nutrition day`")
+    repeat.add_argument(
+        "--date", dest="as_of", metavar="YYYY-MM-DD", help="new meal date (default: today on this computer)"
+    )
+    repeat.add_argument("--time", dest="eaten_time", metavar="HH:MM", help="local time eaten (optional)")
+    repeat.add_argument(
+        "--meal", choices=[meal.value for meal in MealType], help="meal type (default: the source meal's type)"
+    )
+    repeat.add_argument(
+        "--additional",
+        action="store_true",
+        help="record another meal of the same type on the same date (otherwise refused to prevent double entry)",
+    )
+    repeat.add_argument("--json", action="store_true", help="print the recorded meal as JSON")
     meal = nutrition_commands.add_parser(
         "meal", help="Show or correct the items of a logged meal (the meal ID never changes)"
     )
@@ -841,6 +864,18 @@ def _nutrition(args: argparse.Namespace) -> int:
                 additional=args.additional,
             )
             print(render_logged_meal_json(meal) if args.json else render_logged_meal(meal))
+            return 0
+        if args.nutrition_command == "repeat":
+            day = _nutrition_date(args.as_of)
+            repeated = RepeatMeal(meals, foods).execute(
+                args.meal_id,
+                day,
+                timezone=_local_timezone(day),
+                meal_type=MealType(args.meal) if args.meal is not None else None,
+                eaten_time=_eaten_time(args.eaten_time),
+                additional=args.additional,
+            )
+            print(render_logged_meal_json(repeated.intake) if args.json else render_repeated_meal(repeated))
             return 0
         if args.nutrition_command == "meal":
             return _nutrition_meal(args, meals, foods)

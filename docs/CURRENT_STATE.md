@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-10-03
+Last updated: 2026-10-04
 
 ## Project goal
 
@@ -30,12 +30,13 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   append-only nutrition fact history를 제공한다. Nutrition Logging MVP(`application/nutrition_logging.py`,
   `presentation/nutrition_terminal.py`, CLI `muscle50 nutrition`)가 그 위의 food catalog / 구조화 식사 기록 / 하루 섭취
   계산 경로다(migration 없음, 목표·추천 없음). Meal Edit v1(`muscle50 nutrition meal ...`, `b234ac8`)은 item 제거를
-  append-only tombstone(migration 8)으로 기록한다. 상세는 `docs/nutrition-logging.md`.
+  append-only tombstone(migration 8)으로 기록한다. Meal Repeat v1(`muscle50 nutrition repeat <meal_id>`)은 기존 식사의 active
+  item(음식 ID/양/단위만)으로 `LogMeal`을 그대로 실행한다(migration 없음). 상세는 `docs/nutrition-logging.md`.
 - Nutrition Targets + Daily Status v1(`domain/nutrition_targets.py`, `application/nutrition_targets.py`,
   `infrastructure/nutrition_target_store.py`, CLI `muscle50 nutrition target set|show`, `muscle50 nutrition status`)은
   사용자가 직접 정한 하루 목표(exact/range/unset)를 `<home>\config\nutrition_targets.json`(versioned JSON, migration 없음)에
   두고, `ShowDailyIntake` 결과를 그대로 목표와 비교한다. 상세는 `docs/nutrition-targets.md`.
-- (`8f267a2`/`caa7982`, 2026-10-02 local main으로 fast-forward 통합, origin push 안 함) Nutrition → Daily/Recommendation Integration v1: 추천이 먼저
+- (`8f267a2`/`caa7982`, 2026-10-02 local main으로 fast-forward 통합, 이후 origin/main에 포함) Nutrition → Daily/Recommendation Integration v1: 추천이 먼저
   만들어진 뒤 `BuildNutritionContext`(`application/nutrition_recommendation.py`)가 같은 날짜의 `ShowDailyNutritionStatus`를
   그대로 실행하고, 순수 규칙 `domain/nutrition_guidance.py`가 status를 행동 안내로 바꾼다. 추천은 nutrition을 입력으로 받지
   않는다(운동 계획 불변). Read-only meal reader `infrastructure/sqlite/nutrition_reader.py`. 상세는
@@ -149,7 +150,7 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   local 무결성 오류)는 명령 전체를 중단한다. 출력: ASCII 단계 블록 + `Stored data now` freshness 줄 + 기존
   `recommend` text 그대로. `--json`은 단계 요약 + `"recommendation"`에 standalone `recommend --json` 문서를 그대로 넣고
   recovery row timestamp는 넣지 않아 같은 입력이면 byte-identical. 진행 안내와 Garmin 재로그인 prompt는 stderr.
-- (`8f267a2`/`caa7982`, local main 통합) Nutrition → Daily/Recommendation Integration v1:
+- (`8f267a2`/`caa7982`, main/origin 포함) Nutrition → Daily/Recommendation Integration v1:
   `recommend`/`daily`가 추천 날짜의 nutrition status를 보여 준다. `availability`: `no_targets_configured`(목표 전부 unset —
   text 절 없음, 기존 text와 동일), `no_intake_logged`(식사 0개 — "0 kcal/0 g 아님" 한 줄, 행동 없음), `evaluated`, `unavailable`
   (목표 파일 손상/DB 읽기 불가 — 이유 한 줄, 추천 유지, exit 0). 행동은 complete total의 `below_*`에서만: protein
@@ -208,9 +209,20 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   Replace는 새 item + tombstone 한 transaction. 오류(없는 meal/item/food, 단위, quantity, 이미 제거된 item, storage 실패)는
   아무것도 안 씀. 같은 `add-item` 재실행은 item 2개(자동 dedupe 없음, `remove-item`으로 되돌림). Read-only reader는
   migration 8 이전 DB도 읽음(table 존재 확인). 상세 `docs/nutrition-logging.md` "Edit a logged meal's items".
+- (`feature/nutrition-meal-repeat`, main 미통합) Nutrition Meal Repeat v1: `muscle50 nutrition repeat <meal_id> [--date D]
+  [--time HH:MM] [--meal T] [--additional] [--json]`(use case `RepeatMeal`). 원본 식사의 active item(제거 item 제외, 교체 item
+  포함)에서 음식 ID/quantity/unit만 가져와 `LogMeal.execute`를 그대로 실행 → 각 item은 **repeat 시점** catalog fact history를
+  snapshot(원본 snapshot 복사 없음), unknown은 missing 유지, duplicate guard/`--additional` 동작 불변. 기본값: 날짜 = 이 컴퓨터
+  오늘, 종류 = 원본 종류, 시간 없음(원본 시간 복사 안 함). `LogMeal.execute(..., repeated_from=None)` 추가 — 지정 시
+  `original_text` = `repeated from <id>; structured entry ...`, None이면 기존 `log` 출력/저장 불변. 원본 item과 catalog fact
+  version이 다르면 text에 "Nutrition facts changed since the source meal" note. JSON은 `nutrition log --json`과 같은 문서.
+  원본 식사는 읽기만. Food/quantity 없는 원본 item(CLI 밖에서 만든 식사)은 전체 거부. Schema/migration/저장소 추가 없음.
+  상세 `docs/nutrition-logging.md` "Repeat a logged meal".
 
 ## Pending merge
 
+- `feature/nutrition-meal-repeat`(Nutrition Meal Repeat v1): base `e13acfa`(= main = origin/main), feature commit 1개, main
+  미통합·push 안 함. Paseo worktree `nutrition-quick-log`(branch를 `feature/nutrition-quick-log`에서 rename). Migration 없음.
 - 현재 pending merge 없음.
 - `feature/nutrition-meal-edit`(Nutrition Meal Edit v1, `b234ac8`)는 2026-10-03 local main으로 fast-forward 통합됐다
   (`e1e66ed` → `b234ac8`, merge commit/rebase/squash 없음). Production DB 백업 `db_backup_20261003a_pre_migration8`(migration
@@ -221,7 +233,8 @@ muscle50는 개인 fitness 데이터를 로컬에 보존하고 RAW → NORMALIZE
   Branch와 Paseo worktree `nutrition-food-facts`는 유지한다.
 - `feature/nutrition-recommendation`(Nutrition → Daily/Recommendation Integration v1, `8f267a2`, `caa7982`)는 2026-10-02
   local main으로 fast-forward 통합됐다(`f07f5a2` → `caa7982`, merge commit/rebase/squash 없음). 통합 전 `git fetch` +
-  `git ls-remote`로 origin/main = `f07f5a2` 확인. origin push 안 함(별도 승인). Branch와 Paseo worktree
+  `git ls-remote`로 origin/main = `f07f5a2` 확인. 당시 origin push는 하지 않았으나 이후 push되어 origin/main에 포함됐다
+  (2026-10-04 `git merge-base --is-ancestor caa7982 origin/main` 확인). Branch와 Paseo worktree
   `nutrition-recommendation`은 유지한다.
 
 - `feature/nutrition-targets`(Nutrition Targets + Daily Status v1, `c77de0d`, `1549c4a`)는 2026-10-02 local main으로
@@ -277,6 +290,18 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
 - `tests/test_refresh_activity.py`, `tests/test_swim_normalization.py`, `tests/test_sync_recovery.py`
 
 ## Verification
+
+2026-10-04 Nutrition Meal Repeat v1(`feature/nutrition-meal-repeat`, base `e13acfa`):
+
+- `uv run --extra dev pytest` 917 passed(기존 900 + 신규 `tests/test_nutrition_meal_repeat.py` 17; 기존 test 수정 없음),
+  `ruff check .`, `mypy src tests`(118 files), `git diff --check` 통과. `ruff format`은 `cli.py`/`nutrition_logging.py`/신규 test만.
+- Mutation 5종 모두 검출: provenance prefix 제거, 원본 item 검증 제거, fact-change note 제거, duplicate guard 우회
+  (`additional=True`), 기본 meal type 변경.
+- 임시 `MUSCLE50_HOME` CLI smoke(합성 음식, `C:	emp\muscle50-evidence-20261004-nutrition-meal-repeat\smoke.txt`): fact v2 후
+  repeat → v2 사용 + note, 원본 v1 유지, fat unknown → missing, 재실행 거부, override JSON.
+- Production: 작업 중 production에 어떤 명령도 실행하지 않음. Fingerprint before = after(`before.json`/`after.json`, 같은 폴더;
+  `mode=ro&immutable=1`로만 읽음): DB sha256/size/mtime 동일(`-wal`/`-shm` 없음, 생성도 없음), 29 table row digest,
+  migration 1~8, RAW 974 files, 그 밖의 home 파일 30개 동일. Migration 없음.
 
 2026-10-03 Production migration 8(Meal Edit v1 main 통합 후, `uv run muscle50 nutrition food list`):
 
@@ -725,10 +750,12 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
   `-shm` mtime을 갱신하는 것은 기존 analytics reader와 같은 동작이다.
 - (Nutrition Targets v1) 목표 history 없음(과거 날짜도 현재 목표로 비교), 요일/운동일별 목표 없음, 목표 자동 계산 없음. 식사 0개인 날은 `no_intake_logged`이며 "기록했고 먹지 않음"을 표시할 방법이
   없다. Estimated total은 point 값으로 비교한다. Text는 0.1 반올림(정확한 값은 `--json`).
+- (Nutrition Meal Repeat v1) 양 조절(scaling), 저장된 template, 날짜/종류로 원본 선택, 이름/alias 기록, 같은 명령에서 item
+  추가/제외는 없다(새 식사를 `nutrition meal`로 수정). Repeat은 원본 시간을 복사하지 않는다.
 - (Nutrition Logging MVP) 계산된 nutrition target, 메뉴·운동 전후 식사 추천, 자유 문장
   meal parser(`MealParser` 구현), 외부 food DB/barcode/사진, 주간 분석은 아직 없다. 식사 삭제, 식사 날짜/종류/시간
   수정, 식사 병합(`--additional`로 이미 쪼개진 식사), 제거 취소, 음식 이름/alias 수정 CLI 없음 — nutrition fact는
-  append-only trigger, meal item → fact는 `ON DELETE RESTRICT`(item 수정은 Meal Edit v1의 tombstone + 새 item으로만). 음식당 CLI fact 1개,
+  append-only trigger, meal item → fact는 `ON DELETE RESTRICT`(item 수정은 Meal Edit v1의 tombstone + 새 item으로만). 음식당 CLI unit 1개(`food fact add`는 같은 unit의 새 version만),
   unit 간 변환(예: 1 pack = 210 g) 없음. `--time` 없는 식사와 `--time 00:00`은 구분되지 않는다.
 - 기존 provisional nutrition schema로 직접 만든 외부 DB가 있다면 정식 migration marker가
   없으므로 별도 호환성 검토가 필요하다.

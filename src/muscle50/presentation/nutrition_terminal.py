@@ -12,7 +12,13 @@ from datetime import time
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any
 
-from muscle50.application.nutrition_logging import DailyIntake, ItemIntake, MealIntake
+from muscle50.application.nutrition_logging import (
+    DailyIntake,
+    ItemIntake,
+    MealIntake,
+    RepeatedMeal,
+    catalog_fact_versions,
+)
 from muscle50.application.nutrition_recommendation import NutritionContext
 from muscle50.application.nutrition_targets import DailyNutritionStatus, NutrientDayStatus
 from muscle50.domain.nutrition import (
@@ -105,6 +111,27 @@ def render_logged_meal(intake: MealIntake) -> str:
 
 def render_logged_meal_json(intake: MealIntake) -> str:
     return _dumps(_meal_payload(intake))
+
+
+def render_repeated_meal(repeated: RepeatedMeal) -> str:
+    """`nutrition repeat`: the new meal as `nutrition log` prints it, plus fact-version notes.
+
+    JSON is `render_logged_meal_json` of `repeated.intake`, the same document as `nutrition log --json`.
+    """
+    intake = repeated.intake
+    day = intake.meal.eaten_at.date().isoformat()
+    lines = [f"Recorded meal {intake.meal.meal_id} (repeated from {repeated.source_meal_id}).", ""]
+    lines.extend(_meal_lines(intake))
+    if repeated.fact_changes:
+        lines.extend(["", "Nutrition facts changed since the source meal; this meal uses the current catalog facts:"])
+        for change in repeated.fact_changes:
+            lines.append(
+                f"  item {change.new_sequence} {change.food_name} ({change.food_id}) uses "
+                f"{', '.join(change.new_versions) or 'no fact'}; "
+                f"source item {change.source_sequence} used {', '.join(change.source_versions) or 'no fact'}"
+            )
+    lines.extend(["", f"Whole day: muscle50 nutrition day --date {day}"])
+    return "\n".join(lines)
 
 
 def render_meal(intake: MealIntake) -> str:
@@ -210,15 +237,8 @@ def _item_sources(item: ItemIntake) -> str:
 
 
 def _item_fact_versions(item: ItemIntake) -> str:
-    # The catalog fact each selected snapshot was copied from (snapshot IDs are
-    # "<meal_id>:<item>:<catalog fact ID>"), so an item logged with an older version shows it.
-    prefix = f"{item.item.meal_id}:{item.item.sequence}:"
-    selected = [selection.fact_id for selection in item.calculated.nutrients] if item.calculated is not None else []
-    versions: list[str] = []
-    for fact_id in selected:
-        version = fact_id.removeprefix(prefix)
-        if version not in versions:
-            versions.append(version)
+    # The catalog fact each selected snapshot was copied from, so an item logged with an older version shows it.
+    versions = catalog_fact_versions(item)
     return ", ".join(versions) if versions else "none selected"
 
 

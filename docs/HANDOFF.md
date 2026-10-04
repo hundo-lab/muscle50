@@ -1,8 +1,50 @@
 # Session Handoff
 
-Last updated: 2026-10-03
+Last updated: 2026-10-04
 
-## Current task: Nutrition Meal Edit v1 (2026-10-03)
+## Current task: Nutrition Meal Repeat v1 (2026-10-04)
+
+Paseo worktree `nutrition-quick-log`(branch는 `feature/nutrition-quick-log`에서 `feature/nutrition-meal-repeat`으로 rename, base
+`e13acfa` = main = origin/main). Feature commit 하나. **main 미통합, merge/rebase/push 안 함.** 개발 중 production DB/RAW/config
+쓰기 없음(테스트·smoke는 모두 임시 `MUSCLE50_HOME`).
+
+### What was attempted / completed
+
+- Audit(2026-10-03~04): nutrition에 이전 식사 재사용/template/quick log/free-text/AI parser/unit conversion 모두 없음(`MealParser`는
+  protocol뿐, alias는 중복 검사에만 쓰이고 `--item`은 food ID만). 비교(A repeat / B template / C 축약 문법·alias / D 자유 문장 /
+  E AI / F meal void·unit 변환) 후 A를 승인받아 구현. "Nutrition status/guidance integration"과 "Nutrition Recommendation v1"은
+  같은 작업(`8f267a2`/`caa7982`)이다.
+- CLI `muscle50 nutrition repeat <meal_id> [--date] [--time] [--meal] [--additional] [--json]`, use case `RepeatMeal`: 원본 active
+  item → `MealEntryItem`(food ID/quantity/unit) → `LogMeal.execute(..., repeated_from=<id>)`. 원본 snapshot을 복사하지 않고 현재
+  catalog로 새로 snapshot. `catalog_fact_versions(item)` helper를 application으로 옮겨 `meal show` `facts:`와 fact-change note가
+  공유(출력 불변). Text는 `render_repeated_meal`, JSON은 `render_logged_meal_json` 그대로.
+- Stale docs 정리: CURRENT_STATE의 `caa7982` "origin push 안 함"(3곳, 실제로는 origin 포함), Known issues "음식당 CLI fact 1개",
+  `nutrition-logging.md` Limitations "No recommendations", `nutrition-targets.md` "meal/food edit or delete" 미구현 문구.
+
+### Files changed
+
+신규 `tests/test_nutrition_meal_repeat.py`(17). 수정 `src/muscle50/application/nutrition_logging.py`, `src/muscle50/cli.py`,
+`src/muscle50/presentation/nutrition_terminal.py`, `README.md`, `docs/nutrition-logging.md`, `docs/nutrition-targets.md`,
+`docs/CURRENT_STATE.md`, 이 파일. Migration/schema 변경 없음.
+
+### Checks run
+
+- pytest 917 passed, `ruff check .`, `mypy src tests`(118 files), `git diff --check`; mutation 5종 검출; 임시 home CLI smoke.
+- Production fingerprint before = after(CURRENT_STATE Verification, evidence `C:	emp\muscle50-evidence-20261004-nutrition-meal-repeat\`).
+- `nutrition_terminal.py`의 기존 format 차이(`nutrition_context_payload` dict comprehension)는 base에도 있어 건드리지 않음. LF 유지.
+
+### Known failures or risks
+
+- Repeat은 원본과 숫자가 다를 수 있다(그 사이 fact version이 바뀌면 현재 fact 사용 — 의도된 동작, text note로 표시).
+- Storage 오류(sqlite3.Error)는 `nutrition log`처럼 CLI traceback(rollback은 test로 검증).
+- 원본 meal ID를 알아야 한다(`nutrition day --date <어제>`로 확인). 날짜/종류로 선택하는 기능은 없음.
+
+### Recommended next action
+
+Review 후 main으로 fast-forward 통합 여부 결정(별도 승인; migration 없음이라 production backup 불필요하지만 통합 후 read-only
+확인 권장). 이후 후보: `--item`에서 이름/alias 조회(alias가 다른 food ID와 겹칠 수 있어 모호성 규칙 필요), meal void/merge.
+
+## Previous task: Nutrition Meal Edit v1 (2026-10-03)
 
 Paseo worktree `nutrition-meal-edit`(branch `feature/nutrition-meal-edit`, base `e1e66ed` = local main). Feature commit 하나
 (`b234ac8`). 개발 중 production DB/RAW/config 쓰기 없음(테스트·smoke는 모두 임시 `MUSCLE50_HOME`).

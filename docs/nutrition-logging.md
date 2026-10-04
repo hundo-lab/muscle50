@@ -29,8 +29,8 @@ which records items removed by Meal Edit. Reused Nutrition Core pieces:
 | Storage | `SqliteFoodNutritionRepository` (+ new `list_all`), `SqliteMealRepository` |
 
 New code: `application/nutrition_logging.py` (use cases `AddFood`, `AddFoodFact`, `ListFoods`,
-`ShowFood`, `LogMeal`, `ShowDailyIntake`, and for Meal Edit `ShowMeal`, `AddMealItems`, `RemoveMealItem`,
-`ReplaceMealItem`), `presentation/nutrition_terminal.py` (text + JSON), and the
+`ShowFood`, `LogMeal`, `ShowDailyIntake`, for Meal Edit `ShowMeal`, `AddMealItems`, `RemoveMealItem`,
+`ReplaceMealItem`, and for Meal Repeat `RepeatMeal`), `presentation/nutrition_terminal.py` (text + JSON), and the
 `muscle50 nutrition` command group in `cli.py`.
 
 ### Snapshot at log time
@@ -209,6 +209,45 @@ That table is append-only too (update/delete triggers). Every meal read skips re
 item row and its facts stay stored for audit, and a removal cannot be undone. The read-only
 reader used by `recommend` also works on a database that has not yet run migration 8.
 
+### Repeat a logged meal
+
+For a meal you eat again, log a new meal with the same foods and amounts instead of typing every
+`--item`:
+
+```powershell
+muscle50 nutrition repeat 2026-10-02-breakfast-1                  # today, same meal type, time not recorded
+muscle50 nutrition repeat 2026-10-02-breakfast-1 --time 07:30
+muscle50 nutrition repeat 2026-10-02-dinner-1 --date 2026-10-03 --meal lunch
+muscle50 nutrition repeat 2026-10-02-snack-1 --additional       # today's snack is already logged
+muscle50 nutrition repeat 2026-10-02-breakfast-1 --json
+```
+
+- **What is repeated:** the source meal's current items, in order: removed items are skipped and
+  replacement items are included (what `meal show` lists). Only each item's food ID, quantity and
+  unit are reused. The new meal's items are numbered 1, 2, ...
+- **Nutrition comes from the catalog as it is now.** The new meal is recorded by the same code as
+  `nutrition log`, so each item snapshots the food's current fact history (see "Snapshot at log
+  time"); the source's snapshots are never copied. If a food got a new fact version after the source
+  meal was logged, the repeat uses the new version, and the text output lists such items under
+  "Nutrition facts changed since the source meal", naming the catalog fact versions on both sides.
+  A nutrient that is `unknown` stays missing in the new meal, never 0.
+- **Defaults:** `--date` is today on this computer, `--meal` is the source meal's type, and the
+  time is not recorded unless `--time HH:MM` is given (the source's time is not copied).
+- **Duplicate guard:** unchanged from `nutrition log`. If the date already has a meal of that type,
+  the repeat is refused unless `--additional` is given, so running the same repeat twice records
+  one meal.
+- **The source meal is only read.** Its ID, items, facts and output stay exactly as they were.
+- **Provenance:** the new meal's `original_text` starts with `repeated from <source meal ID>;`
+  followed by the usual structured entry text. `--json` prints the same document as
+  `nutrition log --json`.
+- Errors change nothing: a missing source meal, a source item without a catalog food or quantity
+  (possible only for meals written outside the CLI), a bad `--date`/`--time`, the duplicate guard,
+  or a storage failure (rolled back, shown as a traceback as with `nutrition log`).
+
+Not supported: scaling amounts (half a portion), saved templates, choosing the source by date or
+type, adding or dropping items in the same command (edit the new meal with `nutrition meal`
+afterwards), name/alias lookup and unit conversion. No migration: a repeat stores an ordinary meal.
+
 ### View a day's intake
 
 ```powershell
@@ -296,5 +335,6 @@ only.
 - Without `--time` a meal is stored at local 00:00; `--time 00:00` is displayed the same way.
 - The day boundary uses this computer's current UTC offset rules; meals logged under a
   different offset are still found by their absolute time.
-- No recommendations, weekly analytics, parser, Telegram, external databases. Targets and
-  remaining amounts are in `muscle50 nutrition status` (`nutrition-targets.md`), not in `day`.
+- No meal or menu recommendations, weekly analytics, parser, Telegram, external databases. Targets
+  and remaining amounts are in `muscle50 nutrition status` (`nutrition-targets.md`), not in `day`;
+  `recommend`/`daily` show that status with short below-target actions (`nutrition-recommendation.md`).
