@@ -297,7 +297,7 @@ Push는 하지 않았다(local main은 `origin/main`보다 앞서 있다). 포�
   `ruff check .`, `mypy src tests`(118 files), `git diff --check` 통과. `ruff format`은 `cli.py`/`nutrition_logging.py`/신규 test만.
 - Mutation 5종 모두 검출: provenance prefix 제거, 원본 item 검증 제거, fact-change note 제거, duplicate guard 우회
   (`additional=True`), 기본 meal type 변경.
-- 임시 `MUSCLE50_HOME` CLI smoke(합성 음식, `C:	emp\muscle50-evidence-20261004-nutrition-meal-repeat\smoke.txt`): fact v2 후
+- 임시 `MUSCLE50_HOME` CLI smoke(합성 음식, `C:\temp\muscle50-evidence-20261004-nutrition-meal-repeat\smoke.txt`): fact v2 후
   repeat → v2 사용 + note, 원본 v1 유지, fat unknown → missing, 재실행 거부, override JSON.
 - Production: 작업 중 production에 어떤 명령도 실행하지 않음. Fingerprint before = after(`before.json`/`after.json`, 같은 폴더;
   `mode=ro&immutable=1`로만 읽음): DB sha256/size/mtime 동일(`-wal`/`-shm` 없음, 생성도 없음), 29 table row digest,

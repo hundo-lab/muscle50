@@ -30,7 +30,7 @@ Paseo worktree `nutrition-quick-log`(branch는 `feature/nutrition-quick-log`에�
 ### Checks run
 
 - pytest 917 passed, `ruff check .`, `mypy src tests`(118 files), `git diff --check`; mutation 5종 검출; 임시 home CLI smoke.
-- Production fingerprint before = after(CURRENT_STATE Verification, evidence `C:	emp\muscle50-evidence-20261004-nutrition-meal-repeat\`).
+- Production fingerprint before = after(CURRENT_STATE Verification, evidence `C:\temp\muscle50-evidence-20261004-nutrition-meal-repeat\`).
 - `nutrition_terminal.py`의 기존 format 차이(`nutrition_context_payload` dict comprehension)는 base에도 있어 건드리지 않음. LF 유지.
 
 ### Known failures or risks
