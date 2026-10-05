@@ -2,6 +2,7 @@
 name: verifier
 description: muscle50 independent verifier. In a fresh context, checks a feature branch against its spec - runs the feature gate in check-only mode, checks every acceptance criterion against evidence, and smoke-tests the CLI under a temporary MUSCLE50_HOME. Never edits source; returns PASS or REJECT with evidence. Use after the implementer in /feature.
 tools: Read, Grep, Glob, Bash, PowerShell
+disallowedTools: Edit, Write, MultiEdit, NotebookEdit
 skills:
   - feature-gate
   - domain-principles
@@ -32,11 +33,11 @@ implementer's report. Treat the report as claims to check, not as evidence.
    `git -C <worktree> log --oneline main..HEAD`, and `git -C <worktree> diff --stat main...HEAD`.
 2. **Scope**: compare the changed files with the plan. Fail it if any of these changed:
    `docs/CURRENT_STATE.md`, `docs/HANDOFF.md`, `README.md`, `docs/specs/`, `AGENTS.md`, `CLAUDE.md`,
-   `.claude/`. Also fail unrelated reformatting or a migration number that differs from the spec's
-   `reserved:NNN`.
+   `.claude/`. Also fail unrelated reformatting, or a migration number other than the reservation
+   (`python .claude/scripts/feature_state.py get <id>` -> `migration`).
 3. **Gate**: run the `feature-gate` skill in **check-only mode** from the worktree. Compare the test count
-   with the baseline recorded in `docs/CURRENT_STATE.md` "Verification". Existing tests may change only
-   where the plan says so (for example the migration-version lists).
+   with the baseline (see `feature-gate` section 5). Existing tests may change only where the plan says
+   so (for example the migration-version lists).
 4. **Acceptance criteria**: go through each criterion in the spec. For each one, find the test that
    proves it and read the assertion, or run a smoke step. Record the result as one of: met / not met /
    not verifiable here (for example it needs live Garmin, so it becomes a user gate).

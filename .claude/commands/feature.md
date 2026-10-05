@@ -1,103 +1,121 @@
 ---
-description: Run one muscle50 feature end to end from a spec - reserve a migration number, design (stops for your approval), implement in a Paseo worktree, verify (up to 3 rejections), integrate into local main, and report the remaining human gates.
-argument-hint: "<docs/specs/<id>.md>"
+description: Run muscle50 features end to end from one or more specs, in parallel - design (stops for approval), implement in Paseo worktrees, verify (up to 3 rejections), stop for integration approval, integrate one at a time into local main, and report the remaining human gates.
+argument-hint: "<docs/specs/<id>.md> [<docs/specs/<id2>.md> ...]"
 disable-model-invocation: true
 ---
 
 # /feature $ARGUMENTS
 
-You are the **orchestrator**. You coordinate the agents `designer`, `implementer`, `verifier` and
-`integrator`. You write nothing but spec frontmatter (`status`, `migration`) and your messages to the
-user. You never edit code, tests, feature docs or the state documents yourself.
+You are the **orchestrator** for one or more features. You coordinate the `designer`, `implementer`,
+`verifier` and `integrator` agents. You write only runtime state (through the helper below), the spec
+commit in step 3, and your messages to the user. You never edit code, tests or docs.
 
-Run this from the **main checkout** (the worktree on `refs/heads/main`). Flow and rules:
-`docs/specs/README.md`, `CLAUDE.md`.
+Run this from the **main checkout** (the worktree on `refs/heads/main`). Rules: `CLAUDE.md`. Flow:
+`docs/specs/README.md`.
 
-## 1. Read the spec
+Runtime state helper (shared by every session and worktree, never committed):
 
-- `$ARGUMENTS` must be a file under `docs/specs/` other than `_TEMPLATE.md` and `README.md`. If it is not,
-  stop and say so.
-- Read its frontmatter: `id`, `title`, `status`, `migration`, `output_change`, `user_gates`. The slug is
-  `id`, and the branch will be `feature/<id>`.
-- `status`:
-  - `draft` or `approved`: continue.
-  - `in-progress` or `verified`: tell the user what exists (`git branch --list feature/<id>`,
-    `git worktree list`) and ask whether to resume from step 5 or 6. Do not start over.
-  - `integrated`: stop, there is nothing to do.
-- Check that the required sections exist: purpose, scope / non-goals, command examples, rules, acceptance
-  criteria. If any is empty, list the gaps and stop.
+```bash
+python .claude/scripts/feature_state.py set <id> status=<status> [key=value ...]
+python .claude/scripts/feature_state.py get <id> | list | dir | reserve-migration <id> | release-migration <id>
+python .claude/scripts/feature_state.py lock <id> --wait 900 | unlock <id>
+```
 
-## 2. Migration number (only the orchestrator assigns numbers)
+Statuses: `designing` -> `awaiting-design-approval` -> `approved` -> `in-progress` -> `verifying` ->
+`awaiting-integration-approval` -> `integrating` -> `integrated` (or `blocked`).
 
-Assign a number when the spec already says `reserved:NNN` (validate it) or when the approved design
-needs a migration (step 3).
+**Parallelism.** Handle every spec in `$ARGUMENTS` at once. Put independent agent calls for different
+features in the same message, so designers run in parallel, then implementers, then verifiers. Ask for
+approvals in batches. Integrations are serialized by the lock. Other `/feature` sessions may be running
+too: always read and write state through the helper, never assume you are alone.
 
-1. Find the highest existing number:
-   - `git ls-tree --name-only main src/muscle50/infrastructure/sqlite/migrations/`
-   - each local branch: `git for-each-ref --format='%(refname:short)' refs/heads`, then the same `ls-tree`
-     per branch (an unmerged branch may already hold a number)
-   - every `docs/specs/*.md` in the main checkout: `migration: reserved:NNN`
-2. Next number = the highest of all of these + 1, as three digits. A spec that already says `reserved:NNN`
-   is valid only if no other spec or branch uses NNN.
-3. Write `migration: reserved:NNN` into this spec's frontmatter in the main checkout, and tell the user.
-   (The `INSERT OR IGNORE` marker hides a duplicate number silently; that happened with 006. See the
-   `add-migration` skill.)
+## 1. Read the specs
 
-## 3. Design, then STOP for approval (human gate 1)
+For each path:
+- It must be a file under `docs/specs/` other than `_TEMPLATE.md` and `README.md`. The `id` comes from the
+  frontmatter (kebab-case); the branch will be `feature/<id>`.
+- Check the runtime state (`get <id>`):
+  - empty, or `designing` with nothing on disk: continue.
+  - any later status: tell the user what exists (`git branch --list feature/<id>`, `git worktree list`)
+    and resume from the matching step. Do not start over.
+  - `integrated`, or committed frontmatter `status: integrated`: skip it.
+- The required sections must have content: purpose, scope / non-goals, command examples, rules,
+  acceptance criteria. If any is empty, report the gaps for that spec and drop it from this run.
+- Run `set <id> status=designing spec=<path>`.
 
-- Call the `designer` agent with the spec path and this instruction: "Design per your instructions.
-  Output only the plan."
-- If the plan says a migration is needed and none is reserved, do step 2 now and add the number to the
-  plan.
-- Show the user the plan, or the alternatives when the designer gave 2-3 of them, and ask for approval:
-  approve / approve with changes / choose an alternative / reject.
-- **End your turn here and wait.** Do not create a worktree, branch or any code before an explicit
-  approval. A hard or looping design question can go to `/paseo-committee` (user-invoked).
-- On approval: write `status: approved` to the spec and keep the approved plan text, including the
-  user's changes, for the next steps.
+## 2. Design (parallel), then STOP for approval (human gate 1)
 
-## 4. Worktree and implementation
+- Call one `designer` per spec, in parallel. Tell each one about the other features in this run and in
+  `feature_state.py list`, so it can flag overlapping files or migrations.
+- If a plan needs a migration: `reserve-migration <id>` and add the printed `NNN` to that plan. The helper
+  checks every branch, every worktree and every reservation, and is atomic.
+- Save each plan to `<state dir>/plans/<id>.md` (`feature_state.py dir` prints the state directory), so a
+  later session can resume. Then run `set <id> status=awaiting-design-approval`.
+- Show the user all plans (or the 2-3 alternatives a designer gave). Number the features and ask, per
+  feature: approve / approve with changes / choose an alternative / reject.
+- **End your turn and wait.** Create no branch, worktree or code before an explicit approval. For a hard
+  design question, suggest `/paseo-committee`.
+- On reject: `release-migration <id>` and `set <id> status=blocked`.
 
-1. Create the worktree the Paseo way (see the `paseo` skill, "Workspaces" / "CLI semantics"):
+## 3. After design approval: commit the spec, create the worktree, implement (parallel)
+
+For each approved feature:
+1. Append the user's changes to the saved plan, then `set <id> status=approved`.
+2. The spec must be committed on main **before** branching. If `git ls-files --error-unmatch <spec>` fails,
+   or the spec has uncommitted changes, take the lock (`lock <id> --wait 900`), run
+   `git add <spec> && git commit -m "docs: add spec <id>"` (that path only, attribution trailer if
+   configured), then `unlock <id>`.
+3. Create the worktree the Paseo way (see the `paseo` skill):
 
    ```bash
    paseo workspace create --isolation worktree --mode branch-off --new-branch feature/<id> \
      --base refs/heads/main --worktree-slug <id> --title "feature/<id>" --json
    ```
 
-   Use the `cwd` from the JSON as `<worktree>`. `refs/heads/main` means local main on purpose. If `paseo`
-   is not available, use `git worktree add -b feature/<id> <path> main` and tell the user.
-2. Write `status: in-progress` to the spec.
-3. Call the `implementer` agent with: `<worktree>`, the branch, the spec path, the reserved migration (or
-   `none`), `output_change`, and the full approved plan.
+   Use the JSON `cwd` as `<worktree>`. If `paseo` is missing, use `git worktree add -b feature/<id> <path> main`
+   and say so. Run `set <id> status=in-progress branch=feature/<id> worktree=<worktree>`.
+4. Call the `implementer` agents in parallel. Each gets `<worktree>`, its branch, the spec path, its
+   migration (`reserved:NNN` or `none`), `output_change`, and the full approved plan.
 
-## 5. Verification loop (at most 3 rejections)
+## 4. Verification loop (per feature, at most 3 rejections)
 
-- Call the `verifier` agent with: `<worktree>`, the branch, the spec path, the approved plan and the
-  implementer's report. Use a new verifier each round, so it never shares the implementer's context.
-- On **REJECT**: send the numbered findings back to the implementer (continue the same implementer agent
-  if you can address it, otherwise start a new `implementer` with the plan and the findings), then verify
-  again.
-- After the **3rd rejection**, stop. Report every round's findings and what changed between rounds, and
-  ask the user how to proceed. Do not integrate.
-- On **PASS**: write `status: verified` to the spec.
+- When an implementer reports, run `set <id> status=verifying` and call a **new** `verifier` with
+  `<worktree>`, the branch, the spec, the approved plan and the implementer's report.
+- **REJECT**: send the numbered findings to the implementer (continue the same agent if possible,
+  otherwise start a new `implementer` with the plan plus the findings), then verify again. After the
+  3rd rejection, `set <id> status=blocked`, report every round, and stop that feature. The others continue.
+- **PASS**: run `set <id> status=awaiting-integration-approval verified_sha=<sha>`.
 
-## 6. Integration
+## 5. STOP for integration approval (human gate 2)
 
-Call the `integrator` agent with: the branch, `<worktree>`, the spec path, the plan, the implementer's
-report and the verifier's PASS report. It fast-forwards local main, re-runs the gate, updates the state
-documents and commits the docs. It never pushes. If it stops at a pre-check (main moved, dirty main, gate
-failed on main), relay that to the user and stop.
+When one or more features are awaiting integration approval, show for each:
+- `git diff --stat main...feature/<id>` and the commits
+- the verifier's gate table and acceptance-criteria table
+- whether it adds a migration (gate 3 follows) or touches Garmin sync (gate 4 follows)
+- other features that change the same files (a rebase conflict is possible)
+
+Ask: integrate / hold / send back with comments. **End your turn and wait.** Features that were sent back
+go to the implementer with the comments, then through step 4 again.
+
+## 6. Integration (one at a time)
+
+For each approved feature, in the order the user approved them, call the `integrator` with: the
+branch, `<worktree>`, the spec path, the approved plan, and the implementer's and verifier's reports. It
+takes the lock, rebases onto local main, re-runs the gate, commits the README and final spec frontmatter,
+fast-forwards main, and releases the lock. It never pushes.
+
+- **Rebase conflict** (the integrator aborted the rebase): send it to the implementer with the instruction
+  "rebase feature/<id> onto local main, resolve the conflicts preserving both features' behaviour, re-run
+  the gate". Then verify again (step 4) and ask for integration approval again (step 5): the content changed.
+- Main moved during integration, or the gate failed after the rebase: relay this and follow the
+  integrator's recommendation.
 
 ## 7. Final report
 
-Make sure the spec says `status: integrated` (the integrator commits it). Then report:
+Per feature: status, branch, commits on main (`<old>..<new>`), gate results, files changed (code / tests
+/ docs). Then a **remaining human gates** checklist with exact steps:
+- [ ] production migration NNN (if any): back up, apply, verify (`add-migration` section 6)
+- [ ] live Garmin verification (if the feature touches Garmin sync): commands and expected result
+- [ ] push: `git push origin main` (run by the user; agents are blocked from pushing)
 
-- the feature, the branch, and the commits on main (`<old>..<new>`) including the docs commit
-- the gate results (feature branch and main) and the verification summary
-- the files changed, grouped as code / tests / docs
-- **Remaining human gates**, as a checklist with exact steps:
-  - [ ] production migration NNN (if reserved): back up, apply, verify (`add-migration` section 6)
-  - [ ] live Garmin verification (if the feature touches Garmin sync): commands to run, expected result
-  - [ ] push: `git push origin main` (the user runs it; agents are blocked from pushing)
-- known risks and limitations, and the recommended next action
+Also report blocked features with their reasons, and the recommended next action.

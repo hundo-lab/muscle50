@@ -2,14 +2,14 @@
 # 파일 이름: docs/specs/<id>.md. id는 branch 이름으로도 쓴다(feature/<id>). 소문자-kebab-case로 쓴다.
 id: nutrition-example-feature
 title: Nutrition Example Feature v1
-# draft → (설계 승인) approved → in-progress → verified → integrated. 사람은 draft로만 작성하고, 이후는 /feature가 갱신한다.
+# draft | integrated. 사람은 draft로 쓴다. 진행 중 상태는 .git/muscle50-orchestration/에 있고, 통합 때 integrator가 integrated로 바꾼다.
 status: draft
-# none | reserved:NNN. 번호는 /feature(오케스트레이터)만 쓴다. 작성자는 none으로 두고 본문 "규칙"에 schema 필요성을 적는다.
+# none | reserved:NNN. 작성자는 none으로 둔다(schema가 필요할 것 같으면 본문 "규칙"에 적는다). 번호 예약은 /feature가, 기록은 integrator가 한다.
 migration: none
 # none | additive | breaking. 기존 text/JSON 출력이 바뀌는 정도. additive는 JSON 끝에 key 추가, 새 명령 등이다.
 output_change: none
-# 이 기능에 필요한 사람 게이트: design(항상) / prod-migration / live-garmin / push(항상)
-user_gates: [design, push]
+# 이 기능에 필요한 사람 게이트: design(항상) / integration(항상) / prod-migration / live-garmin / push(항상)
+user_gates: [design, integration, push]
 ---
 
 # <title>
@@ -73,5 +73,5 @@ muscle50 <group> <command> <args> --json
 
 ## 한계 / 후속 후보
 
-- 이번 버전에서 남기는 한계. 통합 시 CURRENT_STATE "Known issues"로 옮긴다.
+- 이번 버전에서 남기는 한계. 통합 때 integrator가 구현 중 발견된 한계를 여기에 추가한다(기능 문서의 Known issues와 함께 기록이 된다).
 - 다음 버전 후보.

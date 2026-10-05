@@ -18,7 +18,8 @@ You implement exactly one approved plan for muscle50.
 - The worktree path (`<worktree>`) and branch (`feature/<slug>`). **All work happens there.** Use
   absolute paths, and run shell commands with `cd "<worktree>" && ...` or `git -C "<worktree>" ...`.
   Never edit the main checkout.
-- The spec path and its frontmatter (`migration: none | reserved:NNN`, `output_change`).
+- The spec path, the migration the orchestrator reserved (`none` or `reserved:NNN`; the committed spec
+  frontmatter is only updated at integration), and `output_change`.
 - The approved plan, including any changes the user made when approving it.
 - On a retry: the verifier's report. Fix exactly what it rejected.
 
@@ -34,15 +35,16 @@ tests that pin the behaviour you will change.
   not run `ruff format` on whole directories (`feature-gate` section 1). If the plan is wrong or
   incomplete, stop and report. Do not redesign on your own.
 - Files you may change: `src/`, `tests/`, and the feature doc `docs/<feature>.md` (new, or the area's
-  existing feature doc). **Never edit** `docs/CURRENT_STATE.md`, `docs/HANDOFF.md`, `README.md`,
+  existing feature doc), including a "Known issues / limitations" section. That section is now the durable
+  record of limits. **Never edit** `docs/CURRENT_STATE.md` or `docs/HANDOFF.md` (frozen), `README.md`,
   `docs/specs/*`, `AGENTS.md`, `CLAUDE.md` or `.claude/`. Those belong to the integrator and the
   orchestrator, and keeping them out of feature branches avoids conflicts between parallel branches.
-- Migration: only if the spec says `reserved:NNN`, and then exactly that number (`add-migration`). Never
+- Migration: only if you were given `reserved:NNN`, and then exactly that number (`add-migration`). Never
   apply it to production.
 - Keep existing outputs byte-identical unless the spec's `output_change` allows the change.
-- Tests and smoke runs use only a temporary `MUSCLE50_HOME` outside the repo and synthetic values. The
-  PreToolUse hook blocks `muscle50` without it, blocks writes to `%LOCALAPPDATA%\muscle50`, and blocks
-  `git push`.
+- Tests and smoke runs use only a temporary `MUSCLE50_HOME` outside the repo and synthetic values. From a
+  feature worktree the PreToolUse hook blocks `muscle50` against production. It also blocks writes to
+  `%LOCALAPPDATA%\muscle50` and `git push`.
 - Never contact Garmin. Use fakes and stubs. Live Garmin checks are a user gate.
 - Line endings stay LF. Edits through Edit/Write are normalized by the PostToolUse hook. If you write
   files from a Python script, pass `newline="\n"`.
@@ -56,7 +58,7 @@ tests that pin the behaviour you will change.
 2. Commit on `feature/<slug>` with a Conventional Commit message: `feat: ...` for new behaviour,
    `fix: ...` for verifier fixes. The body explains the behaviour and the decisions, as in commits
    `b234ac8` and `2d2ea84`. End it with the attribution trailer configured for this session, if any.
-   Do not amend, rebase or squash.
+   Do not amend or squash. Rebase only when asked to resolve an integration conflict (below).
 3. Report back:
    - commit sha(s) and `git diff --stat main...HEAD`
    - files changed, each with one line on why
@@ -67,3 +69,9 @@ tests that pin the behaviour you will change.
 
 On a verifier rejection, address each numbered finding, add a new commit, re-run the gate, and report
 the result per finding.
+
+On an **integration rebase conflict** (another feature reached main first):
+`git -C "<worktree>" rebase main`. Resolve each conflict so that **both** features' behaviour is kept,
+for example both new subcommands in `cli.py` and both versions in the migration-version test lists.
+Continue the rebase, re-run the gate, and report every conflicted file and how you resolved it. The
+feature is then verified and approved again.

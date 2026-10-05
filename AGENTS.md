@@ -1,5 +1,7 @@
 # muscle50 Agent Instructions
 
+> **Claude Code:** where this file and `CLAUDE.md` disagree, follow `CLAUDE.md`.
+
 ## Start here
 
 Before making any changes, read:

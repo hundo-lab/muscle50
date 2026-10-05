@@ -22,11 +22,16 @@ A migration is justified only when the data cannot be represented without bendin
 disabling a trigger. Meal Edit's audit is the example: it rejected "a hidden flag in an existing column"
 and "turning the trigger off", and added table 8. Say why in the design.
 
-## 1. The number comes from the spec, not from you
+## 1. The number comes from the orchestrator, not from you
 
-- The orchestrator reserves the number when `/feature` starts and writes it into the spec frontmatter
-  as `migration: reserved:NNN`. Use exactly that number. If the spec says `none`, stop and send the
-  question back to design.
+- The orchestrator reserves the number with `python .claude/scripts/feature_state.py reserve-migration <id>`.
+  The reservation is atomic and checks every local branch, every worktree and every existing
+  reservation. It reaches you as `reserved:NNN`. Use exactly that number. If you were given `none`, stop
+  and send the question back to design. The integrator writes `migration: reserved:NNN` into the
+  committed spec frontmatter.
+- Parallel features can be integrated in either order (for example 010 before 009). Each migration must
+  stand alone: no reference to another in-flight feature's tables. The loader applies whatever files are
+  present, and the production check compares the **set** of numbers, not the maximum.
 - Why: the migration marker is `INSERT OR IGNORE`. When two branches both used `006`, the second file's
   DDL ran with **no version marker and no error**. InBody had to be renumbered to `007`
   (docs/CURRENT_STATE.md "SQLite migrations").
@@ -125,9 +130,12 @@ migration.
 
 ## 6. Production is a human gate
 
-- Agents never apply a migration to `%LOCALAPPDATA%\muscle50`. Any writing command there would apply it.
-  The PreToolUse hook blocks `muscle50` without a temporary `MUSCLE50_HOME`.
-- After integration, the user applies it. The recorded procedure for migration 8
+- Agents never apply a migration to `%LOCALAPPDATA%\muscle50` on their own. Any writing command there
+  would apply it. The PreToolUse hook therefore blocks every `muscle50` run against production while main
+  contains a migration that production has not applied, and it blocks production runs from feature
+  worktrees at all times.
+- After integration, the user applies it, in their own terminal, or by asking Claude to do the backup and
+  verification and then running the one migrating command themselves. The recorded procedure for migration 8
   (docs/CURRENT_STATE.md "Verification", 2026-10-03):
   1. Back up the production DB to a named copy (for example `db_backup_<YYYYMMDD>_pre_migrationNNN`), with SHA-256.
   2. Run one writing command, for example `uv run muscle50 nutrition food list`.

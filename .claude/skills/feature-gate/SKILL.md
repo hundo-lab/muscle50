@@ -90,7 +90,9 @@ Fix it by converting that file only.
 | 6 | scope | PASS/FAIL | <unexpected files> |
 
 - Formatted: <files> / Format skipped (not formatted at base): <files>
-- Baseline: <last recorded count from docs/CURRENT_STATE.md "Verification", e.g. "917 passed, 118 files">
+- Baseline: <counts in the newest `docs: record ... integration` commit on main
+  (`git log main -1 --grep="^docs: record" --format=%B`); if that commit has none, the frozen
+  docs/CURRENT_STATE.md "Verification" value "917 passed, mypy 118 files">
   -> now <counts>; new tests: <+n in which files>
 - Overall: PASS only if rows 1-6 all PASS.
 ```

@@ -84,7 +84,8 @@ design question (human gate 1). Do not quietly break it.
   Source: docs/CURRENT_STATE.md "Nutrition Meal Edit v1".
 - Production data (`%LOCALAPPDATA%\muscle50`) is not touched by development work. Every test and smoke
   run uses a temporary `MUSCLE50_HOME`. Even read commands can create WAL files or directories there.
-  Source: docs/CURRENT_STATE.md "Verification" (Nutrition Logging). Enforced by
+  Source: docs/CURRENT_STATE.md "Verification" (Nutrition Logging). Only the main checkout's CLI, used when
+  the user asks (CLAUDE.md "Running muscle50"), reaches production. This is enforced by
   `.claude/hooks/pre_bash_guard.py`.
 
 ## 6. Feature boundaries

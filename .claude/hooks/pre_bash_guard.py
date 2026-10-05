@@ -5,12 +5,15 @@ stderr text is shown to Claude as the reason; exit code 0 lets the normal permis
 
 Blocked (see CLAUDE.md "Human gates" and docs/specs/README.md):
 1. `git push`: push is a human gate; the user runs it.
-2. Write/delete commands aimed at the production data directory
-   (%LOCALAPPDATA%\\muscle50). Development work never changes production.
-3. The `muscle50` CLI unless MUSCLE50_HOME is set for it (inline `VAR=... muscle50`, an earlier
-   `export`/`$env:` assignment in the same command, or the hook environment) to a directory
-   that is not the production one. The default home is production, and even read commands can
-   create directories/WAL files there (docs/CURRENT_STATE.md, Nutrition Logging verification).
+2. Direct write/delete commands aimed at the production data directory (%LOCALAPPDATA%\\muscle50):
+   rm/mv/cp-into/redirects/sqlite3 without -readonly, and `python`/`uv run python` one-liners that
+   name it without `mode=ro`. Production data changes only through the muscle50 CLI.
+3. The `muscle50` CLI against production (MUSCLE50_HOME unset or pointing at production) unless
+   - the code that runs is the `main` checkout (not a feature worktree), and
+   - production already has every migration in that code. Applying a new migration to
+     production is human gate 3 (CLAUDE.md), and any writing command would apply it.
+   With a temporary MUSCLE50_HOME (inline `VAR=... muscle50`, an earlier `export`/`$env:`
+   assignment, or the hook environment) the CLI is always allowed.
 
 Only commands are checked, not text: quoted strings are inspected only where a shell would run
 them (`bash -c "..."`, `powershell -Command "..."`, `cmd /c ...`, `$(...)`, backticks outside
@@ -18,7 +21,7 @@ single quotes), and heredoc bodies are skipped, so `grep "git push" docs` or a c
 that mentions muscle50 is allowed.
 
 This is a safety net, not a sandbox: it inspects command text only. Database access inside a
-script (`python script.py`) is not detected. Standard library only; runs on Python 3.9+.
+script file (`python script.py`) is not detected. Standard library only; runs on Python 3.9+.
 """
 
 from __future__ import annotations
@@ -26,7 +29,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
+import subprocess
 import sys
+from pathlib import Path
 
 # The production data root, in every spelling seen in shells on this machine.
 _PROD_PATH = re.compile(
@@ -213,6 +219,10 @@ def _writes_to_production(segment: str) -> bool:
         return bool(paths) and bool(_PROD_PATH.search(paths[-1]))
     if verb == "sqlite3":
         return not any(arg in {"-readonly", "--readonly"} or "mode=ro" in arg for arg in args)
+    runs_python = verb in {"python", "python3", "py"} or (verb == "uv" and "python" in [a.lower() for a in args[:6]])
+    if runs_python:
+        # A one-liner that names the production directory may only open it read-only.
+        return "mode=ro" not in segment
     return False
 
 
@@ -222,24 +232,110 @@ def _is_muscle50_executable(token: str) -> bool:
     return re.fullmatch(r"(?:.*[\\/](?:Scripts|bin)[\\/])?muscle50(?:\.exe)?", token, re.IGNORECASE) is not None
 
 
-def _runs_muscle50_cli(tokens: list[str]) -> bool:
+def _muscle50_invocation(tokens: list[str]) -> tuple[bool, str | None]:
+    """(runs the muscle50 CLI?, project directory given by `uv run --directory/--project`)."""
     index = _command_index(tokens)
-    words = [token.lower() for token in tokens[index:]]
+    words = tokens[index:]
     if not words:
-        return False
+        return False, None
     if _is_muscle50_executable(words[0]):
-        return True
-    if _verb(words[0]) == "uv" and len(words) > 1 and words[1] == "run":
+        return True, None
+    project = None
+    if _verb(words[0]) == "uv" and len(words) > 1 and words[1].lower() == "run":
         words = words[2:]
         while words and words[0].startswith("-"):
-            words = words[2:] if words[0] in _UV_VALUE_OPTIONS else words[1:]
+            option = words[0].lower()
+            if option in _UV_VALUE_OPTIONS:
+                if option in {"--directory", "--project"} and len(words) > 1:
+                    project = words[1]
+                words = words[2:]
+            elif option.startswith(("--directory=", "--project=")):
+                project = words[0].split("=", 1)[1]
+                words = words[1:]
+            else:
+                words = words[1:]
         if words and _is_muscle50_executable(words[0]):
-            return True
+            return True, project
     if words and _verb(words[0]) in {"python", "python3", "py"}:
         for position, word in enumerate(words[1:], start=1):
             if word == "-m" and position + 1 < len(words):
-                return words[position + 1] in {"muscle50", "muscle50.cli"}
-    return False
+                return words[position + 1].lower() in {"muscle50", "muscle50.cli"}, project
+    return False, None
+
+
+def _runs_muscle50_cli(tokens: list[str]) -> bool:
+    return _muscle50_invocation(tokens)[0]
+
+
+def _native_path(path: str, base: str | None) -> str:
+    """Resolve a shell path (Git Bash /c/..., ~, $VARS, relative) to a native absolute path."""
+    path = os.path.expandvars(os.path.expanduser(path))
+    drive = re.match(r"^/([A-Za-z])(/.*)?$", path)
+    if drive:
+        path = f"{drive.group(1).upper()}:{drive.group(2) or '/'}"
+    if base and not os.path.isabs(path):
+        path = os.path.join(base, path)
+    return os.path.normpath(path)
+
+
+def _git_output(directory: str, *args: str) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", directory, *args], capture_output=True, text=True, encoding="utf-8", timeout=10
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _production_database() -> Path | None:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    return Path(local_app_data) / "muscle50" / "db" / "muscle50.sqlite3" if local_app_data else None
+
+
+def _unapplied_migrations(top: str) -> list[int] | None:
+    """Migration numbers in the code at `top` that production has not applied (None = cannot tell)."""
+    folder = Path(top) / "src" / "muscle50" / "infrastructure" / "sqlite" / "migrations"
+    code = {int(p.name[:3]) for p in folder.glob("[0-9][0-9][0-9]_*.sql")} if folder.is_dir() else set()
+    database = _production_database()
+    if database is None or not database.exists():
+        return []  # no production database yet: nothing to migrate
+    try:
+        # immutable=1: no locks, no -wal/-shm files are created next to the production database.
+        connection = sqlite3.connect(f"{database.resolve().as_uri()}?mode=ro&immutable=1", uri=True, timeout=5)
+        try:
+            applied = {row[0] for row in connection.execute("SELECT version FROM schema_migrations")}
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return None
+    return sorted(code - applied)
+
+
+def _production_run_problem(code_dir: str | None) -> str | None:
+    """None when the muscle50 CLI may run against production from `code_dir`."""
+    if not code_dir:
+        return "cannot tell which checkout's code would run (no working directory)"
+    top = _git_output(code_dir, "rev-parse", "--show-toplevel")
+    branch = _git_output(code_dir, "symbolic-ref", "--quiet", "--short", "HEAD") if top else None
+    if not top:
+        return f"cannot tell which checkout's code would run ({code_dir} is not a git checkout)"
+    if branch != "main":
+        return (
+            f"the code in {top} is on '{branch or 'detached HEAD'}', not main; unintegrated code never runs against "
+            "production. Use a temporary MUSCLE50_HOME, or run it from the main checkout"
+        )
+    unapplied = _unapplied_migrations(top)
+    if unapplied is None:
+        return "cannot read schema_migrations from the production database to check for unapplied migrations"
+    if unapplied:
+        numbers = ", ".join(f"{number:03d}" for number in unapplied)
+        return (
+            f"production has not applied migration {numbers} yet, and this command would apply it. Applying a "
+            "migration to production is human gate 3 (back up, apply, verify; add-migration skill section 6). "
+            "Ask the user"
+        )
+    return None
 
 
 def _is_production_home(value: str) -> bool:
@@ -252,30 +348,40 @@ def _is_production_home(value: str) -> bool:
     return os.path.normcase(os.path.abspath(os.path.expandvars(value))) == production
 
 
-def _muscle50_home_problem(segments: list[str]) -> str | None:
-    """None when every muscle50 CLI call runs against a non-production MUSCLE50_HOME."""
+def _muscle50_problem(segments: list[str], cwd: str | None) -> str | None:
+    """None when every muscle50 CLI call is allowed (temporary home, or production from main)."""
     persistent = os.environ.get("MUSCLE50_HOME") or None
+    directory = cwd
     for segment in segments:
         assignment = _PERSISTENT_HOME.match(segment)
         if assignment:
             persistent = assignment.group(1).strip("\"'")
             continue
         tokens = _shell_tokens(segment)
-        if not _runs_muscle50_cli(tokens):
+        index = _command_index(tokens)
+        if index < len(tokens) and _verb(tokens[index]) in {"cd", "pushd", "set-location", "sl", "chdir"}:
+            targets = [token for token in tokens[index + 1 :] if not token.startswith("-")]
+            if targets:
+                directory = _native_path(targets[0], directory)
+            continue
+        is_cli, project = _muscle50_invocation(tokens)
+        if not is_cli:
             continue
         home = persistent
-        for token in tokens[: _command_index(tokens)]:
+        for token in tokens[:index]:
             inline = _INLINE_HOME.match(token)
             if inline:
                 home = inline.group(1)
-        if not home:
-            return "MUSCLE50_HOME is not set for it, so the CLI would use the production data directory"
-        if _is_production_home(home):
-            return "MUSCLE50_HOME points at the production data directory"
+        if home and not _is_production_home(home):
+            continue  # temporary home: always allowed
+        code_dir = _native_path(project, directory) if project else directory
+        problem = _production_run_problem(code_dir)
+        if problem:
+            return f"running the muscle50 CLI against production is blocked: {problem}"
     return None
 
 
-def check(command: str, tool_name: str = "Bash") -> str | None:
+def check(command: str, tool_name: str = "Bash", cwd: str | None = None) -> str | None:
     """Return the reason to block `command`, or None to allow it."""
     segments = _all_segments(command, bash=tool_name != "PowerShell")
     if any(_runs_git_push(segment) for segment in segments):
@@ -288,10 +394,10 @@ def check(command: str, tool_name: str = "Bash") -> str | None:
             "Write/delete aimed at the production data directory (%LOCALAPPDATA%\\muscle50) is blocked. "
             "Work in a temporary MUSCLE50_HOME; production changes (for example migrations) are a human gate."
         )
-    problem = _muscle50_home_problem(segments)
+    problem = _muscle50_problem(segments, cwd)
     if problem:
         return (
-            f"muscle50 CLI blocked: {problem}. Use a temporary home outside the repo, e.g. "
+            f"{problem}. For development and tests use a temporary home outside the repo, e.g. "
             '`MUSCLE50_HOME="$TEMP/muscle50-smoke" uv run muscle50 ...` (Bash) or '
             '`$env:MUSCLE50_HOME = "$env:TEMP\\muscle50-smoke"; uv run muscle50 ...` (PowerShell).'
         )
@@ -309,7 +415,8 @@ def main() -> int:
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if not isinstance(command, str):
         return 0
-    reason = check(command, str(payload.get("tool_name") or "Bash"))
+    cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else None
+    reason = check(command, str(payload.get("tool_name") or "Bash"), cwd)
     if reason:
         print(reason, file=sys.stderr)
         return 2

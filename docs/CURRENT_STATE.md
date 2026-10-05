@@ -1,5 +1,8 @@
 # Current State
 
+> **Frozen (2026-10-05).** 이 문서는 2026-10-05 시점의 이력이며 더 이상 갱신하지 않는다. 이후 기록은 통합된 스펙
+> (`docs/specs/*.md`), 기능 문서(`docs/<feature>.md`), `README.md`, 통합 커밋 메시지에 있다(`CLAUDE.md` "Records").
+
 Last updated: 2026-10-05
 
 ## Project goal

@@ -1,10 +1,9 @@
 @AGENTS.md
 
-# muscle50 - Claude Code notes
+# muscle50 - Claude Code rules
 
-AGENTS.md (imported above) is the shared rulebook for every coding agent. Keep it unchanged here. This
-file adds only the Claude Code orchestration layer. Project overview: `docs/PROJECT_CONTEXT.md` when it
-exists; durable state: `docs/CURRENT_STATE.md`.
+Where AGENTS.md (imported above, shared with other tools) and this file disagree, this file wins.
+Project overview: `docs/PROJECT_CONTEXT.md` when present.
 
 ## Quality gate (run in this order, all four, before any commit)
 
@@ -18,35 +17,44 @@ git diff --check
 The `feature-gate` skill runs these, formats only changed files that were already formatted, checks
 LF, and reports in a fixed table. Never run `ruff format .` or `ruff format src`.
 
-## Orchestration
+## Records (replaces AGENTS.md "Session continuity")
 
-- Start feature work with `/feature <docs/specs/<id>.md>`. Write the spec from
-  `docs/specs/_TEMPLATE.md`; the flow is in `docs/specs/README.md`.
-- Agents (`.claude/agents/`): `designer` (read-only plan), `implementer` (code + tests + `docs/<feature>.md`
-  in the feature worktree), `verifier` (independent check, no edits), `integrator` (ff-only into local
-  main + state docs).
-- Only the **integrator** edits `docs/CURRENT_STATE.md`, `docs/HANDOFF.md` and `README.md`. This keeps
-  parallel feature branches from conflicting.
-- Only the **orchestrator** (`/feature`) assigns migration numbers. It records them in the spec
-  frontmatter as `migration: reserved:NNN`; implementers use that number and no other.
-- Feature work happens in a Paseo worktree on `feature/<id>`, branched from **local** main. Integration is
-  fast-forward only: no merge commits, rebase, squash or amend. Branches and worktrees are kept.
-- Skills: `domain-principles` (data and output rules), `feature-gate`, `add-cli-command`, `add-migration`.
-  Paseo skills (`paseo`, `paseo-handoff`, `paseo-advisor`, `paseo-committee`) cover workspaces, handoffs
-  and second opinions. Do not duplicate them.
+- `docs/CURRENT_STATE.md` and `docs/HANDOFF.md` are **frozen** history as of 2026-10-05. Do not update them.
+- The durable record is: integrated specs (`docs/specs/<id>.md`, which include limits and follow-up
+  candidates), feature docs (`docs/<feature>.md`, which include known issues), `README.md`, and commit messages.
+- Live progress of `/feature` runs (status, reserved migrations, integration lock) is in
+  `.git/muscle50-orchestration/` via `.claude/scripts/feature_state.py`. It is never committed.
 
-## Human gates (agents stop and ask; never do these themselves)
+## Orchestration (parallel by default)
 
-1. **Design approval**: `/feature` stops after the designer's plan until the user approves.
-2. **Production migration**: applying a migration to `%LOCALAPPDATA%\muscle50` (backup, apply, verify).
-3. **Live Garmin verification**: anything that logs in to Garmin (MFA is interactive).
-4. **Push**: `git push` is run by the user.
+- Start feature work with `/feature <spec> [<spec> ...]`; several specs, or several sessions, run in parallel.
+  Specs come from `docs/specs/_TEMPLATE.md`; the flow is in `docs/specs/README.md`.
+- Agents: `designer` (read-only plan), `implementer` (code, tests, `docs/<feature>.md` in its own Paseo
+  worktree on `feature/<id>`), `verifier` (independent check, no edits), `integrator`.
+- Only the orchestrator assigns migration numbers (`feature_state.py reserve-migration`). Only the
+  integrator edits `README.md` and commits a spec's final frontmatter.
+- Integration happens one at a time under the integration lock: rebase `feature/<id>` onto **local**
+  main, re-run the gate, then `git merge --ff-only`. Never rebase main, never merge commits, squash or force.
 
-## Safety hooks (`.claude/settings.json`)
+## Human gates (agents stop and ask)
 
-- PreToolUse (Bash/PowerShell), `.claude/hooks/pre_bash_guard.py`, blocks: `git push`; writes or deletes
-  under `%LOCALAPPDATA%\muscle50`; and the `muscle50` CLI unless `MUSCLE50_HOME` points at a temporary home,
-  e.g. `MUSCLE50_HOME="$TEMP/muscle50-smoke" uv run muscle50 ...`.
-- PostToolUse (Edit/Write/MultiEdit), `.claude/hooks/post_edit_format.py`: converts CRLF back to LF and
-  ruff-formats the edited `.py` file only if it was already formatted at HEAD.
-- Hooks are a safety net, not permission to try risky commands. They need `python` (3.9+) on PATH.
+1. **Design approval**: after the designer's plan, before any branch or code.
+2. **Integration approval**: after the verifier's PASS, before the feature is rebased and fast-forwarded into local main.
+3. **Production migration**: applying a new migration to `%LOCALAPPDATA%\muscle50` (back up, apply, verify).
+4. **Live Garmin verification** of a feature that changes Garmin sync.
+5. **Push**: the user runs `git push`.
+
+## Running muscle50 and safety hooks (`.claude/settings.json`)
+
+- Claude may run `uv run muscle50 ...` against production **from the main checkout**: for example `daily`,
+  `recommend` or `nutrition log` when the user asks. Feature worktrees, tests and smoke runs use a temporary
+  `MUSCLE50_HOME="$TEMP/muscle50-<name>"`.
+- PreToolUse (`.claude/hooks/pre_bash_guard.py`) blocks:
+  - `git push`;
+  - direct writes or deletes under `%LOCALAPPDATA%\muscle50`;
+  - `muscle50` against production from non-main code, or while a migration in main is not yet applied
+    to production (that is gate 3).
+- PostToolUse (`.claude/hooks/post_edit_format.py`): CRLF to LF, and ruff format on the edited `.py` file when it is
+  new or was already formatted at HEAD.
+- Hooks run with the project's `.venv` Python, falling back to `python` on PATH. If the guard cannot run, it blocks
+  every shell command (fail closed) until that is fixed.

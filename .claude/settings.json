@@ -7,8 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python",
-            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/pre_bash_guard.py"],
+            "command": "p=\"$CLAUDE_PROJECT_DIR/.venv/Scripts/python.exe\"; [ -x \"$p\" ] || p=python; \"$p\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre_bash_guard.py\"; rc=$?; [ $rc -eq 0 ] || [ $rc -eq 2 ] || { echo \"muscle50 guard could not run (exit $rc, interpreter: $p); blocking to stay safe. Fix the hook or run 'uv sync --extra dev' in the project.\" >&2; exit 2; }; exit $rc",
             "timeout": 30
           }
         ]
@@ -20,8 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python",
-            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/post_edit_format.py"],
+            "command": "p=\"$CLAUDE_PROJECT_DIR/.venv/Scripts/python.exe\"; [ -x \"$p\" ] || p=python; \"$p\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/post_edit_format.py\"",
             "timeout": 150,
             "statusMessage": "muscle50: LF + ruff format on the edited file"
           }
