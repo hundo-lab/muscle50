@@ -56,8 +56,9 @@ uv run muscle50 garmin backfill-load-metrics
 - 보고: activities examined, RAW summaries found, activities changed, inserted, updated,
   already identical, missing RAW, unreadable RAW, malformed values, skipped values.
 
-**중요:** `garmin latest`, `garmin activities --from/--to`는 새 activity에 이 metric을 채우지 않는다
-(shared normalization을 바꾸지 않았기 때문). 새 activity를 import한 뒤에는 backfill을 다시 실행한다.
+`garmin latest`, `garmin activities --from/--to`, `daily`는 ingestion이 끝난 뒤 이 backfill을 같은 판정으로
+자동 실행한다(shared normalization은 그대로). 그래서 새 activity를 import한 뒤 backfill을 따로 실행할 필요가
+없다. 이 명령은 수동 재확인과 과거 데이터용으로 남아 있다. 자세한 내용: `docs/auto-load-metrics.md`.
 
 ## C. Recovery range sync
 
@@ -91,9 +92,9 @@ uv run muscle50 garmin recovery-renormalize
 
 ```powershell
 uv run muscle50 garmin activities --from 2026-07-01 --to 2026-08-02
-uv run muscle50 garmin backfill-load-metrics --dry-run
-uv run muscle50 garmin backfill-load-metrics
 ```
+
+`garmin activities`가 load metric을 자동으로 채우므로 별도 `garmin backfill-load-metrics` 단계는 필요 없다.
 
 실행 전 DB backup(WAL-safe: `sqlite3` backup API 또는 `VACUUM INTO`)을 만든다. 아직 실행하지
 않았다 — 명시적 승인 후 실행한다.

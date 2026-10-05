@@ -13,6 +13,7 @@ from pathlib import Path
 from muscle50.application.backfill_activity_load_metrics import BackfillActivityLoadMetrics
 from muscle50.application.daily_sync import DailyMode, RunDailySync, daily_sync_start
 from muscle50.application.food_lookup import ResolveFoodReference
+from muscle50.application.imported_load_metrics import FillImportedLoadMetrics
 from muscle50.application.inbody_source import InBodySourceError
 from muscle50.application.ingest_activity import ActivitySyncError
 from muscle50.application.ingest_activity_range import IngestGarminActivityRange, InvalidDateRangeError
@@ -101,6 +102,7 @@ from muscle50.presentation.terminal import (
     render_activity_load_backfill_result,
     render_daily_sync,
     render_daily_sync_json,
+    render_imported_load_metrics,
     render_range_result,
     render_recovery_range_result,
     render_recovery_renormalize_result,
@@ -519,13 +521,12 @@ def _garmin_latest() -> int:
         repository = ActivityRepository(paths.database_path)
         repository.migrate()
         connector = PythonGarminConnector.authenticate(paths.auth_dir)
-        use_case = SyncLatestGarminActivity(
-            connector,
-            repository,
-            RawStore(paths.raw_dir, paths.root, paths.tmp_dir),
-        )
-        print(render_sync_result(use_case.execute()))
-        return 0
+        raw_store = RawStore(paths.raw_dir, paths.root, paths.tmp_dir)
+        use_case = SyncLatestGarminActivity(connector, repository, raw_store)
+        result = use_case.execute()
+        print(render_sync_result(result))
+        imported = frozenset({result.activity.source_activity_id}) if result.created else frozenset[str]()
+        return _fill_load_metrics(repository, raw_store, imported)
     except (
         ActivitySyncError,
         ConfigurationError,
@@ -559,13 +560,12 @@ def _garmin_activities(from_date_text: str, to_date_text: str) -> int:
         repository = ActivityRepository(paths.database_path)
         repository.migrate()
         connector = PythonGarminConnector.authenticate(paths.auth_dir)
-        use_case = IngestGarminActivityRange(
-            connector,
-            repository,
-            RawStore(paths.raw_dir, paths.root, paths.tmp_dir),
-        )
-        print(render_range_result(use_case.execute(from_date, to_date)))
-        return 0
+        raw_store = RawStore(paths.raw_dir, paths.root, paths.tmp_dir)
+        use_case = IngestGarminActivityRange(connector, repository, raw_store)
+        result = use_case.execute(from_date, to_date)
+        print(render_range_result(result))
+        imported = frozenset(item.source_activity_id for item in result.outcomes if item.status == "inserted")
+        return _fill_load_metrics(repository, raw_store, imported)
     except (
         ActivitySyncError,
         ConfigurationError,
@@ -681,6 +681,21 @@ def _garmin_backfill_load_metrics(*, dry_run: bool) -> int:
     except KeyboardInterrupt:
         print("\n취소되었습니다.", file=sys.stderr)
         return 130
+
+
+def _fill_load_metrics(repository: ActivityRepository, raw_store: RawStore, imported: frozenset[str]) -> int:
+    # Daily's load_metrics stage after an ingest that succeeded: RAW-only, idempotent, no Garmin calls.
+    # Called inside the ingest handler's try, after its output is printed, so Ctrl+C still exits 130.
+    result = FillImportedLoadMetrics(BackfillActivityLoadMetrics(repository, raw_store)).execute(imported)
+    print(render_imported_load_metrics(result))
+    if result.ok:
+        return 0
+    print(
+        "오류: 이번 실행에서 저장한 activity의 load metric을 채우지 못했습니다. "
+        "저장된 activity와 RAW는 그대로 남아 있습니다.",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def _garmin_recovery_renormalize(*, dry_run: bool) -> int:

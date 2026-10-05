@@ -31,6 +31,7 @@ from enum import StrEnum
 from typing import Protocol
 
 from muscle50.application.backfill_activity_load_metrics import ActivityLoadBackfillResult
+from muscle50.application.imported_load_metrics import check_imported_load_metrics
 from muscle50.application.ingest_activity import ActivitySyncError
 from muscle50.application.ingest_activity_range import RangeIngestResult
 from muscle50.application.nutrition_recommendation import NutritionContext
@@ -259,27 +260,10 @@ class RunDailySync:
         except _SYNC_STAGE_ERRORS as exc:
             return None, StageReport(STAGE_LOAD_METRICS, StageStatus.FAILED, str(exc))
         imported = {item.source_activity_id for item in activities.outcomes if item.status == "inserted"}
-        unusable = set(result.missing_raw) | set(result.unreadable_raw)
-        new_gaps = sorted(imported & unusable)
-        if new_gaps:
-            return result, StageReport(
-                STAGE_LOAD_METRICS,
-                StageStatus.FAILED,
-                f"no readable RAW summary for activities imported in this run: {', '.join(new_gaps)}",
-            )
-        warnings: list[str] = []
-        older_gaps = sorted(unusable - imported)
-        if older_gaps:
-            warnings.append(
-                f"{len(older_gaps)} previously stored activities have no readable RAW summary "
-                f"(not from this run): {', '.join(older_gaps)}"
-            )
-        new_malformed = sorted({item.source_activity_id for item in result.malformed_values} & imported)
-        if new_malformed:
-            warnings.append(
-                f"malformed load-metric values in activities imported in this run: {', '.join(new_malformed)}"
-            )
-        return result, StageReport(STAGE_LOAD_METRICS, StageStatus.OK, warnings=tuple(warnings))
+        check = check_imported_load_metrics(result, imported)
+        if check.error is not None:
+            return result, StageReport(STAGE_LOAD_METRICS, StageStatus.FAILED, check.error)
+        return result, StageReport(STAGE_LOAD_METRICS, StageStatus.OK, warnings=check.warnings)
 
     def _recovery(
         self, connector: DailyGarminConnector, start: date, as_of: date

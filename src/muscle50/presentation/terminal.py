@@ -14,6 +14,7 @@ from muscle50.application.daily_sync import (
     DailyMode,
     DailySyncResult,
 )
+from muscle50.application.imported_load_metrics import ImportedLoadMetricsResult
 from muscle50.application.ingest_activity_range import RangeIngestResult
 from muscle50.application.nutrition_recommendation import NutritionContext
 from muscle50.application.refresh_garmin_activity import ActivityRefreshResult
@@ -225,6 +226,22 @@ def render_activity_load_backfill_result(result: ActivityLoadBackfillResult) -> 
         f"Skipped ({item.issue.kind}): {item.source_activity_id} {item.issue.source_key}"
         for item in result.skipped_values
     )
+    return "\n".join(lines)
+
+
+def render_imported_load_metrics(result: ImportedLoadMetricsResult) -> str:
+    # The last stdout lines of `garmin latest`/`garmin activities`. ASCII labels (cp949 consoles), daily's
+    # judgement texts; a backfill exception message is printed as received, as daily does.
+    lines: list[str] = []
+    backfill = result.backfill
+    if backfill is not None:
+        lines.append(
+            f"Load metrics: metric rows inserted {backfill.metrics_inserted}, updated {backfill.metrics_updated}, "
+            f"unchanged {backfill.metrics_unchanged}"
+        )
+    lines.extend(f"Load metrics warning: {warning}" for warning in result.warnings)
+    if result.error is not None:
+        lines.append(f"Load metrics failed: {result.error}")
     return "\n".join(lines)
 
 
