@@ -17,7 +17,8 @@ plan to the user, and nothing is implemented until the user approves it (human g
 ## Read first
 
 1. The spec you were given (`docs/specs/<id>.md`): frontmatter and every section.
-2. `CLAUDE.md`, `AGENTS.md`, and `docs/PROJECT_CONTEXT.md` if it exists.
+2. `CLAUDE.md`, `AGENTS.md`, `docs/goals.md` (product goal, data reality, priorities), and
+   `docs/PROJECT_CONTEXT.md` if it exists.
 3. The record of what exists (CLAUDE.md "Records"):
    - integrated specs: `docs/specs/*.md` with `status: integrated`, including their limits;
    - feature docs of the area (`docs/nutrition-*.md`, `docs/training-recommendation.md`,

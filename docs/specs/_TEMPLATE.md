@@ -23,6 +23,7 @@ user_gates: [design, integration, push]
 
 - 사용자가 무엇을 할 수 있게 되는지 1~3줄로 쓴다.
 - 왜 필요한지(지금 불편한 점, 이전 기능의 Known issue 등)와 근거 문서를 적는다.
+- `docs/goals.md`의 어느 루프나 우선순위에 기여하는지 적는다.
 
 ## 범위 / Non-goals
 

@@ -4,6 +4,7 @@
 
 Where AGENTS.md (imported above, shared with other tools) and this file disagree, this file wins.
 Project overview: `docs/PROJECT_CONTEXT.md` when present.
+Product goal and feature priorities: `docs/goals.md`. Pick and design features against it.
 
 ## Quality gate (run in this order, all four, before any commit)
 
