@@ -12,6 +12,7 @@ from pathlib import Path
 
 from muscle50.application.backfill_activity_load_metrics import BackfillActivityLoadMetrics
 from muscle50.application.daily_sync import DailyMode, RunDailySync, daily_sync_start
+from muscle50.application.food_lookup import ResolveFoodReference
 from muscle50.application.inbody_source import InBodySourceError
 from muscle50.application.ingest_activity import ActivitySyncError
 from muscle50.application.ingest_activity_range import IngestGarminActivityRange, InvalidDateRangeError
@@ -280,8 +281,11 @@ def _add_nutrition_parser(commands: argparse._SubParsersAction[argparse.Argument
         nargs=3,
         action="append",
         required=True,
-        metavar=("FOOD_ID", "QTY", "UNIT"),
-        help="one catalog food and the amount eaten, in a unit the food has nutrition for; repeatable",
+        metavar=("FOOD", "QTY", "UNIT"),
+        help=(
+            "one catalog food (its food ID, or its exact name or alias; quote names that contain spaces) "
+            "and the amount eaten, in a unit the food has nutrition for; repeatable"
+        ),
     )
     log.add_argument(
         "--additional",
@@ -327,7 +331,7 @@ def _add_nutrition_parser(commands: argparse._SubParsersAction[argparse.Argument
         nargs=3,
         action="append",
         required=True,
-        metavar=("FOOD_ID", "QTY", "UNIT"),
+        metavar=("FOOD", "QTY", "UNIT"),
         help="one catalog food and the amount eaten, as in `nutrition log`; repeatable",
     )
     add_item.add_argument("--json", action="store_true", help="print the edited meal as JSON")
@@ -347,7 +351,7 @@ def _add_nutrition_parser(commands: argparse._SubParsersAction[argparse.Argument
         "--item",
         nargs=3,
         required=True,
-        metavar=("FOOD_ID", "QTY", "UNIT"),
+        metavar=("FOOD", "QTY", "UNIT"),
         help="the catalog food and amount that replace it, as in `nutrition log`",
     )
     replace_item.add_argument("--json", action="store_true", help="print the edited meal as JSON")
@@ -855,12 +859,14 @@ def _nutrition(args: argparse.Namespace) -> int:
             return 0
         if args.nutrition_command == "log":
             day = _nutrition_date(args.as_of)
+            entries = tuple(_meal_entry(index, raw) for index, raw in enumerate(args.item, start=1))
+            eaten_time = _eaten_time(args.eaten_time)
             meal = LogMeal(meals, foods).execute(
                 day,
                 MealType(args.meal),
-                tuple(_meal_entry(index, raw) for index, raw in enumerate(args.item, start=1)),
+                _resolve_entries(foods, entries, numbered=True),
                 timezone=_local_timezone(day),
-                eaten_time=_eaten_time(args.eaten_time),
+                eaten_time=eaten_time,
                 additional=args.additional,
             )
             print(render_logged_meal_json(meal) if args.json else render_logged_meal(meal))
@@ -921,7 +927,7 @@ def _nutrition_meal(args: argparse.Namespace, meals: SqliteMealRepository, foods
         return 0
     if args.meal_command == "add-item":
         entries = tuple(_meal_entry(index, raw) for index, raw in enumerate(args.item, start=1))
-        intake = AddMealItems(meals, foods).execute(args.meal_id, entries)
+        intake = AddMealItems(meals, foods).execute(args.meal_id, _resolve_entries(foods, entries, numbered=True))
         added = intake.meal.items[-len(entries) :]
         word = "item" if len(added) == 1 else "items"
         headline = f"Added {word} {', '.join(str(item.sequence) for item in added)} to meal {intake.meal.meal_id}."
@@ -932,7 +938,7 @@ def _nutrition_meal(args: argparse.Namespace, meals: SqliteMealRepository, foods
         headline = f"Removed item {args.item_number} from meal {intake.meal.meal_id}."
     elif args.meal_command == "replace-item":
         intake = ReplaceMealItem(meals, foods, clock=lambda: datetime.now().astimezone()).execute(
-            args.meal_id, args.item_number, _meal_entry(1, args.item)
+            args.meal_id, args.item_number, _resolve_entries(foods, (_meal_entry(1, args.item),), numbered=False)[0]
         )
         new_number = intake.meal.items[-1].sequence
         headline = f"Replaced item {args.item_number} of meal {intake.meal.meal_id} with item {new_number}."
@@ -1042,6 +1048,22 @@ def _meal_entry(index: int, raw: list[str]) -> MealEntryItem:
     food_id, quantity_text, unit_text = raw
     what = f"--item {index}"
     return MealEntryItem(food_id, _positive_quantity(quantity_text, f"{what} quantity"), _unit(unit_text, what))
+
+
+def _resolve_entries(
+    foods: SqliteFoodNutritionRepository, entries: Sequence[MealEntryItem], *, numbered: bool
+) -> tuple[MealEntryItem, ...]:
+    """Turn each already-parsed `--item` food (ID, name or alias) into a food ID.
+
+    A token that matches no food is passed on unchanged, so the use case reports it as an
+    unknown food with today's text and at today's point.
+    """
+    resolver = ResolveFoodReference(foods)
+    resolved: list[MealEntryItem] = []
+    for index, entry in enumerate(entries, start=1):
+        food_id = resolver.execute(entry.food_id, label=f"--item {index}" if numbered else "--item")
+        resolved.append(entry if food_id is None else MealEntryItem(food_id, entry.quantity, entry.unit))
+    return tuple(resolved)
 
 
 def _inbody_sync(payload_path: Path, *, show_values: bool) -> int:

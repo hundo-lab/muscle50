@@ -148,8 +148,10 @@ muscle50 nutrition log --meal snack --additional --item banana 1 piece
 - `--date`: default today on this computer (same convention as `muscle50 daily`).
 - `--time HH:MM`: optional. Without it the meal is stored at local 00:00 of the date and
   shown as "time not recorded".
-- `--item FOOD_ID QTY UNIT`: repeatable; the unit must be one the food has nutrition for.
-  Fractional quantities are allowed for every unit (`0.5 pack`, `1.5 piece`).
+- `--item FOOD QTY UNIT`: repeatable; the unit must be one the food has nutrition for.
+  Fractional quantities are allowed for every unit (`0.5 pack`, `1.5 piece`). `FOOD` is the food
+  ID or the food's exact name or alias (same for `meal add-item`/`replace-item`); see
+  [food-name-lookup.md](food-name-lookup.md) for the matching and ambiguity rules.
 - A second meal of the same type on the same date is refused unless `--additional` is given
   (prevents an accidental re-run from doubling intake). To complete or correct a meal that is
   already logged, edit it with `nutrition meal add-item` (see below) instead. Meal IDs are
