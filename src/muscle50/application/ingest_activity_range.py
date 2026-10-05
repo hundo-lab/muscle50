@@ -43,6 +43,8 @@ class RangeIngestOutcome:
     error: str | None = None
     warnings: tuple[str, ...] = ()
     """Optional Garmin endpoint warnings (for example missing exercise sets) for an inserted activity."""
+    local_date: date | None = None
+    """The activity's local start date from the Garmin list entry (what discovery filtered on)."""
 
 
 @dataclass(frozen=True)
@@ -101,13 +103,18 @@ class IngestGarminActivityRange:
     def _ingest_one(self, summary: Mapping[str, Any]) -> RangeIngestOutcome:
         activity_id = activity_id_from(summary)
         source_type_key = source_type_from(summary)
+        local_date = local_date_from(summary)
         try:
             result = self._ingest.execute(summary)
         except _KNOWN_INGEST_ERRORS as exc:
-            return RangeIngestOutcome(activity_id, source_type_key, "failed", str(exc))
+            return RangeIngestOutcome(activity_id, source_type_key, "failed", str(exc), local_date=local_date)
         status: Literal["inserted", "skipped"] = "inserted" if result.created else "skipped"
         return RangeIngestOutcome(
-            result.activity.source_activity_id, result.activity.source_type_key, status, warnings=result.warnings
+            result.activity.source_activity_id,
+            result.activity.source_type_key,
+            status,
+            warnings=result.warnings,
+            local_date=local_date,
         )
 
     def _discover(self, from_date: date, to_date: date) -> tuple[list[Mapping[str, Any]], int, bool]:

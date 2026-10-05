@@ -36,4 +36,5 @@ class BuildTrainingRecommendation:
             avoid_muscles=avoid_muscles,
             undated_source_activity_ids=data.undated_source_activity_ids,
             requested_focus=requested_focus,
+            sync_coverage=data.sync_coverage,
         )

@@ -15,6 +15,7 @@ Date semantics for a requested date D (no clock, no zoneinfo; Garmin local dates
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -42,6 +43,7 @@ from muscle50.domain.swim_recommendation import (
     analyze_swims,
     build_swim_recommendation,
 )
+from muscle50.domain.sync_coverage import RecordedCoverage, SyncCoverageWindow, coverage_window
 from muscle50.domain.training_goals import DEFAULT_TRAINING_GOALS, TrainingGoals
 
 RECOMMENDATION_VERSION = 1
@@ -64,7 +66,8 @@ class DataFreshness:
     """What the stored data covers relative to the requested date.
 
     The schema records what was stored, not which days were synced, so "no stored activity"
-    is never a confirmed rest day.
+    is never a confirmed rest day. When Garmin sync coverage was recorded for a day in the
+    window, ``sync_coverage`` reports it per day; no rule reads it (Sync Coverage v1).
     """
 
     latest_activity_date: date | None
@@ -75,6 +78,7 @@ class DataFreshness:
     requested_date_sleep_recorded: bool
     sync_coverage_recorded: bool
     statement: str
+    sync_coverage: SyncCoverageWindow | None = None
 
 
 @dataclass(frozen=True)
@@ -106,6 +110,7 @@ def build_training_recommendation(
     avoid_muscles: Iterable[MuscleGroup] = (),
     undated_source_activity_ids: Sequence[str] = (),
     requested_focus: StrengthFocus | None = None,
+    sync_coverage: Sequence[RecordedCoverage] = (),
 ) -> TrainingRecommendation:
     start = history_start(as_of)
     previous_day = as_of - timedelta(days=1)
@@ -156,6 +161,7 @@ def build_training_recommendation(
     )
     latest_recovery = recovery_dates[-1] if recovery_dates else None
     today_row = next((item for item in recoveries if item.calendar_date == as_of.isoformat()), None)
+    coverage = coverage_window(start, as_of, sync_coverage, Counter(day for day, _activity in dated))
     freshness = DataFreshness(
         latest_activity_date=latest_activity,
         latest_strength_date=_latest(dated, ActivityType.STRENGTH),
@@ -163,11 +169,12 @@ def build_training_recommendation(
         latest_recovery_date=latest_recovery,
         requested_date_recovery_row=today_row is not None,
         requested_date_sleep_recorded=today_row is not None and today_row.sleep_seconds is not None,
-        sync_coverage_recorded=False,
+        sync_coverage_recorded=coverage is not None,
         statement=(
             "sync completeness is not recorded: a day without a stored activity is 'no recorded activity', "
             "not a confirmed rest day, and a partial recovery row may still be filled by a later sync"
         ),
+        sync_coverage=coverage,
     )
     notices = _notices(
         as_of,

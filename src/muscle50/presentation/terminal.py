@@ -43,6 +43,7 @@ from muscle50.domain.swim_recommendation import SwimSegment, pace_text
 from muscle50.domain.swimming import NormalizedSwimActivity, derive_lap_metrics
 from muscle50.domain.training_recommendation import TrainingRecommendation
 from muscle50.presentation.nutrition_terminal import nutrition_context_lines, nutrition_context_payload
+from muscle50.presentation.sync_coverage_terminal import sync_coverage_freshness_lines, sync_coverage_payload
 
 _TYPE_LABELS = {
     ActivityType.RUNNING: "러닝",
@@ -516,8 +517,14 @@ def render_training_recommendation_json(
     """Full recommendation with evidence; ASCII-only and stable for identical input.
 
     The training fields are unchanged; a nutrition context adds one trailing ``nutrition`` key.
+    ``data_freshness.sync_coverage`` is present (last) only when sync coverage was recorded in the window.
     """
     payload = dataclasses.asdict(recommendation)
+    window = recommendation.data_freshness.sync_coverage
+    if window is None:
+        del payload["data_freshness"]["sync_coverage"]
+    else:
+        payload["data_freshness"]["sync_coverage"] = sync_coverage_payload(window)
     if nutrition is not None:
         payload["nutrition"] = nutrition_context_payload(nutrition)
     return json.dumps(payload, indent=2, ensure_ascii=True, default=_json_default)
@@ -667,6 +674,8 @@ def render_training_recommendation(
             f"  {freshness.statement}",
         )
     )
+    if freshness.sync_coverage is not None:
+        lines.extend(sync_coverage_freshness_lines(freshness.sync_coverage))
 
     lines.extend(("", "== Data quality / UNKNOWN / no-rule notices =="))
     if not recommendation.notices:

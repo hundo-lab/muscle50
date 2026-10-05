@@ -17,6 +17,15 @@ from pathlib import Path
 
 from muscle50.domain.activity import NormalizedActivity
 from muscle50.domain.recovery import DailyRecovery
+from muscle50.domain.sync_coverage import (
+    PROVIDER_GARMIN,
+    CoverageKind,
+    CoverageSource,
+    CoverageStatus,
+    RecordedCoverage,
+    SyncCoverageData,
+    SyncCoverageEntry,
+)
 from muscle50.infrastructure.sqlite.database import (
     _activity_from_rows,
     _recovery_from_row,
@@ -36,6 +45,8 @@ class TrainingData:
     activities: tuple[NormalizedActivity, ...]
     undated_source_activity_ids: tuple[str, ...]
     recoveries: tuple[DailyRecovery, ...]
+    sync_coverage: tuple[RecordedCoverage, ...] = ()
+    """Recorded sync coverage in the range; empty on a database from before migration 10."""
 
 
 class SqliteAnalyticsReader:
@@ -76,7 +87,26 @@ class SqliteAnalyticsReader:
                     (start.isoformat(), end.isoformat()),
                 ).fetchall()
             )
-        return TrainingData(activities, undated, recoveries)
+            coverage = _sync_coverage_rows(connection, start, end) or ()
+        return TrainingData(activities, undated, recoveries, coverage)
+
+    def load_sync_coverage(self, start: date, end: date) -> SyncCoverageData:
+        """Recorded coverage and stored-activity counts per local date for an inclusive range."""
+        with self._read_transaction() as connection:
+            records = _sync_coverage_rows(connection, start, end)
+            stored = {
+                date.fromisoformat(row["day"]): int(row["stored"])
+                for row in connection.execute(
+                    """
+                    SELECT substr(started_at_local, 1, 10) AS day, COUNT(*) AS stored FROM activities
+                    WHERE provider = 'garmin'
+                      AND substr(started_at_local, 1, 10) BETWEEN ? AND ?
+                    GROUP BY day
+                    """,
+                    (start.isoformat(), end.isoformat()),
+                ).fetchall()
+            }
+        return SyncCoverageData(records or (), stored, table_present=records is not None)
 
     @contextmanager
     def _read_transaction(self) -> Iterator[sqlite3.Connection]:
@@ -117,6 +147,42 @@ def _require_schema(connection: sqlite3.Connection) -> None:
             f"muscle50 database schema version {version} is older than {MINIMUM_SCHEMA_VERSION}; "
             "run any Garmin sync command once to migrate it"
         )
+
+
+def _sync_coverage_rows(connection: sqlite3.Connection, start: date, end: date) -> tuple[RecordedCoverage, ...] | None:
+    """None on a database from before the coverage migration (a read-only reader never migrates)."""
+    has_table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sync_coverage'"
+    ).fetchone()
+    if has_table is None:
+        return None
+    rows = connection.execute(
+        """
+        SELECT * FROM sync_coverage
+        WHERE provider = ? AND calendar_date BETWEEN ? AND ?
+        ORDER BY calendar_date, data_kind
+        """,
+        (PROVIDER_GARMIN, start.isoformat(), end.isoformat()),
+    ).fetchall()
+    return tuple(
+        RecordedCoverage(
+            SyncCoverageEntry(
+                CoverageKind(row["data_kind"]),
+                date.fromisoformat(row["calendar_date"]),
+                CoverageStatus(row["status"]),
+                CoverageSource(row["source"]),
+                missing_endpoints=_split(row["missing_endpoints"]),
+                failed_activity_ids=_split(row["failed_activity_ids"]),
+            ),
+            row["command"],
+            row["synced_at_utc"],
+        )
+        for row in rows
+    )
+
+
+def _split(value: str | None) -> tuple[str, ...]:
+    return tuple(value.split(",")) if value else ()
 
 
 def _load_activity(connection: sqlite3.Connection, row: sqlite3.Row) -> NormalizedActivity:

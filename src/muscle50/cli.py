@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime, time, timezone, tzinfo
 from decimal import Decimal
 from pathlib import Path
+from typing import Literal
 
 from muscle50.application.backfill_activity_load_metrics import BackfillActivityLoadMetrics
 from muscle50.application.daily_sync import DailyMode, RunDailySync, daily_sync_start
@@ -50,9 +51,20 @@ from muscle50.application.refresh_garmin_activity import (
     RefreshGarminActivity,
 )
 from muscle50.application.renormalize_garmin_recovery import RenormalizeGarminRecovery
+from muscle50.application.sync_coverage import (
+    COMMAND_DAILY,
+    COMMAND_GARMIN_ACTIVITIES,
+    COMMAND_GARMIN_RECOVERY,
+    BackfillRecoveryCoverage,
+    CoverageRecordResult,
+    RecordSyncCoverage,
+    ShowSyncCoverage,
+    coverage_not_recorded_message,
+)
 from muscle50.application.sync_garmin_recovery import (
     RECOVERY_ENDPOINTS_PER_DATE,
     InvalidRecoveryRangeError,
+    RecoveryRangeOutcome,
     SyncGarminRecovery,
     recovery_range_dates,
 )
@@ -69,8 +81,13 @@ from muscle50.domain.nutrition_targets import ExactTarget, NutrientTarget, Nutri
 from muscle50.domain.recovery_normalization import RecoveryNormalizationError, validate_calendar_date
 from muscle50.domain.strength_recommendation import StrengthFocus
 from muscle50.domain.swim_normalization import SwimNormalizationError
+from muscle50.domain.sync_coverage import InvalidCoverageRangeError, coverage_range_dates
 from muscle50.infrastructure.decimal_text import decimal_from_text
-from muscle50.infrastructure.garmin.client import GarminConnectorError, PythonGarminConnector
+from muscle50.infrastructure.garmin.client import (
+    GarminAuthenticationError,
+    GarminConnectorError,
+    PythonGarminConnector,
+)
 from muscle50.infrastructure.inbody.raw_store import InBodyRawStore
 from muscle50.infrastructure.inbody.samsung_health import SamsungHealthInBodySource
 from muscle50.infrastructure.nutrition_target_store import JsonNutritionTargetRepository
@@ -80,6 +97,7 @@ from muscle50.infrastructure.sqlite.body_composition import SqliteBodyCompositio
 from muscle50.infrastructure.sqlite.database import ActivityRepository, DailyRecoveryRepository
 from muscle50.infrastructure.sqlite.nutrition_reader import SqliteNutritionReader
 from muscle50.infrastructure.sqlite.nutrition_repository import SqliteFoodNutritionRepository, SqliteMealRepository
+from muscle50.infrastructure.sqlite.sync_coverage import SqliteSyncCoverageRepository
 from muscle50.presentation.nutrition_terminal import (
     render_daily_intake,
     render_daily_intake_json,
@@ -97,6 +115,11 @@ from muscle50.presentation.nutrition_terminal import (
     render_repeated_meal,
     render_targets,
     render_targets_json,
+)
+from muscle50.presentation.sync_coverage_terminal import (
+    render_recovery_coverage_backfill,
+    render_sync_coverage,
+    render_sync_coverage_json,
 )
 from muscle50.presentation.terminal import (
     render_activity_load_backfill_result,
@@ -163,6 +186,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Re-normalize stored recovery rows from their accepted RAW capture (no Garmin API calls)",
     )
     renormalize.add_argument("--dry-run", action="store_true", help="report changes without writing")
+    coverage = garmin_commands.add_parser(
+        "coverage",
+        help="Show which dates a Garmin sync covered, per date (reads the database read-only; no Garmin calls)",
+    )
+    coverage.add_argument("--from", dest="from_date", required=True, metavar="YYYY-MM-DD", help="first date")
+    coverage.add_argument("--to", dest="to_date", required=True, metavar="YYYY-MM-DD", help="last date (inclusive)")
+    coverage.add_argument("--json", action="store_true", help="print as JSON with the recording command and time")
+    coverage_backfill = garmin_commands.add_parser(
+        "backfill-recovery-coverage",
+        help="Record recovery sync coverage for already-stored recovery dates from their accepted RAW capture "
+        "(no Garmin API calls; dates that already have coverage are left unchanged)",
+    )
+    coverage_backfill.add_argument("--dry-run", action="store_true", help="report changes without writing")
     analytics = commands.add_parser("analytics", help="Read-only analytics over stored canonical data")
     analytics_commands = analytics.add_subparsers(dest="analytics_command", required=True)
     snapshot = analytics_commands.add_parser(
@@ -490,6 +526,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _garmin_backfill_load_metrics(dry_run=args.dry_run)
     if args.command == "garmin" and args.garmin_command == "recovery-renormalize":
         return _garmin_recovery_renormalize(dry_run=args.dry_run)
+    if args.command == "garmin" and args.garmin_command == "coverage":
+        return _garmin_coverage(args.from_date, args.to_date, as_json=args.json)
+    if args.command == "garmin" and args.garmin_command == "backfill-recovery-coverage":
+        return _garmin_backfill_recovery_coverage(dry_run=args.dry_run)
     if args.command == "analytics" and args.analytics_command == "snapshot":
         return _analytics_snapshot(args.as_of, args.days, as_json=args.json)
     if args.command == "recommend":
@@ -563,6 +603,7 @@ def _garmin_activities(from_date_text: str, to_date_text: str) -> int:
         raw_store = RawStore(paths.raw_dir, paths.root, paths.tmp_dir)
         use_case = IngestGarminActivityRange(connector, repository, raw_store)
         result = use_case.execute(from_date, to_date)
+        _warn_coverage_not_recorded(_sync_coverage(paths, COMMAND_GARMIN_ACTIVITIES).activities(result))
         print(render_range_result(result))
         imported = frozenset(item.source_activity_id for item in result.outcomes if item.status == "inserted")
         return _fill_load_metrics(repository, raw_store, imported)
@@ -594,7 +635,20 @@ def _garmin_recovery(calendar_date: str) -> int:
             repository,
             RecoveryRawStore(paths.recovery_raw_dir, paths.root, paths.tmp_dir),
         )
-        print(render_recovery_sync_result(use_case.execute(calendar_date)))
+        coverage = _sync_coverage(paths, COMMAND_GARMIN_RECOVERY)
+        try:
+            result = use_case.execute(calendar_date)
+        except GarminAuthenticationError:
+            raise  # never attempted: the date stays not synced
+        except (GarminConnectorError, RawStoreError, RecoveryNormalizationError) as exc:
+            failed = RecoveryRangeOutcome(calendar_date, "failed", error=str(exc))
+            _warn_coverage_not_recorded(coverage.recovery((failed,)))
+            raise
+        status: Literal["created", "updated", "unchanged"] = (
+            "created" if result.created else "updated" if result.updated else "unchanged"
+        )
+        _warn_coverage_not_recorded(coverage.recovery((RecoveryRangeOutcome(calendar_date, status, result=result),)))
+        print(render_recovery_sync_result(result))
         return 0
     except (
         ConfigurationError,
@@ -652,6 +706,7 @@ def _garmin_recovery_range(
             RecoveryRawStore(paths.recovery_raw_dir, paths.root, paths.tmp_dir),
         )
         result = use_case.execute_range(from_date, to_date)
+        _warn_coverage_not_recorded(_sync_coverage(paths, COMMAND_GARMIN_RECOVERY).recovery(result.outcomes))
         print(render_recovery_range_result(result))
         if not result.complete:
             print("일부 날짜가 저장되지 않았습니다. 같은 명령을 다시 실행해도 안전합니다.", file=sys.stderr)
@@ -718,6 +773,59 @@ def _garmin_recovery_renormalize(*, dry_run: bool) -> int:
     except KeyboardInterrupt:
         print("\n취소되었습니다.", file=sys.stderr)
         return 130
+
+
+def _garmin_coverage(from_text: str, to_text: str, *, as_json: bool) -> int:
+    # Deliberately read-only: no ensure_directories(), no migrate(), no Garmin connector.
+    try:
+        from_date = date.fromisoformat(validate_calendar_date(from_text))
+        to_date = date.fromisoformat(validate_calendar_date(to_text))
+        coverage_range_dates(from_date, to_date)
+    except RecoveryNormalizationError:
+        print("오류: --from/--to는 YYYY-MM-DD 형식이어야 합니다.", file=sys.stderr)
+        return 1
+    except InvalidCoverageRangeError as exc:
+        print(f"오류: {exc}", file=sys.stderr)
+        return 1
+    try:
+        paths = AppPaths.from_environment()
+        report = ShowSyncCoverage(SqliteAnalyticsReader(paths.database_path)).execute(from_date, to_date)
+        print(render_sync_coverage_json(report) if as_json else render_sync_coverage(report))
+        return 0
+    except (AnalyticsDatabaseError, ConfigurationError, InvalidCoverageRangeError) as exc:
+        print(f"오류: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\n취소되었습니다.", file=sys.stderr)
+        return 130
+
+
+def _garmin_backfill_recovery_coverage(*, dry_run: bool) -> int:
+    # Deliberately never authenticates or builds a Garmin connector, and never reads or writes RAW files.
+    try:
+        paths = AppPaths.from_environment()
+        paths.ensure_directories()
+        DailyRecoveryRepository(paths.database_path).migrate()
+        use_case = BackfillRecoveryCoverage(SqliteSyncCoverageRepository(paths.database_path))
+        print(render_recovery_coverage_backfill(use_case.execute(dry_run=dry_run)))
+        return 0
+    except ConfigurationError as exc:
+        print(f"오류: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\n취소되었습니다.", file=sys.stderr)
+        return 130
+
+
+def _sync_coverage(paths: AppPaths, command: str) -> RecordSyncCoverage:
+    """Records which dates a sync covered, in its own transaction after the sync (dates after today never)."""
+    return RecordSyncCoverage(SqliteSyncCoverageRepository(paths.database_path), command=command, through=_today())
+
+
+def _warn_coverage_not_recorded(result: CoverageRecordResult) -> None:
+    # stdout and the exit code stay exactly those of the sync; the dates simply stay "not synced".
+    if result.error is not None:
+        print(f"경고: {coverage_not_recorded_message(result.error)}", file=sys.stderr)
 
 
 def _garmin_refresh(source_activity_id: str) -> int:
@@ -850,6 +958,7 @@ def _daily(
             # A read-only reader built exactly as `recommend` builds it; it reads after the sync stages write.
             recommender=BuildTrainingRecommendation(SqliteAnalyticsReader(paths.database_path)),
             nutrition=_nutrition_context(paths),
+            coverage=_sync_coverage(paths, COMMAND_DAILY),
         )
         print(
             f"muscle50 daily {as_of.isoformat()}: syncing {daily_sync_start(as_of).isoformat()}..{as_of.isoformat()}",

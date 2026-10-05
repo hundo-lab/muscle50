@@ -25,6 +25,19 @@ from muscle50.infrastructure.sqlite.database import DailyRecoveryRepository
 # Hard ceiling for one range run; each date costs one request per recovery endpoint.
 MAX_RECOVERY_RANGE_DAYS = 31
 RECOVERY_ENDPOINTS_PER_DATE = 9
+# The recovery endpoint kinds, in PythonGarminConnector.fetch_raw_recovery order. A kind missing
+# from a fetched recovery is an endpoint call that failed (a "no data" answer is stored as null).
+RECOVERY_ENDPOINT_KINDS = (
+    "sleep",
+    "daily_stats",
+    "hrv",
+    "resting_heart_rate",
+    "body_battery",
+    "stress",
+    "training_readiness",
+    "training_status",
+    "respiration",
+)
 # A run of consecutive whole-date failures usually means throttling or an outage, so the
 # range stops instead of spending the remaining request budget on the same failure.
 MAX_CONSECUTIVE_DATE_FAILURES = 3
@@ -44,6 +57,8 @@ class RecoverySyncResult:
     created: bool
     updated: bool
     warnings: tuple[str, ...] = ()
+    missing_endpoints: tuple[str, ...] = ()
+    """Endpoint kinds whose call failed for this date, in RECOVERY_ENDPOINT_KINDS order."""
 
 
 @dataclass(frozen=True)
@@ -52,6 +67,8 @@ class RecoveryRangeOutcome:
     status: Literal["created", "updated", "unchanged", "failed", "not_attempted"]
     result: RecoverySyncResult | None = None
     error: str | None = None
+    authentication_failed: bool = False
+    """The date failed because Garmin rejected the session, so it was never really attempted."""
 
 
 @dataclass(frozen=True)
@@ -100,7 +117,8 @@ class SyncGarminRecovery:
         capture = self._raw_store.preserve(raw)
         recovery = normalize_recovery(requested_date, raw.payloads)
         saved, created, updated = self._repository.save(recovery, capture)
-        return RecoverySyncResult(saved, created, updated, raw.warnings)
+        missing = tuple(kind for kind in RECOVERY_ENDPOINT_KINDS if kind not in raw.payloads)
+        return RecoverySyncResult(saved, created, updated, raw.warnings, missing)
 
     def execute_range(self, from_date: date, to_date: date) -> RecoveryRangeSyncResult:
         """Sync each date sequentially; one date's failure does not roll back another date."""
@@ -115,7 +133,9 @@ class SyncGarminRecovery:
             try:
                 result = self.execute(calendar_date)
             except GarminAuthenticationError as exc:
-                outcomes.append(RecoveryRangeOutcome(calendar_date, "failed", error=str(exc)))
+                outcomes.append(
+                    RecoveryRangeOutcome(calendar_date, "failed", error=str(exc), authentication_failed=True)
+                )
                 aborted_reason = str(exc)
                 continue
             except _KNOWN_DATE_ERRORS as exc:

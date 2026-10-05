@@ -99,7 +99,10 @@ uv run muscle50 garmin activities --from 2026-07-01 --to 2026-08-02
 실행 전 DB backup(WAL-safe: `sqlite3` backup API 또는 `VACUUM INTO`)을 만든다. 아직 실행하지
 않았다 — 명시적 승인 후 실행한다.
 
-## E. `sync_runs` 연동 — 보류
+## E. `sync_runs` 연동 — 보류 (Sync Coverage v1로 대체)
+
+> 2026-10-05: 아래의 날짜 단위 coverage는 `sync_runs` 대신 migration 010의 `sync_coverage` 테이블로 구현했다
+> (`docs/sync-coverage.md`). `sync_runs`는 여전히 사용하지 않는다. 아래는 당시 판단 기록이다.
 
 `sync_runs`(migration 1)는 `provider, command, status, source_activity_id, error_code,
 started_at_utc, finished_at_utc`만 가진다. Recovery coverage에 쓰려면 다음을 구분해야 하는데

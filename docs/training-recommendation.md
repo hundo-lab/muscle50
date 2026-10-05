@@ -343,6 +343,11 @@ stored activity is 'no recorded activity', not a confirmed rest day ...". 스키
 - `recovery_coverage_gap`: 최신 recovery row가 D-2 이전.
 - `swim_gap`: 최신 swim이 10일 이상 전이거나 28일 내 없음 — 실제 휴식과 미동기화를 구분할 수 없음.
 
+Sync Coverage v1(`docs/sync-coverage.md`, migration 010): 창 D-28..D에 Garmin sync coverage row가 하나라도 있으면
+`sync_coverage_recorded = true`이고 `data_freshness` 끝에 날짜별 `sync_coverage`가 붙으며, text에는 statement 뒤에
+"synced, no activity"와 "not synced"를 구분하는 두 줄이 붙는다. 규칙은 coverage를 읽지 않는다(결정 불변). Row가 없으면
+출력은 이전과 byte-identical이다. Statement와 notice 문구는 그대로다(v2에서 정리).
+
 ## 다음 수영 목표
 
 ### Swim 분석
@@ -496,8 +501,8 @@ Bias 확인(counterfactual, 2026-08-01~10-01 62일 매일 실행, `distribution.
 - RIR, 통증, 장비 가용성, paddle/fin, lap intensity는 데이터에 없다. 통증은 `--avoid` 명시 입력으로만 반영한다.
 - Garmin이 idle length로 기록하지 않은 벽 휴식은 감지할 수 없고, length timing이 이상한 lap이 많아(예: 09-03
   600 m lap) 연속 거리 baseline이 보수적으로 낮게 나온다. 그래서 anchor는 설정 baseline(1000 m)과의 max다.
-- Activity/recovery sync coverage가 기록되지 않아 "활동 없음"과 "미동기화"를 구분할 수 없다(Data freshness 절과
-  notice로만 표시).
+- Sync Coverage v1 이전 날짜(과거 activity)는 coverage가 없어 "활동 없음"과 "미동기화"를 구분할 수 없다. Coverage가
+  기록된 날짜도 표시만 하고 추천 결정(휴식 확정 등)에는 쓰지 않는다(v2 후보, `docs/sync-coverage.md`).
 - Posterior deltoid를 primary로 쓰는 taxonomy rule도, 그런 저장 label도 없다(2026-10-01 audit: label 이름에 REAR/
   FACE_PULL/REVERSE 없음, UNKNOWN 276 set은 display name도 "Unknown"). Lateral raise 옆 UNKNOWN set(09-17 seq 35,
   09-22 seq 33 — 09-22는 이후 relabel)은 rear-delt일 수도 있지만 추측하지 않는다. Garmin Connect에서 지정해도

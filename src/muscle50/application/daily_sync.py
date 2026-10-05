@@ -13,6 +13,10 @@ Stages, in order:
 No Garmin normalization, persistence, recovery or recommendation rule lives here; each stage
 is the existing use case, so its idempotency and RAW snapshot semantics are unchanged.
 
+Sync coverage (optional ``coverage`` recorder) is written right after the activities stage and
+right after the recovery stage, so before the recommendation reads the database. A failed
+coverage write is a warning on that stage; it never changes the stage status.
+
 Failure policy: the three sync stages are independent, so one failing stage does not stop the
 others from preserving valid work. A stage that cannot run because its input is missing is
 ``not_run``. The recommendation is built only when every earlier stage is ``ok``; otherwise it
@@ -24,8 +28,8 @@ deliberately lets propagate) aborts the whole command.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from enum import StrEnum
 from typing import Protocol
@@ -35,7 +39,8 @@ from muscle50.application.imported_load_metrics import check_imported_load_metri
 from muscle50.application.ingest_activity import ActivitySyncError
 from muscle50.application.ingest_activity_range import RangeIngestResult
 from muscle50.application.nutrition_recommendation import NutritionContext
-from muscle50.application.sync_garmin_recovery import RecoveryRangeSyncResult
+from muscle50.application.sync_coverage import CoverageRecordResult, coverage_not_recorded_message
+from muscle50.application.sync_garmin_recovery import RecoveryRangeOutcome, RecoveryRangeSyncResult
 from muscle50.domain.exercise_taxonomy import MuscleGroup
 from muscle50.domain.normalization import NormalizationError
 from muscle50.domain.recovery_normalization import RecoveryNormalizationError
@@ -112,6 +117,12 @@ class NutritionContextBuilder(Protocol):
     def execute(self, as_of: date, training: TrainingRecommendation) -> NutritionContext: ...
 
 
+class SyncCoverageRecorder(Protocol):
+    def activities(self, result: RangeIngestResult) -> CoverageRecordResult: ...
+
+    def recovery(self, outcomes: Sequence[RecoveryRangeOutcome]) -> CoverageRecordResult: ...
+
+
 @dataclass(frozen=True)
 class StageReport:
     stage: str
@@ -157,6 +168,7 @@ class RunDailySync:
         recovery_sync: Callable[[DailyGarminConnector], RecoveryRangeSync],
         recommender: TrainingRecommender,
         nutrition: NutritionContextBuilder | None = None,
+        coverage: SyncCoverageRecorder | None = None,
     ):
         self._connect = connect
         self._activity_ingest = activity_ingest
@@ -164,6 +176,7 @@ class RunDailySync:
         self._recovery_sync = recovery_sync
         self._recommender = recommender
         self._nutrition = nutrition
+        self._coverage = coverage
 
     def execute(
         self,
@@ -188,6 +201,8 @@ class RunDailySync:
         stages.append(StageReport(STAGE_GARMIN_LOGIN, StageStatus.OK))
 
         activities, report = self._activities(connector, start, as_of)
+        if activities is not None and self._coverage is not None:
+            report = _with_coverage_warning(report, self._coverage.activities(activities))
         stages.append(report)
         load_metrics, report = self._load_metrics(activities)
         stages.append(report)
@@ -195,6 +210,8 @@ class RunDailySync:
         recovery: RecoveryRangeSyncResult | None = None
         if full:
             recovery, report = self._recovery(connector, start, as_of)
+            if recovery is not None and self._coverage is not None:
+                report = _with_coverage_warning(report, self._coverage.recovery(recovery.outcomes))
             stages.append(report)
         else:
             stages.append(StageReport(STAGE_RECOVERY, StageStatus.SKIPPED))
@@ -289,3 +306,9 @@ class RunDailySync:
                 problems.append(f"aborted: {result.aborted_reason}")
             return result, StageReport(STAGE_RECOVERY, StageStatus.FAILED, "; ".join(problems), warnings)
         return result, StageReport(STAGE_RECOVERY, StageStatus.OK, warnings=warnings)
+
+
+def _with_coverage_warning(report: StageReport, recorded: CoverageRecordResult) -> StageReport:
+    if recorded.error is None:
+        return report
+    return replace(report, warnings=(*report.warnings, coverage_not_recorded_message(recorded.error)))
