@@ -1,7 +1,7 @@
 ---
 id: auto-load-metrics
 title: Auto Load Metrics on Garmin Sync v1
-status: draft
+status: integrated
 migration: none
 output_change: additive
 user_gates: [design, integration, live-garmin, push]
@@ -67,3 +67,10 @@ Load metrics: inserted 10, updated 0, unchanged 800
 
 - `garmin refresh` 뒤의 load metric 재계산(지금은 기존 값을 유지한다).
 - 전체 activity를 매번 다시 확인하는 비용. 지금은 작지만 데이터가 늘면 대상을 새 activity로 좁히는 방안.
+- (구현 후 보고) import는 성공했어도 새 activity의 RAW `summary.json`이 없거나 읽을 수 없으면, 또는 fill 중
+  DB/RAW store 오류가 나면 exit 1이다. 저장된 activity와 RAW는 그대로 남는다.
+- (구현 후 보고) 다시 실행하면 그 activity는 이전부터 있던 activity로 보므로 경고 줄 + exit 0이 된다. 잃어버린
+  initial `summary.json`을 다시 만드는 명령은 없다.
+- (구현 후 보고) backfill 예외 메시지는 받은 그대로 출력하므로 ASCII가 아닐 수 있다(예: 한국어 `RawStoreError`).
+  ASCII-only 출력 원칙의 예외다.
+- (구현 후 보고) 실제 계정 확인(live Garmin 게이트)은 아직 하지 않았다. AC3 실패 경로는 fake로만 확인했다.

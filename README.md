@@ -54,6 +54,17 @@ muscle50 garmin latest
 `strength_sets` 테이블을 추가하며, 이미 보존된 웨이트 RAW가 있으면 원격 상세 API를 다시 호출하지
 않고 해당 파일에서 세트를 백필합니다.
 
+가져온 뒤에는 `daily`와 같은 방식으로 activity load metric 10종을 저장된 RAW에서 바로 채우므로
+`garmin backfill-load-metrics`를 따로 실행하지 않아도 됩니다(Garmin 추가 호출 없음, 여러 번 실행해도 안전).
+출력 마지막 줄에 결과가 붙습니다(예시 형식).
+
+```text
+Load metrics: metric rows inserted <n>, updated <n>, unchanged <n>
+```
+
+이번 실행에서 저장한 activity의 RAW summary를 읽을 수 없으면 `Load metrics failed: ...`를 표시하고 exit code 1로
+끝납니다. 이미 저장된 activity와 RAW는 그대로 남습니다. 경고는 `Load metrics warning: ...` 줄로 보여 줍니다.
+
 ## 기간별 Garmin activity 동기화
 
 ```powershell
@@ -65,7 +76,8 @@ muscle50 garmin activities --from 2026-01-01 --to 2026-01-31
 경로를 activity마다 그대로 재사용하므로 웨이트 세트, 수영 lap/length 정규화도 동일하게
 적용됩니다. 이미 저장된 activity는 다시 가져오지 않고 건너뛰며, 한 activity가 실패해도 나머지
 activity는 계속 처리됩니다. 실행할 때마다 발견/신규 저장/이미 저장됨/실패 건수를 요약해서
-보여줍니다.
+보여줍니다. 그 뒤 `garmin latest`와 같은 load metric 단계를 실행하고 `Load metrics: ...` 줄을 마지막에
+출력합니다. 새로 저장한 activity가 없어도 실행하며, 이미 채워진 경우에는 `unchanged`만 나옵니다.
 
 ## 기존 Garmin activity 명시적 refresh
 

@@ -130,7 +130,7 @@ muscle50/
 | Strength review 경고 | `domain/activity_review.py` | 부분 | UNKNOWN/missing 분류만 본다. weight 0 규칙은 보류했다. [문서] |
 | Recovery sync (단일/범위) | `garmin recovery D` / `--from --to [--yes]` / `sync_garmin_recovery.py`, migration 005 | 완료 | 날짜당 endpoint 9개, 최대 31일, 7일 초과는 `--yes` 필요 |
 | Recovery 재정규화 | `garmin recovery-renormalize [--dry-run]` | 완료 | Garmin 호출 없이 accepted RAW로 재생성한다. |
-| Load metric backfill | `garmin backfill-load-metrics [--dry-run]` / `domain/activity_load.py` | 부분 | 10종 metric. `latest`/`activities`가 자동으로 채우지 않아 따로 실행하거나 `daily`를 써야 한다. [문서] |
+| Load metric backfill | `garmin backfill-load-metrics [--dry-run]` / `domain/activity_load.py` | 부분 | 10종 metric. `latest`/`activities`/`daily`가 import 뒤 자동으로 채운다(Auto Load Metrics v1). `garmin refresh` 뒤에는 다시 계산하지 않는다. [문서] |
 | Sync 이력 기록 | `sync_runs` 테이블 | 스텁 | 스키마만 있고 **어떤 코드도 쓰지 않는다**. [코드 grep] |
 | Activity 보정 overlay | `activity_corrections` 테이블 | 스텁 | 스키마만 있고 **코드 사용 없음**. [코드 grep] |
 
@@ -481,7 +481,7 @@ InBody/Samsung은 네트워크 호출이 없다. Android 앱이 기기 안의 Sa
 | `sync_runs`, `activity_corrections` | 스키마만 있고 사용처가 없다. 그래서 "운동 없음"과 "미동기화"를 구분하지 못한다. 보정 overlay도 미구현이다. |
 | InBody 네트워크 경로 | `auth`/`connector`/`authenticated_source`/`synthetic`/`sync_latest_inbody`는 테스트 전용 스텁이다. |
 | 체성분 미활용 | 저장된 body composition을 분석이나 추천이 읽지 않는다. |
-| Load metric 자동화 | `garmin latest`/`activities`만 실행하면 load metric이 비어 있다(`daily`는 채운다). |
+| Load metric 재계산 | `garmin refresh` 뒤에는 load metric을 다시 계산하지 않고 기존 값을 유지한다. |
 | 영양 | 식사 삭제와 메타데이터 수정, 병합, 이름/alias 입력, 자유 문장 parser, unit 변환, 목표 history가 없다. |
 | 추천 | 장비별 증량 단위 미학습(Progression v2 후보), posterior deltoid 미커버, plyometric 범위 밖 |
 | 자동 실행 | scheduler가 없다. `daily`는 사람이 실행한다. |
