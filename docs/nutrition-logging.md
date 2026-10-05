@@ -16,8 +16,9 @@ Not implemented yet:
 
 ## Architecture
 
-Logging fits `003_nutrition.sql`. The only later migration is `008_nutrition_meal_item_removals.sql`,
-which records items removed by Meal Edit. Reused Nutrition Core pieces:
+Logging fits `003_nutrition.sql`. Later migrations: `008_nutrition_meal_item_removals.sql` records
+items removed by Meal Edit, and `009_nutrition_meal_corrections.sql` records whole-meal voids, edits
+and merges (`nutrition-meal-corrections.md`). Reused Nutrition Core pieces:
 
 | Concept | Reused as |
 | --- | --- |
@@ -187,7 +188,8 @@ muscle50 nutrition meal replace-item 2026-10-02-breakfast-1 --item-number 2 --it
   `nutrition status`, `recommend` and `daily` at once, because totals are always computed from
   the stored items and nothing is cached. **The last item cannot be removed.** A meal always has
   at least one item, just as `nutrition log` refuses an empty meal. To change a one-item meal,
-  use `replace-item`. Deleting a whole meal is not supported.
+  use `replace-item`. To take a whole meal out, void it (`nutrition meal void`, see
+  `nutrition-meal-corrections.md`).
 - **`replace-item`** adds the new item, with a fresh snapshot and the next number, and removes
   the old one in a single transaction, so either both happen or neither does. It also works on
   a one-item meal.
@@ -323,10 +325,10 @@ only.
 
 - **Limited editing.** Food names/aliases cannot be changed; nutrition numbers change only by
   appending a fact version (`food fact add`). A meal's items can be added, removed or replaced
-  (`nutrition meal`, see "Edit a logged meal's items"), but a meal's date, type and time cannot
-  be changed, a whole meal cannot be deleted, a removal cannot be undone, and separate meals
-  (e.g. ones created earlier with `--additional`) cannot be merged. The duplicate-meal guard
-  still applies to `nutrition log`.
+  (`nutrition meal`, see "Edit a logged meal's items"). A whole meal can be voided, its date,
+  type and time changed, and two meals of the same date merged (`nutrition meal void/edit/merge`,
+  see `nutrition-meal-corrections.md`); a removal or a void cannot be undone. The duplicate-meal
+  guard still applies to `nutrition log` (voided meals no longer count for it).
 - An item edit reads the meal and the catalog, then writes in one transaction. The write
   re-checks the meal, item and next item number under its lock, so two simultaneous edits of the
   same meal cannot interleave. The loser is refused and changes nothing.

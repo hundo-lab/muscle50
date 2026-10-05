@@ -8,10 +8,11 @@ Text stays ASCII apart from user-entered food names (cp949 consoles cannot print
 from __future__ import annotations
 
 import json
-from datetime import time
+from datetime import datetime, time
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any
 
+from muscle50.application.meal_corrections import CorrectionKind, MealCorrection
 from muscle50.application.nutrition_logging import (
     DailyIntake,
     ItemIntake,
@@ -21,8 +22,10 @@ from muscle50.application.nutrition_logging import (
 )
 from muscle50.application.nutrition_recommendation import NutritionContext
 from muscle50.application.nutrition_targets import DailyNutritionStatus, NutrientDayStatus
+from muscle50.domain.meal_history import MealHistory, MealMerge, recorded_time, timestamp_text
 from muscle50.domain.nutrition import (
     FoodNutritionProfile,
+    MealType,
     NutrientField,
     NutritionAggregate,
     NutritionFact,
@@ -148,6 +151,28 @@ def render_edited_meal(intake: MealIntake, headline: str) -> str:
     return "\n".join(lines)
 
 
+def render_meal_correction(correction: MealCorrection) -> str:
+    """Output of `nutrition meal void/edit/merge`: a headline, then the meal as `meal show` prints it.
+
+    JSON is `render_logged_meal_json` of `correction.intake`, the same document as `meal show --json`.
+    """
+    intake, history = correction.intake, correction.intake.history
+    meal_id = intake.meal.meal_id
+    if correction.kind is CorrectionKind.VOID:
+        headline = f"Voided meal {meal_id}. It no longer counts in nutrition day, status, recommend or daily."
+    elif correction.kind is CorrectionKind.EDIT and history is not None and history.revisions:
+        before_type, before_eaten_at, revision = history.revision_steps()[-1]
+        changes = _revision_changes(before_type, before_eaten_at, revision.meal_type, revision.eaten_at)
+        headline = f"Edited meal {meal_id}: {changes}. The meal ID does not change."
+    else:
+        source = correction.source_meal_id
+        merged_from = history.merged_from if history is not None else ()
+        merges = [merge for merge in merged_from if merge.source_meal_id == source]
+        numbers = _item_numbers([item.sequence for item in merges[-1].items]) if merges else "items"
+        headline = f"Merged meal {source} into {meal_id} as {numbers}; meal {source} is voided."
+    return render_edited_meal(intake, headline)
+
+
 def render_daily_intake(intake: DailyIntake) -> str:
     lines = [f"Nutrition intake {intake.day.isoformat()} (UTC{intake.timezone_name})", _SCOPE_NOTE]
     if not intake.meals:
@@ -209,7 +234,66 @@ def _meal_lines(intake: MealIntake, *, facts: bool = False) -> list[str]:
     nutrition = intake.summary.nutrition
     totals = " | ".join(f"{_SHORT[nutrient]} {_aggregate_value(nutrition, nutrient)}" for nutrient in NutrientField)
     lines.append(f"  Meal total: {totals}")
+    # Only `meal show/void/edit/merge` attach a history; nothing changes for a meal without corrections.
+    if intake.history is not None and intake.history.recorded:
+        lines.extend(_history_lines(intake.history))
     return lines
+
+
+def _history_lines(history: MealHistory) -> list[str]:
+    lines = [
+        f"  Edited {timestamp_text(revision.revised_at)}: "
+        + _revision_changes(before_type, before_eaten_at, revision.meal_type, revision.eaten_at)
+        for before_type, before_eaten_at, revision in history.revision_steps()
+    ]
+    if history.revisions:
+        lines.append("  The meal ID keeps the date and type it was logged with; the date and type above are current.")
+    lines.extend(
+        f"  Merged {timestamp_text(merge.merged_at)} from meal {merge.source_meal_id}: {_merged_items(merge)}"
+        for merge in history.merged_from
+    )
+    void = history.void
+    if void is not None:
+        if void.merged_into is not None:
+            detail = f"merged into meal {void.merged_into}"
+        elif void.reason is not None:
+            detail = f"reason: {void.reason}"
+        else:
+            detail = "no reason given"
+        lines.append(
+            f"  Voided {timestamp_text(void.voided_at)}; {detail}. "
+            "Not counted in nutrition day, status, recommend or daily."
+        )
+    return lines
+
+
+def _revision_changes(before_type: MealType, before: datetime, after_type: MealType, after: datetime) -> str:
+    # Only what changed, in date, type, time order (ASCII "->").
+    changes = []
+    if before.date() != after.date():
+        changes.append(f"date {before.date().isoformat()} -> {after.date().isoformat()}")
+    if before_type is not after_type:
+        changes.append(f"type {before_type.value} -> {after_type.value}")
+    if recorded_time(before) != recorded_time(after):
+        changes.append(f"time {_wall_time(before)} -> {_wall_time(after)}")
+    return "; ".join(changes) or "no visible change"
+
+
+def _merged_items(merge: MealMerge) -> str:
+    copies = _item_numbers([item.sequence for item in merge.items])
+    sources = _item_numbers([item.source_sequence for item in merge.items])
+    return f"{copies} (its {sources})"
+
+
+def _item_numbers(numbers: list[int]) -> str:
+    word = "item" if len(numbers) == 1 else "items"
+    return f"{word} {', '.join(str(number) for number in numbers)}"
+
+
+def _wall_time(eaten_at: datetime) -> str:
+    # Reads as "time not recorded -> 21:30" after the "time" label.
+    wall = recorded_time(eaten_at)
+    return wall.strftime("%H:%M") if wall is not None else "not recorded"
 
 
 def _item_values(item: ItemIntake) -> str:
@@ -566,7 +650,7 @@ def _item_payload(item: ItemIntake) -> dict[str, Any]:
 
 def _meal_payload(intake: MealIntake) -> dict[str, Any]:
     meal = intake.meal
-    return {
+    payload: dict[str, Any] = {
         "meal_id": meal.meal_id,
         "meal_type": meal.meal_type.value,
         "eaten_at": meal.eaten_at.isoformat(),
@@ -574,6 +658,41 @@ def _meal_payload(intake: MealIntake) -> dict[str, Any]:
         "original_text": meal.original_text,
         "items": [_item_payload(item) for item in intake.items],
         "total": _aggregate_payload(intake.summary.nutrition),
+    }
+    history = intake.history
+    if history is None or not history.recorded:
+        # Every meal without corrections keeps the exact document `nutrition log --json` prints.
+        return payload
+    void = history.void
+    payload["voided"] = void is not None
+    payload["voided_at"] = void.voided_at.isoformat() if void is not None else None
+    payload["void_reason"] = void.reason if void is not None else None
+    payload["merged_into"] = void.merged_into if void is not None else None
+    payload["merged_from"] = [
+        {
+            "meal_id": merge.source_meal_id,
+            "merged_at": merge.merged_at.isoformat(),
+            "items": [{"sequence": item.sequence, "source_sequence": item.source_sequence} for item in merge.items],
+        }
+        for merge in history.merged_from
+    ]
+    payload["revisions"] = [
+        {
+            "revision": revision.revision,
+            "revised_at": revision.revised_at.isoformat(),
+            "before": _meal_metadata_payload(before_type, before_eaten_at),
+            "after": _meal_metadata_payload(revision.meal_type, revision.eaten_at),
+        }
+        for before_type, before_eaten_at, revision in history.revision_steps()
+    ]
+    return payload
+
+
+def _meal_metadata_payload(meal_type: MealType, eaten_at: datetime) -> dict[str, Any]:
+    return {
+        "meal_type": meal_type.value,
+        "eaten_at": eaten_at.isoformat(),
+        "time_recorded": recorded_time(eaten_at) is not None,
     }
 
 

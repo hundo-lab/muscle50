@@ -16,8 +16,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, tzinfo
 from decimal import Decimal
+from typing import Literal
 
 from muscle50.application.nutrition import FoodNutritionRepository, MealReader, MealRepository
+from muscle50.domain.meal_history import MealHistory, timestamp_text
 from muscle50.domain.nutrition import (
     Accuracy,
     CalculatedNutrition,
@@ -118,6 +120,8 @@ class MealIntake:
     meal: Meal
     summary: MealNutritionSummary
     items: tuple[ItemIntake, ...]
+    # Attached only by `nutrition meal show/void/edit/merge`; None everywhere else.
+    history: MealHistory | None = None
 
 
 @dataclass(frozen=True)
@@ -399,7 +403,7 @@ class RepeatMeal:
         eaten_time: time | None = None,
         additional: bool = False,
     ) -> RepeatedMeal:
-        source = _existing_meal(self._meals, source_meal_id)
+        source = active_meal(self._meals, source_meal_id, action="repeated")
         entries: list[MealEntryItem] = []
         for item in source.items:
             if item.food_profile_id is None or item.quantity is None or item.quantity_unit is None:
@@ -440,7 +444,7 @@ class ShowMeal:
         self._meals = meals
 
     def execute(self, meal_id: str) -> MealIntake:
-        return meal_intake(_existing_meal(self._meals, meal_id))
+        return meal_intake(_existing_meal(self._meals, meal_id), self._meals.history(meal_id))
 
 
 class AddMealItems:
@@ -458,7 +462,7 @@ class AddMealItems:
     def execute(self, meal_id: str, items: tuple[MealEntryItem, ...]) -> MealIntake:
         if not items:
             raise NutritionLoggingError("give at least one --item to add. Nothing was changed.")
-        _existing_meal(self._meals, meal_id)
+        active_meal(self._meals, meal_id)
         first = self._meals.next_item_sequence(meal_id)
         try:
             new_items = tuple(
@@ -482,7 +486,7 @@ class RemoveMealItem:
         self._clock = clock
 
     def execute(self, meal_id: str, item_number: int) -> MealIntake:
-        meal = _existing_meal(self._meals, meal_id)
+        meal = active_meal(self._meals, meal_id)
         _require_item(meal, item_number)
         if len(meal.items) == 1:
             raise NutritionLoggingError(
@@ -509,7 +513,7 @@ class ReplaceMealItem:
         self._clock = clock
 
     def execute(self, meal_id: str, item_number: int, entry: MealEntryItem) -> MealIntake:
-        meal = _existing_meal(self._meals, meal_id)
+        meal = active_meal(self._meals, meal_id)
         _require_item(meal, item_number)
         try:
             new_item = snapshot_item(
@@ -584,8 +588,8 @@ class ShowDailyIntake:
         return DailyIntake(day, timezone_name, tuple(meal_intake(meal) for meal in ordered), summary)
 
 
-def meal_intake(meal: Meal) -> MealIntake:
-    return MealIntake(meal, aggregate_meal(meal), tuple(_item_intake(item) for item in meal.items))
+def meal_intake(meal: Meal, history: MealHistory | None = None) -> MealIntake:
+    return MealIntake(meal, aggregate_meal(meal), tuple(_item_intake(item) for item in meal.items), history)
 
 
 def catalog_fact_versions(item: ItemIntake) -> tuple[str, ...]:
@@ -632,6 +636,25 @@ def _existing_meal(meals: MealRepository, meal_id: str) -> Meal:
             f"no meal with id {meal_id!r} (meal IDs are listed by `muscle50 nutrition day`). Nothing was changed."
         )
     return meal
+
+
+def active_meal(meals: MealRepository, meal_id: str, *, action: Literal["changed", "repeated"] = "changed") -> Meal:
+    """The logged meal ``meal_id``, refused when it was voided: a voided meal can only be shown."""
+    meal = _existing_meal(meals, meal_id)
+    history = meals.history(meal_id)
+    void = history.void if history is not None else None
+    if void is None:
+        return meal
+    when = timestamp_text(void.voided_at)
+    if void.merged_into is not None:
+        hint = f"use {void.merged_into}" if action == "changed" else f"repeat {void.merged_into} instead"
+        raise NutritionLoggingError(
+            f"meal {meal_id} was merged into {void.merged_into} at {when}; a voided meal cannot be {action} "
+            f"({hint}). Nothing was changed."
+        )
+    raise NutritionLoggingError(
+        f"meal {meal_id} was voided at {when}; a voided meal cannot be {action}. Nothing was changed."
+    )
 
 
 def _require_item(meal: Meal, item_number: int) -> None:

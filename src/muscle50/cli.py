@@ -16,6 +16,7 @@ from muscle50.application.food_lookup import ResolveFoodReference
 from muscle50.application.inbody_source import InBodySourceError
 from muscle50.application.ingest_activity import ActivitySyncError
 from muscle50.application.ingest_activity_range import IngestGarminActivityRange, InvalidDateRangeError
+from muscle50.application.meal_corrections import EditMeal, MergeMeals, VoidMeal
 from muscle50.application.nutrition_logging import (
     CATALOG_SOURCE_TYPES,
     AddFood,
@@ -89,6 +90,7 @@ from muscle50.presentation.nutrition_terminal import (
     render_logged_meal,
     render_logged_meal_json,
     render_meal,
+    render_meal_correction,
     render_nutrition_status,
     render_nutrition_status_json,
     render_repeated_meal,
@@ -355,6 +357,7 @@ def _add_nutrition_parser(commands: argparse._SubParsersAction[argparse.Argument
         help="the catalog food and amount that replace it, as in `nutrition log`",
     )
     replace_item.add_argument("--json", action="store_true", help="print the edited meal as JSON")
+    _add_meal_correction_parsers(meal_commands)
     day = nutrition_commands.add_parser("day", help="Meals, per-meal totals and daily consumed totals for a date")
     day.add_argument("--date", dest="as_of", metavar="YYYY-MM-DD", help="date (default: today on this computer)")
     day.add_argument("--json", action="store_true", help="print as JSON with exact decimal strings")
@@ -388,6 +391,45 @@ def _add_item_number_argument(parser: argparse.ArgumentParser, what: str) -> Non
         metavar="N",
         help=f"{what}: its number as listed by `nutrition meal show` / `nutrition day`",
     )
+
+
+def _add_meal_correction_parsers(meal_commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """`nutrition meal void/edit/merge`: whole-meal corrections, recorded without rewriting the meal."""
+    void = meal_commands.add_parser(
+        "void",
+        help=(
+            "Void a wrongly logged meal: it stops counting in day, status, recommend and daily but stays "
+            "visible in `meal show` (cannot be undone)"
+        ),
+    )
+    void.add_argument("meal_id", help="meal ID, e.g. 2026-10-02-snack-1")
+    void.add_argument("--reason", metavar="TEXT", help="why the meal is voided (optional; shown by `meal show`)")
+    void.add_argument("--json", action="store_true", help="print the voided meal as JSON")
+    edit = meal_commands.add_parser(
+        "edit", help="Change a logged meal's date, type or time (the meal ID and its items do not change)"
+    )
+    edit.add_argument("meal_id", help="meal ID, e.g. 2026-10-02-dinner-1")
+    edit.add_argument("--date", dest="as_of", metavar="YYYY-MM-DD", help="new date (default: unchanged)")
+    edit.add_argument("--meal", choices=[meal.value for meal in MealType], help="new meal type (default: unchanged)")
+    when = edit.add_mutually_exclusive_group()
+    when.add_argument("--time", dest="eaten_time", metavar="HH:MM", help="new local time eaten (default: unchanged)")
+    when.add_argument("--no-time", dest="no_time", action="store_true", help="the time eaten is not known")
+    edit.add_argument(
+        "--additional",
+        action="store_true",
+        help="move the meal even if that date already has a meal of that type (otherwise refused)",
+    )
+    edit.add_argument("--json", action="store_true", help="print the edited meal as JSON")
+    merge = meal_commands.add_parser(
+        "merge",
+        help=(
+            "Merge two meals of the same date: the source meal's items are added to the target meal unchanged "
+            "and the source meal is voided (one step)"
+        ),
+    )
+    merge.add_argument("target_meal_id", help="meal that receives the items, e.g. 2026-10-02-breakfast-1")
+    merge.add_argument("source_meal_id", help="meal whose items move; it is voided, e.g. 2026-10-02-breakfast-2")
+    merge.add_argument("--json", action="store_true", help="print the merged (target) meal as JSON")
 
 
 def _add_fact_arguments(parser: argparse.ArgumentParser, command: str) -> None:
@@ -921,6 +963,8 @@ def _nutrition(args: argparse.Namespace) -> int:
 
 
 def _nutrition_meal(args: argparse.Namespace, meals: SqliteMealRepository, foods: SqliteFoodNutritionRepository) -> int:
+    if args.meal_command in ("void", "edit", "merge"):
+        return _nutrition_meal_correction(args, meals)
     if args.meal_command == "show":
         intake = ShowMeal(meals).execute(args.meal_id)
         print(render_logged_meal_json(intake) if args.json else render_meal(intake))
@@ -946,6 +990,35 @@ def _nutrition_meal(args: argparse.Namespace, meals: SqliteMealRepository, foods
         return 2
     print(render_logged_meal_json(intake) if args.json else render_edited_meal(intake, headline))
     return 0
+
+
+def _nutrition_meal_correction(args: argparse.Namespace, meals: SqliteMealRepository) -> int:
+    if args.meal_command == "void":
+        correction = VoidMeal(meals, clock=_now).execute(args.meal_id, reason=args.reason)
+    elif args.meal_command == "edit":
+        correction = EditMeal(meals, clock=_now).execute(
+            args.meal_id,
+            timezone_for=_local_timezone,
+            day=_nutrition_date(args.as_of) if args.as_of is not None else None,
+            meal_type=MealType(args.meal) if args.meal is not None else None,
+            eaten_time=_eaten_time(args.eaten_time),
+            clear_time=args.no_time,
+            additional=args.additional,
+        )
+    elif args.meal_command == "merge":
+        correction = MergeMeals(meals, clock=_now).execute(
+            args.target_meal_id, args.source_meal_id, timezone_for=_local_timezone
+        )
+    else:
+        return 2
+    # --json is the meal show document of the corrected meal (for merge, the target).
+    print(render_logged_meal_json(correction.intake) if args.json else render_meal_correction(correction))
+    return 0
+
+
+def _now() -> datetime:
+    """This computer's current time with its UTC offset (module-level so tests can fix it)."""
+    return datetime.now().astimezone()
 
 
 def _nutrition_date(text: str | None) -> date:

@@ -23,6 +23,9 @@ EXPECTED_TABLES = {
     "nutrition_food_profile_aliases",
     "nutrition_facts",
     "nutrition_meal_item_removals",
+    "nutrition_meal_revisions",
+    "nutrition_meal_voids",
+    "nutrition_meal_merged_items",
     "recovery_raw_captures",
     "recovery_raw_artifacts",
     "daily_recovery",
@@ -37,7 +40,7 @@ EXPECTED_TABLES = {
     "body_composition_segmental_metrics",
     "body_composition_metrics",
 }
-EXPECTED_VERSIONS = [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,)]
+EXPECTED_VERSIONS = [(1,), (2,), (3,), (4,), (5,), (6,), (7,), (8,), (9,)]
 
 MIGRATIONS_DIR = (
     Path(__file__).parents[1] / "src" / "muscle50" / "infrastructure" / "sqlite" / "migrations"
@@ -158,7 +161,7 @@ def test_nutrition_migration_upgrades_existing_001_002_database(tmp_path: Path) 
             )
         }
     assert versions[:2] == existing_versions
-    assert [row[0] for row in versions] == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert [row[0] for row in versions] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
     assert nutrition_tables == {
         "nutrition_meals",
         "nutrition_meal_items",
@@ -166,6 +169,9 @@ def test_nutrition_migration_upgrades_existing_001_002_database(tmp_path: Path) 
         "nutrition_food_profile_aliases",
         "nutrition_facts",
         "nutrition_meal_item_removals",
+        "nutrition_meal_revisions",
+        "nutrition_meal_voids",
+        "nutrition_meal_merged_items",
     }
 
 
@@ -193,7 +199,7 @@ def test_swim_migration_upgrades_existing_001_through_003_database(tmp_path: Pat
         lap_foreign_keys = connection.execute("PRAGMA foreign_key_list(swim_laps)").fetchall()
         length_foreign_keys = connection.execute("PRAGMA foreign_key_list(swim_lengths)").fetchall()
     assert versions[:3] == existing_versions
-    assert [row[0] for row in versions] == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert [row[0] for row in versions] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
     assert swim_tables == {"swim_activities", "swim_laps", "swim_lengths"}
     assert any(row[2] == "swim_activities" for row in lap_foreign_keys)
     assert any(row[2] == "swim_laps" for row in length_foreign_keys)
@@ -230,7 +236,7 @@ def test_recovery_migration_upgrades_existing_001_through_004_database(tmp_path:
         recovery_foreign_keys = connection.execute("PRAGMA foreign_key_list(daily_recovery)").fetchall()
 
     assert versions[:4] == existing_versions
-    assert [row[0] for row in versions] == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert [row[0] for row in versions] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
     assert recovery_tables == {"recovery_raw_captures", "recovery_raw_artifacts", "daily_recovery"}
     assert {
         "calendar_date",
@@ -277,7 +283,7 @@ def test_inbody_migration_upgrades_existing_001_through_005_database(tmp_path: P
         }
 
     assert versions[:5] == existing_versions
-    assert [row[0] for row in versions] == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert [row[0] for row in versions] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
     assert inbody_tables == {
         "inbody_raw_artifacts",
         "body_composition_measurements",
@@ -306,7 +312,7 @@ def test_numbered_migrations_can_be_reapplied_without_duplicate_versions(tmp_pat
             "SELECT version, applied_at_utc FROM schema_migrations ORDER BY version"
         ).fetchall()
     assert repeated_versions == first_versions
-    assert [row[0] for row in repeated_versions] == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert [row[0] for row in repeated_versions] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
 
 
 def test_activity_refresh_migration_upgrades_existing_001_through_005_database(tmp_path: Path) -> None:

@@ -4,6 +4,8 @@
 first use; this reader does none of that. Like the analytics reader it opens the file with
 ``mode=ro`` plus ``PRAGMA query_only``, never migrates, and reads one day inside a single read
 transaction. Meals are decoded by the repository's own row loader, so both see the same meals.
+Meals are listed by the same query too: voided meals are left out and edited meals are placed by
+their effective date and time (migration 9; a database without it is read exactly as before).
 """
 
 from __future__ import annotations
@@ -15,7 +17,12 @@ from datetime import datetime
 from pathlib import Path
 
 from muscle50.domain.nutrition import Meal
-from muscle50.infrastructure.sqlite.nutrition_repository import _load_meal, _require_aware, _utc_sort_key
+from muscle50.infrastructure.sqlite.nutrition_repository import (
+    _load_meal,
+    _meal_ids_eaten_between,
+    _require_aware,
+    _utc_sort_key,
+)
 
 # Nutrition meal, item and fact tables arrive with migration 3.
 MINIMUM_SCHEMA_VERSION = 3
@@ -33,17 +40,7 @@ class SqliteNutritionReader:
         _require_aware(start_inclusive, "start_inclusive")
         _require_aware(end_exclusive, "end_exclusive")
         with self._read_transaction() as connection:
-            meal_ids = [
-                row["meal_id"]
-                for row in connection.execute(
-                    """
-                    SELECT meal_id FROM nutrition_meals
-                    WHERE eaten_at_utc_sort_key >= ? AND eaten_at_utc_sort_key < ?
-                    ORDER BY eaten_at_utc_sort_key, meal_id
-                    """,
-                    (_utc_sort_key(start_inclusive), _utc_sort_key(end_exclusive)),
-                ).fetchall()
-            ]
+            meal_ids = _meal_ids_eaten_between(connection, _utc_sort_key(start_inclusive), _utc_sort_key(end_exclusive))
             meals: list[Meal] = []
             for meal_id in meal_ids:
                 try:

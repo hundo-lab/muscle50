@@ -7,6 +7,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Protocol
 
+from muscle50.domain.meal_history import MealHistory, MealRevision
 from muscle50.domain.nutrition import FoodNutritionProfile, Meal, MealItem, MealType, NutritionFact, QuantityUnit
 
 
@@ -88,6 +89,22 @@ class MealRepository(Protocol):
     def remove_item(self, meal_id: str, item_sequence: int, removed_at: datetime) -> Meal: ...
 
     def replace_item(self, meal_id: str, item_sequence: int, item: MealItem, removed_at: datetime) -> Meal: ...
+
+    # Whole-meal corrections (`nutrition meal void/edit/merge`), appended, never rewritten.
+    def history(self, meal_id: str) -> MealHistory | None: ...
+
+    def void_meal(self, meal_id: str, voided_at: datetime, reason: str | None) -> None: ...
+
+    def revise_meal(self, meal_id: str, revision: MealRevision) -> Meal: ...
+
+    def merge_meals(
+        self,
+        target_meal_id: str,
+        source_meal_id: str,
+        items: tuple[MealItem, ...],
+        source_sequences: tuple[int, ...],
+        merged_at: datetime,
+    ) -> Meal: ...
 
 
 class FoodNutritionRepository(Protocol):

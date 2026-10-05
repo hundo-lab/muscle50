@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+from muscle50.domain.meal_history import MealHistory, MealMerge, MealRevision, MealVoid, MergedItem
 from muscle50.domain.nutrition import (
     Accuracy,
     FoodNutritionProfile,
@@ -54,6 +55,10 @@ class SqliteMealRepository:
     each one ``BEGIN IMMEDIATE`` transaction. A removed item is never deleted (its facts are
     append-only and restrict deletion): a row in nutrition_meal_item_removals hides it from
     every meal read, and its sequence number is never reused.
+
+    A whole meal is corrected with ``void_meal``, ``revise_meal`` and ``merge_meals`` (migration 9),
+    again by appending rows only: a voided meal drops out of ``list_eaten_between`` but ``get``
+    still returns it, and ``get``/listing use the latest revision's date/time and type.
 
     Any item's ``food_profile_id`` must already exist in nutrition_food_profiles
     (insert the profile via SqliteFoodNutritionRepository first); otherwise
@@ -105,17 +110,7 @@ class SqliteMealRepository:
         start_key = _utc_sort_key(start_inclusive)
         end_key = _utc_sort_key(end_exclusive)
         with _connect(self._database_path) as connection:
-            meal_ids = [
-                row["meal_id"]
-                for row in connection.execute(
-                    """
-                    SELECT meal_id FROM nutrition_meals
-                    WHERE eaten_at_utc_sort_key >= ? AND eaten_at_utc_sort_key < ?
-                    ORDER BY eaten_at_utc_sort_key, meal_id
-                    """,
-                    (start_key, end_key),
-                ).fetchall()
-            ]
+            meal_ids = _meal_ids_eaten_between(connection, start_key, end_key)
             meals: list[Meal] = []
             for meal_id in meal_ids:
                 meal = _load_meal(connection, meal_id)
@@ -127,6 +122,7 @@ class SqliteMealRepository:
     def append_nutrition_fact(self, meal_id: str, item_sequence: int, fact: NutritionFact) -> Meal:
         with _connect(self._database_path) as connection:
             connection.execute("BEGIN IMMEDIATE")
+            _require_not_voided(connection, meal_id)
             item_row = connection.execute(
                 "SELECT 1 FROM nutrition_meal_items WHERE meal_id = ? AND item_sequence = ?",
                 (meal_id, item_sequence),
@@ -179,6 +175,87 @@ class SqliteMealRepository:
             _insert_new_items(connection, meal_id, (item,))
             _insert_removal(connection, meal_id, item_sequence, removed_at, replaced_by=item.sequence)
             return _reload_meal(connection, meal_id)
+
+    def history(self, meal_id: str) -> MealHistory | None:
+        """The meal's corrections (revisions, void, merges into it); None when there is no such meal."""
+        with _connect(self._database_path) as connection:
+            return _load_history(connection, meal_id)
+
+    def void_meal(self, meal_id: str, voided_at: datetime, reason: str | None) -> None:
+        """Take a meal out of every day total; it stays stored and readable with ``get``."""
+        _require_aware(voided_at, "voided_at")
+        with _connect(self._database_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            _require_meal(connection, meal_id)
+            _insert_void(connection, meal_id, voided_at, reason, merged_into=None)
+
+    def revise_meal(self, meal_id: str, revision: MealRevision) -> Meal:
+        """Append the meal's new effective date/time and type; it must be the next revision number."""
+        _require_aware(revision.revised_at, "revised_at")
+        _require_aware(revision.eaten_at, "eaten_at")
+        with _connect(self._database_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            _require_meal(connection, meal_id)
+            latest = connection.execute(
+                "SELECT MAX(revision) FROM nutrition_meal_revisions WHERE meal_id = ?", (meal_id,)
+            ).fetchone()[0]
+            expected = int(latest or 0) + 1
+            if revision.revision != expected:
+                raise ValueError(f"meal {meal_id!r} changed while editing (expected revision {expected})")
+            connection.execute(
+                """
+                INSERT INTO nutrition_meal_revisions (
+                    meal_id, revision, revised_at, eaten_at, eaten_at_utc_sort_key, meal_type
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    meal_id,
+                    revision.revision,
+                    revision.revised_at.isoformat(),
+                    revision.eaten_at.isoformat(),
+                    _utc_sort_key(revision.eaten_at),
+                    revision.meal_type.value,
+                ),
+            )
+            return _reload_meal(connection, meal_id)
+
+    def merge_meals(
+        self,
+        target_meal_id: str,
+        source_meal_id: str,
+        items: tuple[MealItem, ...],
+        source_sequences: tuple[int, ...],
+        merged_at: datetime,
+    ) -> Meal:
+        """Add copies of the source's items to the target and void the source, in one transaction.
+
+        ``items[i]`` is the copy of source item ``source_sequences[i]``; the source sequences must be
+        exactly the source's active items, and the copies must continue the target's item numbers.
+        """
+        _require_aware(merged_at, "merged_at")
+        if target_meal_id == source_meal_id:
+            raise ValueError(f"cannot merge meal {target_meal_id!r} into itself")
+        if len(items) != len(source_sequences):
+            raise ValueError("every merged item needs the source item it was copied from")
+        with _connect(self._database_path) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            _require_meal(connection, target_meal_id)
+            _require_meal(connection, source_meal_id)
+            if _active_sequences(connection, source_meal_id) != tuple(source_sequences):
+                raise ValueError(f"meal {source_meal_id!r} changed while merging")
+            _insert_new_items(connection, target_meal_id, items)
+            # The mapping rows reference the source's void row, so it comes first.
+            _insert_void(connection, source_meal_id, merged_at, None, merged_into=target_meal_id)
+            for item, source_sequence in zip(items, source_sequences, strict=True):
+                connection.execute(
+                    """
+                    INSERT INTO nutrition_meal_merged_items (
+                        meal_id, item_sequence, source_meal_id, source_item_sequence
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (target_meal_id, item.sequence, source_meal_id, source_sequence),
+                )
+            return _reload_meal(connection, target_meal_id)
 
 
 class SqliteFoodNutritionRepository:
@@ -306,10 +383,20 @@ def _load_meal(connection: sqlite3.Connection, meal_id: str) -> Meal | None:
         _item_from_row(item_row, tuple(facts_by_item.get(item_row["item_sequence"], ())))
         for item_row in item_rows
     )
+    # `nutrition meal edit` appends revisions instead of updating the meal row; the latest one
+    # holds the effective date/time and type. A database before migration 9 has none.
+    eaten_at, meal_type = meal_row["eaten_at"], meal_row["meal_type"]
+    if _has_table(connection, "nutrition_meal_revisions"):
+        revision = connection.execute(
+            "SELECT eaten_at, meal_type FROM nutrition_meal_revisions WHERE meal_id = ? ORDER BY revision DESC LIMIT 1",
+            (meal_id,),
+        ).fetchone()
+        if revision is not None:
+            eaten_at, meal_type = revision["eaten_at"], revision["meal_type"]
     return Meal(
         meal_id=meal_row["meal_id"],
-        eaten_at=datetime.fromisoformat(meal_row["eaten_at"]),
-        meal_type=MealType(meal_row["meal_type"]),
+        eaten_at=datetime.fromisoformat(eaten_at),
+        meal_type=MealType(meal_type),
         original_text=meal_row["original_text"],
         parser_version=meal_row["parser_version"],
         model_version=meal_row["model_version"],
@@ -350,6 +437,58 @@ def _next_item_sequence(connection: sqlite3.Connection, meal_id: str) -> int:
 def _require_meal(connection: sqlite3.Connection, meal_id: str) -> None:
     if connection.execute("SELECT 1 FROM nutrition_meals WHERE meal_id = ?", (meal_id,)).fetchone() is None:
         raise ValueError(f"no meal with id {meal_id!r}")
+    _require_not_voided(connection, meal_id)
+
+
+def _require_not_voided(connection: sqlite3.Connection, meal_id: str) -> None:
+    if _has_table(connection, "nutrition_meal_voids") and connection.execute(
+        "SELECT 1 FROM nutrition_meal_voids WHERE meal_id = ?", (meal_id,)
+    ).fetchone() is not None:
+        raise ValueError(f"meal {meal_id!r} is voided; a voided meal cannot be changed")
+
+
+def _has_table(connection: sqlite3.Connection, name: str) -> bool:
+    # Read-only readers never migrate, so tables of later migrations may be missing.
+    return connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
+    ).fetchone() is not None
+
+
+def _meal_ids_eaten_between(connection: sqlite3.Connection, start_key: str, end_key: str) -> list[str]:
+    """Meals whose effective time is in [start, end), ordered by it; voided meals are left out.
+
+    A database before migration 9 has no revisions or voids and is listed exactly as before.
+    """
+    has_revisions = _has_table(connection, "nutrition_meal_revisions")
+    has_voids = _has_table(connection, "nutrition_meal_voids")
+    if not has_revisions and not has_voids:
+        rows = connection.execute(
+            """
+            SELECT meal_id FROM nutrition_meals
+            WHERE eaten_at_utc_sort_key >= ? AND eaten_at_utc_sort_key < ?
+            ORDER BY eaten_at_utc_sort_key, meal_id
+            """,
+            (start_key, end_key),
+        ).fetchall()
+        return [row["meal_id"] for row in rows]
+    sort_key = (
+        """COALESCE((SELECT r.eaten_at_utc_sort_key FROM nutrition_meal_revisions r
+                     WHERE r.meal_id = m.meal_id ORDER BY r.revision DESC LIMIT 1),
+                    m.eaten_at_utc_sort_key)"""
+        if has_revisions
+        else "m.eaten_at_utc_sort_key"
+    )
+    not_voided = (
+        "WHERE NOT EXISTS (SELECT 1 FROM nutrition_meal_voids v WHERE v.meal_id = m.meal_id)" if has_voids else ""
+    )
+    rows = connection.execute(
+        f"""
+        WITH effective AS (SELECT m.meal_id, {sort_key} AS sort_key FROM nutrition_meals m {not_voided})
+        SELECT meal_id FROM effective WHERE sort_key >= ? AND sort_key < ? ORDER BY sort_key, meal_id
+        """,
+        (start_key, end_key),
+    ).fetchall()
+    return [row["meal_id"] for row in rows]
 
 
 def _require_active_item(connection: sqlite3.Connection, meal_id: str, item_sequence: int) -> None:
@@ -410,6 +549,76 @@ def _insert_removal(
         VALUES (?, ?, ?, ?)
         """,
         (meal_id, item_sequence, removed_at.isoformat(), replaced_by),
+    )
+
+
+def _insert_void(
+    connection: sqlite3.Connection, meal_id: str, voided_at: datetime, reason: str | None, *, merged_into: str | None
+) -> None:
+    connection.execute(
+        "INSERT INTO nutrition_meal_voids (meal_id, voided_at, reason, merged_into_meal_id) VALUES (?, ?, ?, ?)",
+        (meal_id, voided_at.isoformat(), reason, merged_into),
+    )
+
+
+def _load_history(connection: sqlite3.Connection, meal_id: str) -> MealHistory | None:
+    meal_row = connection.execute(
+        "SELECT eaten_at, meal_type FROM nutrition_meals WHERE meal_id = ?", (meal_id,)
+    ).fetchone()
+    if meal_row is None:
+        return None
+    revisions: tuple[MealRevision, ...] = ()
+    if _has_table(connection, "nutrition_meal_revisions"):
+        revisions = tuple(
+            MealRevision(
+                revision=row["revision"],
+                revised_at=datetime.fromisoformat(row["revised_at"]),
+                meal_type=MealType(row["meal_type"]),
+                eaten_at=datetime.fromisoformat(row["eaten_at"]),
+            )
+            for row in connection.execute(
+                "SELECT * FROM nutrition_meal_revisions WHERE meal_id = ? ORDER BY revision", (meal_id,)
+            ).fetchall()
+        )
+    void: MealVoid | None = None
+    merges: list[MealMerge] = []
+    if _has_table(connection, "nutrition_meal_voids"):
+        void_row = connection.execute("SELECT * FROM nutrition_meal_voids WHERE meal_id = ?", (meal_id,)).fetchone()
+        if void_row is not None:
+            void = MealVoid(
+                voided_at=datetime.fromisoformat(void_row["voided_at"]),
+                reason=void_row["reason"],
+                merged_into=void_row["merged_into_meal_id"],
+            )
+        if _has_table(connection, "nutrition_meal_merged_items"):
+            # A merge is recorded as the source's void row (when) plus one mapping row per copied item.
+            items_by_source: dict[str, list[MergedItem]] = {}
+            merged_at: dict[str, datetime] = {}
+            for row in connection.execute(
+                """
+                SELECT mi.source_meal_id, mi.item_sequence, mi.source_item_sequence, v.voided_at
+                FROM nutrition_meal_merged_items mi
+                JOIN nutrition_meal_voids v ON v.meal_id = mi.source_meal_id
+                WHERE mi.meal_id = ?
+                ORDER BY mi.item_sequence
+                """,
+                (meal_id,),
+            ).fetchall():
+                source = row["source_meal_id"]
+                items_by_source.setdefault(source, []).append(
+                    MergedItem(row["item_sequence"], row["source_item_sequence"])
+                )
+                merged_at[source] = datetime.fromisoformat(row["voided_at"])
+            merges = sorted(
+                (MealMerge(source, merged_at[source], tuple(items)) for source, items in items_by_source.items()),
+                key=lambda merge: (merge.merged_at, merge.source_meal_id),
+            )
+    return MealHistory(
+        logged_meal_type=MealType(meal_row["meal_type"]),
+        logged_eaten_at=datetime.fromisoformat(meal_row["eaten_at"]),
+        revisions=revisions,
+        void=void,
+        merged_from=tuple(merges),
     )
 
 
