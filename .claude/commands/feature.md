@@ -49,8 +49,9 @@ For each path:
   `feature_state.py list`, so it can flag overlapping files or migrations.
 - If a plan needs a migration: `reserve-migration <id>` and add the printed `NNN` to that plan. The helper
   checks every branch, every worktree and every reservation, and is atomic.
-- Save each plan to `<state dir>/plans/<id>.md` (`feature_state.py dir` prints the state directory), so a
-  later session can resume. Then run `set <id> status=awaiting-design-approval`.
+- Save each designer's plan **verbatim and in full** (not a summary) to `<state dir>/plans/<id>.md`
+  (`feature_state.py dir` prints the state directory), so a later session can resume and the implementer gets
+  the whole plan. Then run `set <id> status=awaiting-design-approval`.
 - Show the user all plans (or the 2-3 alternatives a designer gave). Number the features and ask, per
   feature: approve / approve with changes / choose an alternative / reject.
 - **End your turn and wait.** Create no branch, worktree or code before an explicit approval. For a hard
