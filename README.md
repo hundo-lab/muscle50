@@ -165,6 +165,8 @@ muscle50 nutrition food show chicken-breast   # fact history (active/superseded)
 muscle50 nutrition food fact add chicken-breast --per 100 g `
   --kcal <kcal> --protein <g> --carbs <g> --fat <g> --source food_database --accuracy estimated --source-ref "<출처>"
 muscle50 nutrition log --meal breakfast --item chicken-breast 200 g --item egg 2 count
+# food ID 대신 음식 이름이나 alias를 정확히 써도 됨(공백이 있으면 따옴표). log/meal add-item/meal replace-item 공통
+muscle50 nutrition log --meal lunch --item 닭가슴살 150 g --item 계란 1 count
 muscle50 nutrition day                      # 오늘 섭취량 (--date YYYY-MM-DD, --json)
 # 이전 식사를 그대로 다시 기록(같은 음식/양/단위, 영양 값은 지금 catalog의 fact로 새로 snapshot)
 muscle50 nutrition repeat 2026-10-02-breakfast-1                       # 오늘, 같은 식사 종류, 시간 없음
@@ -183,7 +185,9 @@ append할 때만 가능합니다(기존 fact UPDATE/DELETE 없음). 식사 item�
 날짜/종류/시간 수정, 식사 삭제, 식사 병합, 이름 수정은 아직 없습니다. 같은 `add-item`을 두 번 실행하면 item이 두 번
 추가됩니다(`remove-item`으로 되돌림). `nutrition repeat`는 원본 식사의 현재 item(제거된 item 제외, 교체 item 포함)의 음식
 ID/양/단위만 가져와 `nutrition log`와 같은 방식으로 새 식사를 기록하며 원본 식사는 바꾸지 않습니다. 같은 날짜·같은 식사 종류가
-이미 있으면 `--additional` 없이 거부합니다. 양 조절, 저장된 template, 이름/alias로 기록은 없습니다. 상세: `docs/nutrition-logging.md`.
+이미 있으면 `--additional` 없이 거부합니다. 양 조절, 저장된 template은 없습니다. `--item`의 음식은 food ID, 또는 이름/alias와
+정확히 같을 때(대소문자 무시는 ASCII만)만 찾습니다. 부분 일치·추측은 하지 않고, 한 음식의 ID가 다른 음식의 이름/alias와 겹치면
+거부합니다(아무것도 기록하지 않음). 상세: `docs/nutrition-logging.md`, `docs/food-name-lookup.md`.
 
 ## Nutrition targets + daily status (v1)
 

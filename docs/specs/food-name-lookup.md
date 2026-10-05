@@ -1,7 +1,7 @@
 ---
 id: food-name-lookup
 title: Nutrition Food Name Lookup v1
-status: draft
+status: integrated
 migration: none
 output_change: none
 user_gates: [design, integration, push]
@@ -74,3 +74,10 @@ text와 JSON 출력은 같은 food ID로 기록했을 때와 byte 단위로 같�
 
 - `food show <이름>`, `food fact add <이름>`의 이름 조회.
 - `original_text`에 사용자가 입력한 원래 토큰을 남길지(지금은 해석된 ID 기준으로 같게 저장한다).
+- 다른 음식의 이름/alias와 같은 food ID는 `--item`에서 ID로 쓸 수 없다(항상 모호성 거부). 이름/alias는 수정할 수 없어
+  계속 그렇다. 후속 후보: `food add`가 새 ID와 기존 이름/alias, 새 이름/alias와 기존 ID의 충돌도 거부.
+- 모호성 오류 문구는 위 예시의 "Use the food ID."를 빼고 "No food is chosen automatically."로 끝난다(승인된 plan D1:
+  위 경우 ID 지정이 통하지 않으므로).
+- 대소문자가 다르거나 앞뒤 공백이 있는 ID는 ID로 보지 않는다(이름/alias로만 비교). 대소문자 무시는 ASCII만(SQLite `LOWER()`).
+- 모호한 토큰은 중복 식사/없는 식사/없는 item 검사보다 먼저 거부된다(일치 없는 토큰은 기존 순서 그대로).
+- `--item` 하나마다 catalog 읽기가 두 번 늘어난다.
