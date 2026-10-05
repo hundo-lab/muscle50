@@ -1,8 +1,8 @@
 ---
 id: meal-void-edit
 title: Nutrition Meal Void, Edit and Merge v1
-status: draft
-migration: none
+status: integrated
+migration: reserved:009
 output_change: additive
 user_gates: [design, integration, prod-migration, push]
 ---
@@ -90,3 +90,15 @@ JSON은 `meal show --json` 문서에 끝쪽 key를 추가하는 방식으로 확
 
 - void 되돌리기, 식사 메모 수정, 세 개 이상 병합.
 - meal ID를 날짜/종류와 다시 맞추는 기능(ID가 새로 생겨 다른 기록의 참조가 끊기므로 v1에서는 하지 않는다).
+- 구현/검증에서 확인된 한계(상세: `docs/nutrition-meal-corrections.md` "Known issues / limitations"):
+  - edit 취소, void 사유 수정 없음. merge target을 void하면 그 target에 복사된 item도 함께 빠진다(source는 void 유지).
+  - merge는 item 이동으로 그 날짜의 정확한 총합(28자리 Decimal 합산 순서)이 달라지면 거부한다. 순환소수 값에서만 생긴다.
+  - merge의 날짜/총합 검사는 저장된 UTC offset 기준 날짜와 이 컴퓨터의 offset을 쓴다. 다른 offset으로 기록한 식사는
+    병합 대신 거부될 수 있다.
+  - edit의 이중 기록 검사는 `log`처럼 쓰기 transaction 밖에서 한다(단일 사용자 CLI).
+  - 식사 목록 조회가 `eaten_at_utc_sort_key` index를 더 이상 쓰지 않고, 식사마다 작은 query가 2-3개 늘었다(개인 규모에서는
+    무시 가능).
+  - edit된 식사의 `add-item`/`remove-item`/`replace-item` 출력에는 history 줄/key가 없다(`meal show`에는 있음).
+  - `--time 00:00`과 `--no-time`은 구분되지 않는다(`log`의 기존 한계).
+  - edit/merge에는 `--reason`이 없다(승인된 plan). 시각은 CLI의 현재 시각(`cli._now()`)으로 기록된다.
+  - 운영 DB는 첫 쓰기 명령에서 migration 9가 적용된다. 그 전까지 `recommend`/`daily`는 기존과 같게 읽는다.

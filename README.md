@@ -176,18 +176,27 @@ muscle50 nutrition meal show 2026-10-02-breakfast-1
 muscle50 nutrition meal add-item 2026-10-02-breakfast-1 --item hetbahn-white-210 210 g
 muscle50 nutrition meal remove-item 2026-10-02-breakfast-1 --item-number 3
 muscle50 nutrition meal replace-item 2026-10-02-breakfast-1 --item-number 2 --item hetbahn-white-210 105 g
+# 식사 전체 고치기(meal ID와 item snapshot 유지; 기존 row를 바꾸지 않고 기록을 append)
+muscle50 nutrition meal void 2026-10-02-snack-1 --reason "double entry"   # 집계에서 제외(되돌릴 수 없음)
+muscle50 nutrition meal edit 2026-10-02-dinner-1 --date 2026-10-01 --time 21:30   # 날짜/종류/시간 (--meal, --no-time)
+muscle50 nutrition meal merge 2026-10-02-breakfast-1 2026-10-02-breakfast-2       # target <- source, source는 void
 ```
 
 `--kcal/--protein/--carbs/--fat`는 모두 필수이며 모르는 값은 `unknown`으로 남깁니다(0으로 채우지 않음). 단위는
 변환하지 않습니다(pack으로 등록한 음식을 g으로 기록할 수 없음). 영양 값 변경은 `food fact add`로 새 version을
 append할 때만 가능합니다(기존 fact UPDATE/DELETE 없음). 식사 item은 `nutrition meal`로 추가/제거/교체할 수 있고,
-추가한 item은 그 시점의 active fact를 snapshot하며 기존 item은 그대로입니다. 마지막 item은 제거할 수 없고, 식사
-날짜/종류/시간 수정, 식사 삭제, 식사 병합, 이름 수정은 아직 없습니다. 같은 `add-item`을 두 번 실행하면 item이 두 번
-추가됩니다(`remove-item`으로 되돌림). `nutrition repeat`는 원본 식사의 현재 item(제거된 item 제외, 교체 item 포함)의 음식
-ID/양/단위만 가져와 `nutrition log`와 같은 방식으로 새 식사를 기록하며 원본 식사는 바꾸지 않습니다. 같은 날짜·같은 식사 종류가
+추가한 item은 그 시점의 active fact를 snapshot하며 기존 item은 그대로입니다. 마지막 item은 제거할 수 없고, 이름
+수정은 아직 없습니다. 같은 `add-item`을 두 번 실행하면 item이 두 번 추가됩니다(`remove-item`으로 되돌림).
+`nutrition meal void`한 식사는 `day`/`status`/`recommend`/`daily`에서 바로 빠지고 `meal show`에는 void와 사유가 남으며,
+되돌릴 수 없고 더 고칠 수도 없습니다. `meal edit`은 날짜/종류/시간만 바꾸고(ID는 그대로라 ID의 날짜/종류와 달라질 수
+있음), 옮겨 갈 날짜·종류에 식사가 있으면 `--additional` 없이 거부합니다. `meal merge`는 같은 날짜의 두 식사만 합치며,
+source의 item을 원래 snapshot 그대로 target에 붙이고 source를 void합니다. 그 날짜 총합이 달라지면 거부합니다.
+이 기능은 migration 009를 씁니다(첫 쓰기 명령에서 적용).
+`nutrition repeat`는 원본 식사의 현재 item(제거된 item 제외, 교체 item 포함)의 음식 ID/양/단위만 가져와 `nutrition log`와 같은 방식으로 새 식사를 기록하며 원본 식사는 바꾸지 않습니다. 같은 날짜·같은 식사 종류가
 이미 있으면 `--additional` 없이 거부합니다. 양 조절, 저장된 template은 없습니다. `--item`의 음식은 food ID, 또는 이름/alias와
 정확히 같을 때(대소문자 무시는 ASCII만)만 찾습니다. 부분 일치·추측은 하지 않고, 한 음식의 ID가 다른 음식의 이름/alias와 겹치면
-거부합니다(아무것도 기록하지 않음). 상세: `docs/nutrition-logging.md`, `docs/food-name-lookup.md`.
+거부합니다(아무것도 기록하지 않음). 상세: `docs/nutrition-logging.md`, `docs/food-name-lookup.md`,
+`docs/nutrition-meal-corrections.md`.
 
 ## Nutrition targets + daily status (v1)
 
