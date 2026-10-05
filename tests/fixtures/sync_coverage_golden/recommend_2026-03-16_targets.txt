@@ -1,0 +1,77 @@
+Training recommendation for 2026-03-16 (v1; history from 2026-02-16)
+Deterministic rules on stored data only. Rules: docs/training-recommendation.md
+
+== Strength ==
+Focus: push (chest, anterior_deltoid, lateral_deltoid, triceps) [auto-selected]
+  - push: only region with familiar exercises; last session 2026-03-13 (3 d ago), usual interval 7 d (2 sessions/28 d), due 0.429, 6 sets in 7 d vs own 1.5/week
+  - legs: no familiar mapped exercise in the last 28 days; skipped
+  - pull: no familiar mapped exercise in the last 28 days; skipped
+  - history is limited: push session is about 14 min with 1 exercises against the 40-minute goal; anterior_deltoid missing (no familiar exercise with this primary muscle in the last 28 days; nothing is substituted); lateral_deltoid missing (no familiar exercise with this primary muscle in the last 28 days; nothing is substituted); triceps missing (no familiar exercise with this primary muscle in the last 28 days; nothing is substituted); no other familiar push exercise in the last 28 days; nothing was added to fill the time
+  - 1 UNKNOWN sets in the last 7 days are not attributed to any muscle; region set counts are lower bounds
+  Regions (ranked):
+    legs: due - (interval 7 d), 0 sets/7 d, yesterday 0 [neglected]
+    pull: due - (interval 7 d), 0 sets/7 d, yesterday 0 [neglected]
+    push: due 0.429 (interval 7 d), 6 sets/7 d, yesterday 0
+Session: 1 exercises, 3 working sets, about 14 min (goal 40 min); stop 1-3 reps short of failure (advice; reps in reserve is not recorded)
+  1. [key] BENCH_PRESS/-: 3 sets x 11 reps @ 50 kg (range 5-12)
+       chest / horizontal_push; 2 sessions, 6 sets in 28 days; last 2026-03-13
+  Focus coverage (primary muscle):
+    chest: covered - covered by BENCH_PRESS/-
+    anterior_deltoid: no_familiar_history - no familiar exercise with this primary muscle in the last 28 days; nothing is substituted
+    lateral_deltoid: no_familiar_history - no familiar exercise with this primary muscle in the last 28 days; nothing is substituted
+    triceps: no_familiar_history - no familiar exercise with this primary muscle in the last 28 days; nothing is substituted
+
+== Progression targets ==
+  BENCH_PRESS/- [add_reps, load confidence normal]
+    - last session 2026-03-13 (8002): work load 50 kg x 10/10/10 reps
+    - same load, one more rep than the best work set (10 -> 11)
+    - 2-session trend (work load x best reps): 03-10 50 kgx10, 03-13 50 kgx10
+
+== Recovery adjustment: normal ==
+  sleep_seconds [2026-03-16]: missing (not treated as poor)
+  sleep_score [2026-03-16]: 80
+  hrv_status [2026-03-16]: BALANCED
+  training_readiness_level [2026-03-16]: MODERATE
+  training_readiness_score [2026-03-16]: 60
+  recovery_time_minutes [2026-03-16]: 600
+  training_status_key [2026-03-15]: PRODUCTIVE
+  Lookback (no sleep recorded for 2026-03-16 (row is partial)):
+    sleep_seconds [2026-03-15]: 07:00:00
+    sleep_score [2026-03-15]: 80
+    training_readiness_level [2026-03-15]: MODERATE
+    training_readiness_score [2026-03-15]: 60
+    recovery_time_minutes [2026-03-15]: 600
+    sleep_seconds [2026-03-14]: missing (not treated as poor)
+    sleep_score [2026-03-14]: missing (not treated as poor)
+    training_readiness_level [2026-03-14]: missing (not treated as poor)
+    training_readiness_score [2026-03-14]: missing (not treated as poor)
+    recovery_time_minutes [2026-03-14]: missing (not treated as poor)
+  -> recovery lookback: no sleep recorded for 2026-03-16 (row is partial); the previous 2 mornings fired no rule (missing values never fire)
+  -> swim earlier today (8100): shoulders/back/triceps overlap; no high-intensity signal
+
+== Next swim goal: distance_progression ==
+  Main set: 1100 m continuous at an even, comfortable pace (no stops)
+  Total: about 1400 m
+  - progression anchor 1000 m = max(configured baseline 1000 m, recent longest continuous 400 m (2026-03-16 8100 lap 0, unknown, 2:00/100 m))
+  - no continuous swim of at least 600 m in the last 14 days
+  ! shoulders/back/triceps share load with strength: no butterfly or paddles today
+  ! today's strength focus is push: if both happen today, separate them by several hours
+  Baseline: configured continuous 1000 m; recent longest continuous 400 m (2026-03-16 8100 lap 0, unknown, 2:00/100 m)
+  Best recent freestyle pace: none in the last 28 days
+  1500 m goal: 1:36/100 m-1:50/100 m (24:00-27:30)
+  Swims in the last 7 days: 1 (goal 3/week); last stored swim 0 days ago; long-term target 1500 m
+    2026-03-16 8100: 400 m (plausible_detail), longest continuous 400 m
+
+== Nutrition: logged intake 2026-03-16 (UTC+09:00) vs current targets ==
+  [no_intake_logged] no meals logged for this date, so nutrition status is not used (not counted as 0 kcal or 0 g)
+
+== Data freshness ==
+  latest stored: activity 2026-03-16, strength 2026-03-16, swim 2026-03-16, recovery row 2026-03-16
+  2026-03-16 recovery row: present, no sleep (partial)
+  sync completeness is not recorded: a day without a stored activity is 'no recorded activity', not a confirmed rest day, and a partial recovery row may still be filled by a later sync
+
+== Data quality / UNKNOWN / no-rule notices ==
+  [same_day_strength_excluded] 2026-03-16 8003: a strength activity is already stored on this date; it is excluded from history so the recommendation reflects the state before it
+  [recovery_fields_missing] recovery fields missing (not treated as poor): sleep_seconds
+  [recovery_row_partial] 2026-03-16: the 2026-03-16 recovery row has no sleep; the stored data cannot tell whether the night was not recorded or not synced yet; its readiness (MODERATE) was stored without a sleep measurement; no sleep recorded for 2026-03-16 (row is partial); the previous 2 mornings fired no rule (missing values never fire)
+  [strength_unknown_exercise] 2026-03-10 8001: 1 ACTIVE sets are UNKNOWN in Garmin (set 4); they are not guessed and are excluded from muscle counts and progression. To fix: set the exercise in Garmin Connect, then run: muscle50 garmin refresh 8001

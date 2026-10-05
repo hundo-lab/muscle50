@@ -1,0 +1,635 @@
+{
+  "as_of": "2026-10-02",
+  "mode": "full",
+  "sync_from": "2026-10-01",
+  "ok": true,
+  "failed_stages": [],
+  "stages": [
+    {
+      "stage": "garmin_login",
+      "status": "ok",
+      "error": null,
+      "warnings": []
+    },
+    {
+      "stage": "activities",
+      "status": "ok",
+      "error": null,
+      "warnings": []
+    },
+    {
+      "stage": "load_metrics",
+      "status": "ok",
+      "error": null,
+      "warnings": []
+    },
+    {
+      "stage": "recovery",
+      "status": "ok",
+      "error": null,
+      "warnings": []
+    },
+    {
+      "stage": "recommendation",
+      "status": "ok",
+      "error": null,
+      "warnings": []
+    }
+  ],
+  "activities": {
+    "from": "2026-10-01",
+    "to": "2026-10-02",
+    "discovered": 2,
+    "inserted": 2,
+    "already_stored": 0,
+    "failed": 0,
+    "undated": 0,
+    "page_limit_reached": false,
+    "outcomes": [
+      {
+        "source_activity_id": "222",
+        "source_type_key": "strength_training",
+        "status": "inserted",
+        "error": null,
+        "warnings": []
+      },
+      {
+        "source_activity_id": "300",
+        "source_type_key": "running",
+        "status": "inserted",
+        "error": null,
+        "warnings": []
+      }
+    ]
+  },
+  "load_metrics": {
+    "activities_examined": 2,
+    "metric_rows_inserted": 3,
+    "metric_rows_updated": 0,
+    "metric_rows_unchanged": 0,
+    "missing_raw": [],
+    "unreadable_raw": [],
+    "malformed_values": 0,
+    "skipped_values": 17
+  },
+  "recovery": {
+    "from": "2026-10-01",
+    "to": "2026-10-02",
+    "aborted_reason": null,
+    "outcomes": [
+      {
+        "calendar_date": "2026-10-01",
+        "status": "created",
+        "error": null,
+        "warnings": []
+      },
+      {
+        "calendar_date": "2026-10-02",
+        "status": "created",
+        "error": null,
+        "warnings": []
+      }
+    ]
+  },
+  "recommendation": {
+    "recommendation_version": 1,
+    "as_of": "2026-10-02",
+    "history_start": "2026-09-04",
+    "goals": {
+      "strength_priority": "hypertrophy",
+      "skeletal_muscle_mass_milestone_kg": 43.0,
+      "skeletal_muscle_mass_long_term_kg": 50.0,
+      "strength_sessions_per_week": 5,
+      "strength_session_minutes": 40,
+      "region_min_sessions_per_week": 1,
+      "region_max_sessions_per_week": 2,
+      "compound_rep_range": {
+        "minimum": 5,
+        "maximum": 12
+      },
+      "isolation_rep_range": {
+        "minimum": 10,
+        "maximum": 20
+      },
+      "reps_in_reserve_min": 1,
+      "reps_in_reserve_max": 3,
+      "swim_sessions_per_week": 3,
+      "continuous_swim_baseline_meters": 1000.0,
+      "continuous_swim_target_meters": 1500.0,
+      "target_1500m_fastest_seconds": 1440,
+      "target_1500m_slowest_seconds": 1650
+    },
+    "recovery": {
+      "level": "normal",
+      "requested_date_row_available": true,
+      "previous_date_row_available": true,
+      "observations": [
+        {
+          "field": "sleep_seconds",
+          "source_date": "2026-10-02",
+          "value": 27000,
+          "fired_level": null,
+          "rule": null
+        },
+        {
+          "field": "sleep_score",
+          "source_date": "2026-10-02",
+          "value": null,
+          "fired_level": null,
+          "rule": null
+        },
+        {
+          "field": "hrv_status",
+          "source_date": "2026-10-02",
+          "value": null,
+          "fired_level": null,
+          "rule": null
+        },
+        {
+          "field": "training_readiness_level",
+          "source_date": "2026-10-02",
+          "value": null,
+          "fired_level": null,
+          "rule": null
+        },
+        {
+          "field": "training_readiness_score",
+          "source_date": "2026-10-02",
+          "value": null,
+          "fired_level": null,
+          "rule": null
+        },
+        {
+          "field": "recovery_time_minutes",
+          "source_date": "2026-10-02",
+          "value": null,
+          "fired_level": null,
+          "rule": null
+        },
+        {
+          "field": "training_status_key",
+          "source_date": "2026-10-01",
+          "value": null,
+          "fired_level": null,
+          "rule": null
+        }
+      ],
+      "missing_fields": [
+        "sleep_score",
+        "hrv_status",
+        "training_readiness_level",
+        "training_readiness_score",
+        "recovery_time_minutes",
+        "training_status_key"
+      ],
+      "lookback": null
+    },
+    "strength": {
+      "focus": "pull",
+      "focus_source": "auto",
+      "auto_focus": "pull",
+      "focus_muscles": [
+        "lats",
+        "upper_back",
+        "posterior_deltoid",
+        "biceps",
+        "forearms"
+      ],
+      "reasons": [
+        "pull: only region with familiar exercises; no session in 28 days, usual interval 7 d (0 sessions/28 d), due -, 1 sets in 7 d vs own 0.25/week",
+        "legs: no familiar mapped exercise in the last 28 days; skipped",
+        "push: no familiar mapped exercise in the last 28 days; skipped",
+        "history is limited: pull session is about 14 min with 1 exercises against the 40-minute goal; lats missing (no familiar exercise with this primary muscle in the last 28 days; nothing is substituted); posterior_deltoid missing (no taxonomy rule uses it as a primary muscle, so no stored Garmin label counts for it; nothing is substituted); biceps missing (no familiar exercise with this primary muscle in the last 28 days; nothing is substituted); forearms missing (no taxonomy rule uses it as a primary muscle, so no stored Garmin label counts for it; nothing is substituted); no other familiar pull exercise in the last 28 days; nothing was added to fill the time",
+        "2 sets in the last 7 days use labels without a taxonomy rule (BENCH_PRESS/BARBELL_BENCH_PRESS); they are not attributed to any muscle, so the muscles they train may be underestimated"
+      ],
+      "regions": [
+        {
+          "region": "legs",
+          "muscles": [
+            "quadriceps",
+            "hamstrings",
+            "glutes"
+          ],
+          "sets_last_7_days": 0,
+          "sessions_last_7_days": 0,
+          "sessions_last_28_days": 0,
+          "weekly_average_sets_28_days": 0.0,
+          "last_trained_date": null,
+          "days_since_last_trained": null,
+          "sets_previous_day": 0,
+          "personal_interval_days": 7.0,
+          "due_ratio": null,
+          "neglected": true,
+          "recently_trained_under_reduce": false,
+          "eligible": true,
+          "swim_demoted": false,
+          "muscle_detail": [
+            {
+              "muscle": "quadriceps",
+              "sets_last_7_days": 0,
+              "sets_last_28_days": 0,
+              "last_trained_date": null
+            },
+            {
+              "muscle": "hamstrings",
+              "sets_last_7_days": 0,
+              "sets_last_28_days": 0,
+              "last_trained_date": null
+            },
+            {
+              "muscle": "glutes",
+              "sets_last_7_days": 0,
+              "sets_last_28_days": 0,
+              "last_trained_date": null
+            }
+          ],
+          "notes": [
+            "no strength session for 7+ days (swims never count); below the 1/week goal"
+          ],
+          "no_rule_hint_sets_last_7_days": 0,
+          "no_rule_hint_sets_previous_day": 0
+        },
+        {
+          "region": "push",
+          "muscles": [
+            "chest",
+            "anterior_deltoid",
+            "lateral_deltoid",
+            "triceps"
+          ],
+          "sets_last_7_days": 0,
+          "sessions_last_7_days": 0,
+          "sessions_last_28_days": 0,
+          "weekly_average_sets_28_days": 0.0,
+          "last_trained_date": null,
+          "days_since_last_trained": null,
+          "sets_previous_day": 0,
+          "personal_interval_days": 7.0,
+          "due_ratio": null,
+          "neglected": true,
+          "recently_trained_under_reduce": false,
+          "eligible": true,
+          "swim_demoted": false,
+          "muscle_detail": [
+            {
+              "muscle": "chest",
+              "sets_last_7_days": 0,
+              "sets_last_28_days": 0,
+              "last_trained_date": null
+            },
+            {
+              "muscle": "anterior_deltoid",
+              "sets_last_7_days": 0,
+              "sets_last_28_days": 0,
+              "last_trained_date": null
+            },
+            {
+              "muscle": "lateral_deltoid",
+              "sets_last_7_days": 0,
+              "sets_last_28_days": 0,
+              "last_trained_date": null
+            },
+            {
+              "muscle": "triceps",
+              "sets_last_7_days": 0,
+              "sets_last_28_days": 0,
+              "last_trained_date": null
+            }
+          ],
+          "notes": [
+            "no strength session for 7+ days (swims never count); below the 1/week goal",
+            "2 sets in 7 d (2 yesterday) of labels without a taxonomy rule whose Garmin category suggests push are not counted; push may be underestimated"
+          ],
+          "no_rule_hint_sets_last_7_days": 2,
+          "no_rule_hint_sets_previous_day": 2
+        },
+        {
+          "region": "pull",
+          "muscles": [
+            "lats",
+            "upper_back",
+            "posterior_deltoid",
+            "biceps",
+            "forearms"
+          ],
+          "sets_last_7_days": 1,
+          "sessions_last_7_days": 0,
+          "sessions_last_28_days": 0,
+          "weekly_average_sets_28_days": 0.25,
+          "last_trained_date": null,
+          "days_since_last_trained": null,
+          "sets_previous_day": 1,
+          "personal_interval_days": 7.0,
+          "due_ratio": null,
+          "neglected": true,
+          "recently_trained_under_reduce": false,
+          "eligible": true,
+          "swim_demoted": false,
+          "muscle_detail": [
+            {
+              "muscle": "lats",
+              "sets_last_7_days": 0,
+              "sets_last_28_days": 0,
+              "last_trained_date": null
+            },
+            {
+              "muscle": "upper_back",
+              "sets_last_7_days": 1,
+              "sets_last_28_days": 1,
+              "last_trained_date": "2026-10-01"
+            },
+            {
+              "muscle": "posterior_deltoid",
+              "sets_last_7_days": 0,
+              "sets_last_28_days": 0,
+              "last_trained_date": null
+            },
+            {
+              "muscle": "biceps",
+              "sets_last_7_days": 0,
+              "sets_last_28_days": 0,
+              "last_trained_date": null
+            },
+            {
+              "muscle": "forearms",
+              "sets_last_7_days": 0,
+              "sets_last_28_days": 0,
+              "last_trained_date": null
+            }
+          ],
+          "notes": [
+            "no strength session for 7+ days (swims never count); below the 1/week goal"
+          ],
+          "no_rule_hint_sets_last_7_days": 0,
+          "no_rule_hint_sets_previous_day": 0
+        }
+      ],
+      "exercises": [
+        {
+          "role": "key",
+          "category": "ROW",
+          "exercise_name": "SEATED_CABLE_ROW",
+          "label": "ROW/SEATED_CABLE_ROW",
+          "movement_pattern": "horizontal_pull",
+          "primary_muscle": "upper_back",
+          "secondary_muscles": [
+            "lats",
+            "biceps",
+            "posterior_deltoid"
+          ],
+          "sessions_last_28_days": 1,
+          "active_sets_last_28_days": 1,
+          "last_performed": "2026-10-01",
+          "sets": 3,
+          "progression": {
+            "action": "add_reps",
+            "load_kg": 50.0,
+            "target_reps": 12,
+            "rep_range": {
+              "minimum": 5,
+              "maximum": 12
+            },
+            "basis": [
+              "last session 2026-10-01 (222): work load 50 kg x 12 reps",
+              "one work set reached 12 reps at 50 kg; repeat it on at least 2 work sets before adding load"
+            ],
+            "caveats": [
+              "label auto-detected by the watch (not confirmed in Garmin Connect)"
+            ],
+            "load_confidence": "normal",
+            "stagnant": false,
+            "regression": false,
+            "recent": [
+              {
+                "source_activity_id": "222",
+                "local_date": "2026-10-01",
+                "usable_set_count": 1,
+                "load_recorded": true,
+                "work_load_kg": 50.0,
+                "work_set_reps": [
+                  12
+                ],
+                "below_range": false
+              }
+            ],
+            "recorded_load_range_kg": [
+              50.0,
+              50.0
+            ],
+            "same_load_evidence": false,
+            "load_guidance": null,
+            "load_increase_from_kg": null,
+            "load_step": null
+          },
+          "adjustments": []
+        }
+      ],
+      "alternative": null,
+      "working_sets": 3,
+      "estimated_minutes": 14,
+      "session_minutes_goal": 40,
+      "adjustment_level": "normal",
+      "adjustments": [],
+      "swim_overlaps": [],
+      "avoided_muscles": [],
+      "unknown_active_sets_last_7_days": 0,
+      "unknown_active_sets_last_28_days": 0,
+      "unknown_notices": [],
+      "focus_coverage": [
+        {
+          "muscle": "lats",
+          "status": "no_familiar_history",
+          "exercises": [],
+          "note": "no familiar exercise with this primary muscle in the last 28 days; nothing is substituted"
+        },
+        {
+          "muscle": "upper_back",
+          "status": "covered",
+          "exercises": [
+            "ROW/SEATED_CABLE_ROW"
+          ],
+          "note": "covered by ROW/SEATED_CABLE_ROW"
+        },
+        {
+          "muscle": "posterior_deltoid",
+          "status": "no_taxonomy_rule",
+          "exercises": [],
+          "note": "no taxonomy rule uses it as a primary muscle, so no stored Garmin label counts for it; nothing is substituted"
+        },
+        {
+          "muscle": "biceps",
+          "status": "no_familiar_history",
+          "exercises": [],
+          "note": "no familiar exercise with this primary muscle in the last 28 days; nothing is substituted"
+        },
+        {
+          "muscle": "forearms",
+          "status": "no_taxonomy_rule",
+          "exercises": [],
+          "note": "no taxonomy rule uses it as a primary muscle, so no stored Garmin label counts for it; nothing is substituted"
+        }
+      ],
+      "no_rule_active_sets_last_7_days": 2,
+      "no_rule_active_sets_last_28_days": 2,
+      "no_rule_notices": [
+        {
+          "source_activity_id": "222",
+          "local_date": "2026-10-01",
+          "label": "BENCH_PRESS/BARBELL_BENCH_PRESS",
+          "set_count": 2,
+          "set_sequences": [
+            1,
+            3
+          ],
+          "category_hint_muscle": "chest",
+          "category_hint_region": "push"
+        }
+      ]
+    },
+    "swimming": {
+      "goal": {
+        "session_type": "return_easy",
+        "total_meters": 800.0,
+        "main_set": "800 m easy in total, continuous or with short rests as needed; no pace target",
+        "target_continuous_meters": 800.0,
+        "target_pace_seconds_per_100m": null,
+        "reasons": [
+          "progression anchor 1000 m = max(configured baseline 1000 m, no continuous segment in the last 28 days)",
+          "no swim stored in the last 28 days (>= 10 days): easy re-entry first; distance and pace progress again after it, one at a time",
+          "the gap may include swims that were not synced (sync coverage is not recorded); an easy re-entry is safe either way",
+          "re-entry 800 m = 0.8 x anchor 1000 m; the 1100 m step resumes after it; long-term target 1500 m is unchanged"
+        ],
+        "cautions": [
+          "shoulders/back/triceps share load with strength: no butterfly or paddles today",
+          "today's strength focus is pull: if both happen today, separate them by several hours"
+        ]
+      },
+      "baseline": {
+        "configured_continuous_meters": 1000.0,
+        "recent_longest_segment": null,
+        "recent_best_pace_segment": null,
+        "progression_anchor_meters": 1000.0,
+        "target_continuous_meters": 1100.0,
+        "target_pace_seconds_per_100m": [
+          96.0,
+          110.0
+        ],
+        "long_term_target_meters": 1500.0,
+        "days_since_last_swim": null
+      },
+      "sessions_last_7_days": 0,
+      "goal_sessions_per_week": 3,
+      "sessions": [],
+      "excluded_baselines": []
+    },
+    "excluded_same_day_strength_ids": [],
+    "latest_activity_date": "2026-10-02",
+    "latest_recovery_date": "2026-10-02",
+    "data_freshness": {
+      "latest_activity_date": "2026-10-02",
+      "latest_strength_date": "2026-10-01",
+      "latest_swim_date": null,
+      "latest_recovery_date": "2026-10-02",
+      "requested_date_recovery_row": true,
+      "requested_date_sleep_recorded": true,
+      "sync_coverage_recorded": false,
+      "statement": "sync completeness is not recorded: a day without a stored activity is 'no recorded activity', not a confirmed rest day, and a partial recovery row may still be filled by a later sync"
+    },
+    "notices": [
+      {
+        "code": "recovery_fields_missing",
+        "message": "recovery fields missing (not treated as poor): sleep_score, hrv_status, training_readiness_level, training_readiness_score, recovery_time_minutes, training_status_key",
+        "source_activity_id": null,
+        "local_date": null
+      },
+      {
+        "code": "swim_gap",
+        "message": "no swim stored in the 28 days before this date; a real break and unsynced swims cannot be distinguished",
+        "source_activity_id": null,
+        "local_date": null
+      },
+      {
+        "code": "strength_no_rule_exercise",
+        "message": "BENCH_PRESS/BARBELL_BENCH_PRESS: 2 ACTIVE sets (set 1, 3) have no taxonomy rule and are not counted for any muscle; its Garmin category suggests chest (push), so that muscle/region may be underestimated in focus and volume. Not guessed; a rule must be added after review",
+        "source_activity_id": "222",
+        "local_date": "2026-10-01"
+      }
+    ],
+    "nutrition": {
+      "guidance_version": 1,
+      "date": "2026-10-02",
+      "timezone": "+09:00",
+      "scope": "intake_vs_current_targets",
+      "availability": "no_targets_configured",
+      "unavailable_reason": null,
+      "meal_count": 0,
+      "item_count": 0,
+      "training_context": {
+        "strength_session_planned": true,
+        "strength_adjustment_level": "normal",
+        "next_swim_session_type": "return_easy",
+        "fuel_relevant": true,
+        "description": "today's planned strength session"
+      },
+      "nutrients": {
+        "calories_kcal": {
+          "target": {
+            "kind": "unset"
+          },
+          "status": "no_target",
+          "complete": false,
+          "estimated": false,
+          "consumed": null,
+          "known_subtotal": null,
+          "remaining": null,
+          "remaining_to_maximum": null,
+          "excess": null,
+          "missing_items": []
+        },
+        "protein_g": {
+          "target": {
+            "kind": "unset"
+          },
+          "status": "no_target",
+          "complete": false,
+          "estimated": false,
+          "consumed": null,
+          "known_subtotal": null,
+          "remaining": null,
+          "remaining_to_maximum": null,
+          "excess": null,
+          "missing_items": []
+        },
+        "carbohydrate_g": {
+          "target": {
+            "kind": "unset"
+          },
+          "status": "no_target",
+          "complete": false,
+          "estimated": false,
+          "consumed": null,
+          "known_subtotal": null,
+          "remaining": null,
+          "remaining_to_maximum": null,
+          "excess": null,
+          "missing_items": []
+        },
+        "fat_g": {
+          "target": {
+            "kind": "unset"
+          },
+          "status": "no_target",
+          "complete": false,
+          "estimated": false,
+          "consumed": null,
+          "known_subtotal": null,
+          "remaining": null,
+          "remaining_to_maximum": null,
+          "excess": null,
+          "missing_items": []
+        }
+      },
+      "actions": []
+    }
+  }
+}
