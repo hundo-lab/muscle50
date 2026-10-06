@@ -24,6 +24,7 @@ from typing import Any
 import inbody_trend_builders as inbody
 import pytest
 import sync_coverage_builders as builders
+from test_telegram_config import CONFIG_CASES
 
 import muscle50.cli as cli
 from muscle50.application.telegram_bot import (
@@ -541,11 +542,12 @@ def test_message_sent_before_start_is_not_run(
 
 # --- AC7: config and state errors --------------------------------------------------------------------
 
-CONFIG_ERRORS = [
+# Every row of the config error table (tests/test_telegram_config.py pins the exact texts), plus a missing
+# file and an unreadable one (a directory where the file should be).
+CONFIG_ERRORS: list[tuple[str, Any]] = [
     ("missing", None),
-    ("bad json", "{"),
-    ("empty ids", {"bot_token": TOKEN, "allowed_chat_ids": []}),
-    ("extra key", {"bot_token": TOKEN, "allowed_chat_ids": [1], "x": 1}),
+    ("unreadable", "directory"),
+    *((case, content) for case, content, _ in CONFIG_CASES),
 ]
 
 
@@ -562,6 +564,11 @@ def test_check_and_run_refuse_bad_config_without_network(
     path = home / "config" / "telegram.json"
     if content is None:
         path.unlink()
+    elif content == "directory":
+        path.unlink()
+        path.mkdir()
+    elif isinstance(content, bytes):
+        path.write_bytes(content)
     elif isinstance(content, str):
         path.write_text(content, encoding="utf-8")
     else:
