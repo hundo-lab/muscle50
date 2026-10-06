@@ -287,3 +287,18 @@ uv run muscle50 inbody sync --file `
 명시적으로 `--show-values`를 추가한 경우에만 normalized 값을 표시합니다. 실제 저장 위치는
 `%LOCALAPPDATA%\muscle50\db\muscle50.sqlite3`와
 `%LOCALAPPDATA%\muscle50\raw\inbody\samsung_health`입니다.
+
+### InBody trend (read-only)
+
+```powershell
+muscle50 inbody trend                                       # 저장된 모든 측정
+muscle50 inbody trend --from 2026-07-01 --to 2026-10-05     # 측정 날짜 기준 포함 범위
+muscle50 inbody trend --json
+```
+
+저장된 InBody 측정을 시간순으로 보여 주고, 체중·골격근량(SMM)·체지방량·체지방률 4개 지표의 측정 사이 변화와 처음→마지막
+변화, SMM 목표(1차 43 kg, 장기 50 kg)까지 남은 양, 마지막 측정 후 경과 일수를 표시합니다. DB를 읽기만 하고(migration 없음,
+DB가 없으면 만들지 않음) 값은 0.1 단위로 반올림합니다. 없는 값은 0이 아니라 `unknown`입니다. 각 측정은 측정한 곳의 현지
+날짜·시각으로 표시합니다. 같은 날짜에 값이 다른 행이 있으면 합치거나 고르지 않고 conflict로 보고하며 그 지표의 추세에서
+뺍니다. 사용자가 직접 실행하는 명령이라 수치를 출력하며, `inbody sync`의 값 숨김 정책과 다른 명령의 출력은 그대로입니다.
+상세: `docs/inbody-trend.md`.

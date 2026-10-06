@@ -162,7 +162,7 @@ muscle50/
 
 | 기능 | 관련 파일 / 명령 | 완성도 | 비고 |
 |---|---|---|---|
-| Samsung Health export import | `inbody sync --file <json> [--show-values]` / `application/sync_inbody.py`, `infrastructure/inbody/samsung_health.py`, migration 007 | 부분 | 실제 Galaxy export가 RAW 보존·정규화·저장을 통과했다는 기록 있음 [문서]. **분석이나 추천에서 체성분 데이터를 읽지 않는다**(`analytics_reader`가 body_composition을 참조하지 않음) [코드 grep]. |
+| Samsung Health export import | `inbody sync --file <json> [--show-values]` / `application/sync_inbody.py`, `infrastructure/inbody/samsung_health.py`, migration 007 | 부분 | 실제 Galaxy export가 RAW 보존·정규화·저장을 통과했다는 기록 있음 [문서]. 체성분 데이터는 read-only 명령 `inbody trend`(`docs/inbody-trend.md`)만 읽는다. **분석이나 추천은 여전히 읽지 않는다**(`analytics_reader`가 body_composition을 참조하지 않음) [코드 grep]. |
 | Android 진단 companion | `android/inbody-diagnostic-companion/` | 부분 | 진단 및 export 전용. 수동 빌드와 Developer Mode가 필요하다. |
 | InBody 네트워크(OAuth/계정) 연동 | `infrastructure/inbody/auth.py`, `connector.py`, `authenticated_source.py`, `synthetic.py`, `application/sync_latest_inbody.py` | 스텁 | Protocol 경계와 합성 구현뿐이다. **테스트에서만 사용**하고 CLI와는 연결되지 않았다 [코드 grep]. 접근 경로 결정은 `docs/inbody-access-decision.md`에 있다. |
 | InBody smoke 진입점 | `infrastructure/inbody/samsung_health_smoke.py` | 스텁(개발용) | 공용 CLI와는 의도적으로 연결하지 않았다. |
@@ -485,7 +485,7 @@ InBody/Samsung은 네트워크 호출이 없다. Android 앱이 기기 안의 Sa
 |---|---|
 | `sync_runs`, `activity_corrections` | 스키마만 있고 사용처가 없다. 보정 overlay도 미구현이다. "운동 없음"과 "미동기화"의 구분은 이제 `sync_coverage`(migration 010)에 기록되지만 추천 결정은 아직 쓰지 않는다(v2). 과거 activity 날짜, `garmin latest`/`refresh`는 coverage가 없다. |
 | InBody 네트워크 경로 | `auth`/`connector`/`authenticated_source`/`synthetic`/`sync_latest_inbody`는 테스트 전용 스텁이다. |
-| 체성분 미활용 | 저장된 body composition을 분석이나 추천이 읽지 않는다. |
+| 체성분 미활용 | 저장된 body composition은 `inbody trend`(read-only 표시)만 읽는다. 분석이나 추천은 아직 읽지 않는다. |
 | Load metric 재계산 | `garmin refresh` 뒤에는 load metric을 다시 계산하지 않고 기존 값을 유지한다. |
 | 영양 | 자유 문장 parser, unit 변환, 목표 history, void·edit 취소, 음식 이름/alias 수정, `food show`/`food fact add`의 이름 조회가 없다. |
 | 추천 | 장비별 증량 단위 미학습(Progression v2 후보), posterior deltoid 미커버, plyometric 범위 밖 |

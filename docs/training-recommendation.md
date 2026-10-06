@@ -55,7 +55,7 @@ Goal model이 없었으므로 최소 `TrainingGoals`(code default)를 추가했�
 | field | 기본값 |
 | --- | --- |
 | strength_priority | hypertrophy |
-| skeletal_muscle_mass_milestone_kg / long_term | 43 / 50 (v1 규칙에서 사용하지 않음, 기록용) |
+| skeletal_muscle_mass_milestone_kg / long_term | 43 / 50 (추천 v1 규칙에서는 사용하지 않음. `inbody trend`가 이 목표까지 남은 양을 표시) |
 | strength_sessions_per_week / strength_session_minutes | 5 / 40 |
 | region_min/max_sessions_per_week | 1 / 2 |
 | compound_rep_range / isolation_rep_range | 5-12 / 10-20 |

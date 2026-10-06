@@ -1,7 +1,7 @@
 ---
 id: inbody-trend
 title: InBody Body Composition Trend v1
-status: draft
+status: integrated
 migration: none
 output_change: additive
 user_gates: [design, integration, push]
@@ -180,7 +180,21 @@ JSON의 정확한 key 구성은 설계에서 확정한다. 위 예시는 생략(
 
 - InBody 측정이 적으면(현재 production은 같은 날 같은 측정의 두 행뿐) 추세가 거의 비어 있다. 의미 있는 추세는 측정이
   쌓인 뒤에 나온다. Samsung Health export가 과거 측정을 포함하는지는 아직 확인되지 않았다(docs/inbody-access-decision.md).
-- 목표는 코드 기본값이다(설정·이력 없음).
+- 목표는 코드 기본값이다(설정·이력 없음). 목표를 바꾸면 과거 기간 출력도 새 목표로 계산된다.
+- 구현·검증에서 확인한 한계(상세: `docs/inbody-trend.md` "Known issues / limitations"):
+  - production은 현재 한 날짜에 두 행뿐이라 출력이 대부분 "fewer than 2 measurement dates"다. 두 행의 체중이 0.1 단위로
+    다르면 weight conflict가 보이며 이는 설계대로다.
+  - 표시는 측정한 곳의 현지 날짜·시각(저장된 `measured_at` 그대로)이다. 같은 local date에 다른 offset의 행이 섞이면(여행)
+    목록 순서가 UTC 순서와 다를 수 있다.
+  - 반올림은 HALF_EVEN이라 정확한 `.x5` 저장 값(예: 36.05)은 InBody 앱 표시와 0.1 다를 수 있다.
+  - WAL 모드 DB를 read-only로 열면 빈 `-wal`/`-shm` 파일이 남을 수 있다(analytics reader와 같음). DB 내용은 바뀌지 않는다.
+  - 오류는 `오류:`로 시작하고 `inbody sync`는 영어 오류(`InBody sync failed:`)를 유지한다. 읽을 수 없는 저장 시각이나
+    숫자가 아닌 저장 값은 추측하지 않고 `오류:` + exit 1로 거부한다.
+  - spec 예시와 달리 `--to`/`--from`이 있으면 머리글 다음에 Range 줄이 추가된다. 두 목표에 모두 도달하면
+    `long-term 50.0 kg: reached` 줄이 나온다.
+  - `src/muscle50/domain/training_goals.py` docstring은 아직 "recommendation layer"가 쓰는 목표라고만 적혀 있다
+    (이번 범위 밖이라 그대로다. `inbody trend`도 SMM 목표를 읽는다).
 - 후속 후보:
+  - JSON measurement에 `source_type` 추가(행 id, Samsung UID, profile key는 넣지 않는다).
   - 측정 사이 리뷰: 체성분 추세 + 그 기간의 근력 진척, 근육별 주당 set, 식단 준수, 회복(`docs/goals.md` 우선순위 4).
   - 조정 권고(kcal/탄수/볼륨), 부위별 근육량, 체수분·기초대사량 등 지표 추가.
