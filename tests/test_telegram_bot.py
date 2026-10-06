@@ -605,6 +605,18 @@ def test_corrupt_state_file_stops_check_and_run(
 # --- telegram check ----------------------------------------------------------------------------------
 
 
+def test_telegram_help_names_the_config_file_path(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("COLUMNS", "200")
+    with pytest.raises(SystemExit) as raised:
+        main(["telegram", "--help"])
+    assert raised.value.code == 0
+    out = capsys.readouterr().out
+    assert "Check config\\telegram.json and the bot token and show the bot name" in out
+    assert "\t" not in out
+
+
 def test_check_shows_the_bot_and_reads_or_writes_nothing(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
 ) -> None:

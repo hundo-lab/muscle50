@@ -316,7 +316,7 @@ def build_parser() -> argparse.ArgumentParser:
     telegram_commands = telegram.add_subparsers(dest="telegram_command", required=True)
     telegram_commands.add_parser(
         "check",
-        help="Check config\telegram.json and the bot token and show the bot name (reads no messages; writes nothing)",
+        help="Check config\\telegram.json and the bot token and show the bot name (reads no messages; writes nothing)",
     )
     telegram_commands.add_parser(
         "run",
