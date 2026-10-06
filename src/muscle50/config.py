@@ -33,6 +33,16 @@ class AppPaths:
         # Created only when a target is first set (not by ensure_directories).
         return self.root / "config" / "nutrition_targets.json"
 
+    @property
+    def telegram_config_path(self) -> Path:
+        # Written by the user (bot token, allowed chats); never created by muscle50.
+        return self.root / "config" / "telegram.json"
+
+    @property
+    def telegram_state_path(self) -> Path:
+        # Created only by `telegram run` when it handles its first allowed message (not by ensure_directories).
+        return self.root / "config" / "telegram_state.json"
+
     @classmethod
     def from_environment(cls) -> AppPaths:
         override = os.environ.get("MUSCLE50_HOME")

@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime, time, timezone, tzinfo
 from decimal import Decimal
 from pathlib import Path
+from time import sleep
 from typing import Literal
 
 from muscle50.application.backfill_activity_load_metrics import BackfillActivityLoadMetrics
@@ -71,6 +72,14 @@ from muscle50.application.sync_garmin_recovery import (
 )
 from muscle50.application.sync_inbody import SyncInBody, SyncInBodyResult
 from muscle50.application.sync_latest_garmin import NoActivitiesError, SyncLatestGarminActivity
+from muscle50.application.telegram_bot import (
+    CheckTelegramBot,
+    RunTelegramBot,
+    TelegramBotApi,
+    TelegramStateError,
+    TelegramTokenRejectedError,
+    TelegramUnavailableError,
+)
 from muscle50.application.training_snapshot import BuildTrainingSnapshot
 from muscle50.config import AppPaths, ConfigurationError
 from muscle50.domain.analytics import DEFAULT_LOOKBACK_DAYS, MAX_LOOKBACK_DAYS, InvalidSnapshotWindowError
@@ -104,7 +113,12 @@ from muscle50.infrastructure.sqlite.body_composition_reader import BodyCompositi
 from muscle50.infrastructure.sqlite.database import ActivityRepository, DailyRecoveryRepository
 from muscle50.infrastructure.sqlite.nutrition_reader import SqliteNutritionReader
 from muscle50.infrastructure.sqlite.nutrition_repository import SqliteFoodNutritionRepository, SqliteMealRepository
+from muscle50.infrastructure.sqlite.schema_status import pending_migrations
 from muscle50.infrastructure.sqlite.sync_coverage import SqliteSyncCoverageRepository
+from muscle50.infrastructure.telegram.bot_api import UrllibTelegramBotApi, redact
+from muscle50.infrastructure.telegram.cli_runner import InProcessCliRunner
+from muscle50.infrastructure.telegram.config_file import TelegramConfigError, load_telegram_config
+from muscle50.infrastructure.telegram.state_store import JsonHandledUpdateStore
 from muscle50.presentation.inbody_terminal import render_body_composition_trend, render_body_composition_trend_json
 from muscle50.presentation.nutrition_terminal import (
     render_daily_intake,
@@ -129,6 +143,7 @@ from muscle50.presentation.sync_coverage_terminal import (
     render_sync_coverage,
     render_sync_coverage_json,
 )
+from muscle50.presentation.telegram_format import render_telegram_check, telegram_messages
 from muscle50.presentation.terminal import (
     render_activity_load_backfill_result,
     render_daily_sync,
@@ -295,6 +310,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="last local date, inclusive; also the reference date (default: today on this computer)",
     )
     inbody_trend.add_argument("--json", action="store_true", help="print the trend as JSON")
+    telegram = commands.add_parser(
+        "telegram", help="Answer fixed muscle50 commands from your phone through a Telegram bot (long polling)"
+    )
+    telegram_commands = telegram.add_subparsers(dest="telegram_command", required=True)
+    telegram_commands.add_parser(
+        "check",
+        help="Check config\telegram.json and the bot token and show the bot name (reads no messages; writes nothing)",
+    )
+    telegram_commands.add_parser(
+        "run",
+        help="Answer commands from the allowed chats until Ctrl+C (each command runs as the same CLI command)",
+    )
     return parser
 
 
@@ -574,6 +601,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _inbody_trend(args.from_date, args.to_date, as_json=args.json)
     if args.command == "nutrition":
         return _nutrition(args)
+    if args.command == "telegram":
+        return _telegram(args)
     return 2
 
 
@@ -1364,6 +1393,82 @@ def _render_inbody_result(result: SyncInBodyResult, *, show_values: bool) -> str
                 f"bmr_kcal_per_day={measurement.basal_metabolic_rate_kcal_per_day!r}"
             )
     return "\n".join(lines)
+
+
+def _telegram(args: argparse.Namespace) -> int:
+    if args.telegram_command == "check":
+        return _telegram_check()
+    if args.telegram_command == "run":
+        return _telegram_run()
+    return 2
+
+
+def _telegram_api(token: str) -> TelegramBotApi:
+    """The Bot API adapter (module-level so tests can swap in a fake; tests never reach Telegram)."""
+    return UrllibTelegramBotApi(token)
+
+
+def _telegram_sleep(seconds: float) -> None:
+    sleep(seconds)
+
+
+def _telegram_check() -> int:
+    # Writes nothing: no ensure_directories(), no migrate(), no state file; never calls getUpdates.
+    token = ""
+    try:
+        paths = AppPaths.from_environment()
+        config = load_telegram_config(paths.telegram_config_path)
+        token = config.bot_token
+        check = CheckTelegramBot(_telegram_api(token), JsonHandledUpdateStore(paths.telegram_state_path)).execute()
+        print(render_telegram_check(paths.telegram_config_path, config.allowed_chat_ids, check))
+        return 0
+    except (ConfigurationError, TelegramConfigError, TelegramStateError, TelegramUnavailableError) as exc:
+        print(redact(f"오류: {_telegram_error(exc)}", token), file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\n취소되었습니다.", file=sys.stderr)
+        return 130
+
+
+def _telegram_run() -> int:
+    # Never migrates or creates directories itself: each bot command runs through `main` exactly as the
+    # CLI runs it. The only file it writes is the handled-updates state file.
+    token = ""
+    try:
+        paths = AppPaths.from_environment()
+        config = load_telegram_config(paths.telegram_config_path)
+        token = config.bot_token
+
+        def log(line: str) -> None:
+            print(redact(line, token), file=sys.stderr, flush=True)
+
+        RunTelegramBot(
+            _telegram_api(token),
+            JsonHandledUpdateStore(paths.telegram_state_path),
+            InProcessCliRunner(main),
+            allowed_chat_ids=config.allowed_chat_ids,
+            today=lambda: _today(),
+            pending_migrations=lambda: pending_migrations(paths.database_path),
+            format_reply=telegram_messages,
+            log=log,
+            sleep=lambda seconds: _telegram_sleep(seconds),
+            clock=lambda: _now().timestamp(),
+        ).execute()
+    except (ConfigurationError, TelegramConfigError, TelegramStateError, TelegramUnavailableError) as exc:
+        print(redact(f"오류: {_telegram_error(exc)}", token), file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        pass
+    print("\n취소되었습니다.", file=sys.stderr)
+    return 130
+
+
+def _telegram_error(exc: Exception) -> str:
+    if isinstance(exc, TelegramTokenRejectedError):
+        return f"Telegram이 bot token을 받아들이지 않았습니다 ({exc}). telegram.json의 bot_token을 확인하세요."
+    if isinstance(exc, TelegramUnavailableError):
+        return f"Telegram에 연결하지 못했습니다 ({exc})."
+    return str(exc)
 
 
 if __name__ == "__main__":
