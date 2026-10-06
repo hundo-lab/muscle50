@@ -1,0 +1,1548 @@
+{
+  "analytics_version": 1,
+  "window": {
+    "as_of": "2026-03-16",
+    "lookback_days": 7,
+    "start": "2026-03-10"
+  },
+  "activities": {
+    "activity_count": 4,
+    "source_activity_ids": [
+      "8001",
+      "8002",
+      "8100",
+      "8003"
+    ],
+    "training_dates": [
+      "2026-03-10",
+      "2026-03-13",
+      "2026-03-16"
+    ],
+    "by_type": [
+      {
+        "canonical_type": "strength",
+        "source_type_key": "strength_training",
+        "count": 3,
+        "source_activity_ids": [
+          "8001",
+          "8002",
+          "8003"
+        ]
+      },
+      {
+        "canonical_type": "swimming",
+        "source_type_key": "lap_swimming",
+        "count": 1,
+        "source_activity_ids": [
+          "8100"
+        ]
+      }
+    ],
+    "elapsed_seconds": {
+      "key": "elapsed_seconds",
+      "unit": "s",
+      "rule": "sum",
+      "value": 2400.0,
+      "values": [
+        {
+          "source_id": "8001",
+          "value": 600.0
+        },
+        {
+          "source_id": "8002",
+          "value": 600.0
+        },
+        {
+          "source_id": "8100",
+          "value": 600.0
+        },
+        {
+          "source_id": "8003",
+          "value": 600.0
+        }
+      ],
+      "missing_source_ids": []
+    },
+    "load_metrics": [
+      {
+        "key": "training_load",
+        "unit": "score",
+        "rule": "sum",
+        "value": 4.0,
+        "values": [
+          {
+            "source_id": "8001",
+            "value": 1.0
+          },
+          {
+            "source_id": "8002",
+            "value": 1.0
+          },
+          {
+            "source_id": "8100",
+            "value": 1.0
+          },
+          {
+            "source_id": "8003",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "aerobic_training_effect",
+        "unit": "score",
+        "rule": "max",
+        "value": 1.0,
+        "values": [
+          {
+            "source_id": "8001",
+            "value": 1.0
+          },
+          {
+            "source_id": "8002",
+            "value": 1.0
+          },
+          {
+            "source_id": "8100",
+            "value": 1.0
+          },
+          {
+            "source_id": "8003",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "anaerobic_training_effect",
+        "unit": "score",
+        "rule": "max",
+        "value": 1.0,
+        "values": [
+          {
+            "source_id": "8001",
+            "value": 1.0
+          },
+          {
+            "source_id": "8002",
+            "value": 1.0
+          },
+          {
+            "source_id": "8100",
+            "value": 1.0
+          },
+          {
+            "source_id": "8003",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "hr_time_in_zone_1_seconds",
+        "unit": "s",
+        "rule": "sum",
+        "value": 4.0,
+        "values": [
+          {
+            "source_id": "8001",
+            "value": 1.0
+          },
+          {
+            "source_id": "8002",
+            "value": 1.0
+          },
+          {
+            "source_id": "8100",
+            "value": 1.0
+          },
+          {
+            "source_id": "8003",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "hr_time_in_zone_2_seconds",
+        "unit": "s",
+        "rule": "sum",
+        "value": 4.0,
+        "values": [
+          {
+            "source_id": "8001",
+            "value": 1.0
+          },
+          {
+            "source_id": "8002",
+            "value": 1.0
+          },
+          {
+            "source_id": "8100",
+            "value": 1.0
+          },
+          {
+            "source_id": "8003",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "hr_time_in_zone_3_seconds",
+        "unit": "s",
+        "rule": "sum",
+        "value": 4.0,
+        "values": [
+          {
+            "source_id": "8001",
+            "value": 1.0
+          },
+          {
+            "source_id": "8002",
+            "value": 1.0
+          },
+          {
+            "source_id": "8100",
+            "value": 1.0
+          },
+          {
+            "source_id": "8003",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "hr_time_in_zone_4_seconds",
+        "unit": "s",
+        "rule": "sum",
+        "value": 4.0,
+        "values": [
+          {
+            "source_id": "8001",
+            "value": 1.0
+          },
+          {
+            "source_id": "8002",
+            "value": 1.0
+          },
+          {
+            "source_id": "8100",
+            "value": 1.0
+          },
+          {
+            "source_id": "8003",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "hr_time_in_zone_5_seconds",
+        "unit": "s",
+        "rule": "sum",
+        "value": 4.0,
+        "values": [
+          {
+            "source_id": "8001",
+            "value": 1.0
+          },
+          {
+            "source_id": "8002",
+            "value": 1.0
+          },
+          {
+            "source_id": "8100",
+            "value": 1.0
+          },
+          {
+            "source_id": "8003",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "moderate_intensity_minutes",
+        "unit": "min",
+        "rule": "sum",
+        "value": 4.0,
+        "values": [
+          {
+            "source_id": "8001",
+            "value": 1.0
+          },
+          {
+            "source_id": "8002",
+            "value": 1.0
+          },
+          {
+            "source_id": "8100",
+            "value": 1.0
+          },
+          {
+            "source_id": "8003",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "vigorous_intensity_minutes",
+        "unit": "min",
+        "rule": "sum",
+        "value": 4.0,
+        "values": [
+          {
+            "source_id": "8001",
+            "value": 1.0
+          },
+          {
+            "source_id": "8002",
+            "value": 1.0
+          },
+          {
+            "source_id": "8100",
+            "value": 1.0
+          },
+          {
+            "source_id": "8003",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      }
+    ]
+  },
+  "strength": {
+    "session_count": 3,
+    "source_activity_ids": [
+      "8001",
+      "8002",
+      "8003"
+    ],
+    "set_row_count": 10,
+    "rest_set_count": 0,
+    "active_set_count": 10,
+    "reps": 98,
+    "sets_missing_reps": 0,
+    "zero_rep_sets": 0,
+    "volume_kg": 4820.0,
+    "volume_set_count": 10,
+    "volume_exclusions": {
+      "missing_reps": 0,
+      "zero_reps": 0,
+      "missing_weight": 0,
+      "negative_weight": 0,
+      "zero_weight": 0
+    },
+    "unclassified_active_set_count": 1,
+    "exercises": [
+      {
+        "exercise_key": "BENCH_PRESS",
+        "category": "BENCH_PRESS",
+        "display_name": "Bench Press",
+        "classified": true,
+        "active_set_count": 9,
+        "reps": 90,
+        "sets_missing_reps": 0,
+        "volume_kg": 4500.0,
+        "volume_set_count": 9,
+        "max_weight_kg": 50.0,
+        "source_activity_ids": [
+          "8001",
+          "8002",
+          "8003"
+        ]
+      },
+      {
+        "exercise_key": "UNKNOWN",
+        "category": "UNKNOWN",
+        "display_name": "Unknown",
+        "classified": false,
+        "active_set_count": 1,
+        "reps": 8,
+        "sets_missing_reps": 0,
+        "volume_kg": 320.0,
+        "volume_set_count": 1,
+        "max_weight_kg": 40.0,
+        "source_activity_ids": [
+          "8001"
+        ]
+      }
+    ],
+    "sessions": [
+      {
+        "source_activity_id": "8001",
+        "local_date": "2026-03-10",
+        "set_detail_available": true,
+        "active_set_count": 4,
+        "reps": 38,
+        "sets_missing_reps": 0,
+        "volume_kg": 1820.0,
+        "volume_set_count": 4
+      },
+      {
+        "source_activity_id": "8002",
+        "local_date": "2026-03-13",
+        "set_detail_available": true,
+        "active_set_count": 3,
+        "reps": 30,
+        "sets_missing_reps": 0,
+        "volume_kg": 1500.0,
+        "volume_set_count": 3
+      },
+      {
+        "source_activity_id": "8003",
+        "local_date": "2026-03-16",
+        "set_detail_available": true,
+        "active_set_count": 3,
+        "reps": 30,
+        "sets_missing_reps": 0,
+        "volume_kg": 1500.0,
+        "volume_set_count": 3
+      }
+    ],
+    "load_metrics": [
+      {
+        "key": "training_load",
+        "unit": "score",
+        "rule": "sum",
+        "value": 3.0,
+        "values": [
+          {
+            "source_id": "8001",
+            "value": 1.0
+          },
+          {
+            "source_id": "8002",
+            "value": 1.0
+          },
+          {
+            "source_id": "8003",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "aerobic_training_effect",
+        "unit": "score",
+        "rule": "max",
+        "value": 1.0,
+        "values": [
+          {
+            "source_id": "8001",
+            "value": 1.0
+          },
+          {
+            "source_id": "8002",
+            "value": 1.0
+          },
+          {
+            "source_id": "8003",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "anaerobic_training_effect",
+        "unit": "score",
+        "rule": "max",
+        "value": 1.0,
+        "values": [
+          {
+            "source_id": "8001",
+            "value": 1.0
+          },
+          {
+            "source_id": "8002",
+            "value": 1.0
+          },
+          {
+            "source_id": "8003",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "hr_time_in_zone_1_seconds",
+        "unit": "s",
+        "rule": "sum",
+        "value": 3.0,
+        "values": [
+          {
+            "source_id": "8001",
+            "value": 1.0
+          },
+          {
+            "source_id": "8002",
+            "value": 1.0
+          },
+          {
+            "source_id": "8003",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "hr_time_in_zone_2_seconds",
+        "unit": "s",
+        "rule": "sum",
+        "value": 3.0,
+        "values": [
+          {
+            "source_id": "8001",
+            "value": 1.0
+          },
+          {
+            "source_id": "8002",
+            "value": 1.0
+          },
+          {
+            "source_id": "8003",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "hr_time_in_zone_3_seconds",
+        "unit": "s",
+        "rule": "sum",
+        "value": 3.0,
+        "values": [
+          {
+            "source_id": "8001",
+            "value": 1.0
+          },
+          {
+            "source_id": "8002",
+            "value": 1.0
+          },
+          {
+            "source_id": "8003",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "hr_time_in_zone_4_seconds",
+        "unit": "s",
+        "rule": "sum",
+        "value": 3.0,
+        "values": [
+          {
+            "source_id": "8001",
+            "value": 1.0
+          },
+          {
+            "source_id": "8002",
+            "value": 1.0
+          },
+          {
+            "source_id": "8003",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "hr_time_in_zone_5_seconds",
+        "unit": "s",
+        "rule": "sum",
+        "value": 3.0,
+        "values": [
+          {
+            "source_id": "8001",
+            "value": 1.0
+          },
+          {
+            "source_id": "8002",
+            "value": 1.0
+          },
+          {
+            "source_id": "8003",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "moderate_intensity_minutes",
+        "unit": "min",
+        "rule": "sum",
+        "value": 3.0,
+        "values": [
+          {
+            "source_id": "8001",
+            "value": 1.0
+          },
+          {
+            "source_id": "8002",
+            "value": 1.0
+          },
+          {
+            "source_id": "8003",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "vigorous_intensity_minutes",
+        "unit": "min",
+        "rule": "sum",
+        "value": 3.0,
+        "values": [
+          {
+            "source_id": "8001",
+            "value": 1.0
+          },
+          {
+            "source_id": "8002",
+            "value": 1.0
+          },
+          {
+            "source_id": "8003",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      }
+    ],
+    "taxonomy": {
+      "taxonomy_version": 1,
+      "active_set_count": 10,
+      "mapped_active_set_count": 9,
+      "unmapped_active_set_count": 1,
+      "unknown_active_set_count": 1,
+      "unknown_source_activity_ids": [
+        "8001"
+      ],
+      "no_rule_active_set_count": 0,
+      "mapped_label_origins": {
+        "confirmed": 0,
+        "auto_detected": 0,
+        "unspecified": 9
+      },
+      "by_exercise": [
+        {
+          "category": "BENCH_PRESS",
+          "exercise_name": null,
+          "movement_pattern": "horizontal_push",
+          "primary_muscle": "chest",
+          "secondary_muscles": [
+            "triceps",
+            "anterior_deltoid"
+          ],
+          "mapping_basis": "category_only",
+          "unmapped_reason": null,
+          "active_set_count": 9,
+          "label_origins": {
+            "confirmed": 0,
+            "auto_detected": 0,
+            "unspecified": 9
+          },
+          "source_activity_ids": [
+            "8001",
+            "8002",
+            "8003"
+          ],
+          "sets": [
+            {
+              "source_activity_id": "8001",
+              "sequence": 1
+            },
+            {
+              "source_activity_id": "8001",
+              "sequence": 2
+            },
+            {
+              "source_activity_id": "8001",
+              "sequence": 3
+            },
+            {
+              "source_activity_id": "8002",
+              "sequence": 1
+            },
+            {
+              "source_activity_id": "8002",
+              "sequence": 2
+            },
+            {
+              "source_activity_id": "8002",
+              "sequence": 3
+            },
+            {
+              "source_activity_id": "8003",
+              "sequence": 1
+            },
+            {
+              "source_activity_id": "8003",
+              "sequence": 2
+            },
+            {
+              "source_activity_id": "8003",
+              "sequence": 3
+            }
+          ]
+        },
+        {
+          "category": "UNKNOWN",
+          "exercise_name": null,
+          "movement_pattern": null,
+          "primary_muscle": null,
+          "secondary_muscles": [],
+          "mapping_basis": null,
+          "unmapped_reason": "unknown_source_label",
+          "active_set_count": 1,
+          "label_origins": {
+            "confirmed": 0,
+            "auto_detected": 0,
+            "unspecified": 1
+          },
+          "source_activity_ids": [
+            "8001"
+          ],
+          "sets": [
+            {
+              "source_activity_id": "8001",
+              "sequence": 4
+            }
+          ]
+        }
+      ],
+      "by_movement_pattern": [
+        {
+          "key": "horizontal_push",
+          "active_set_count": 9,
+          "label_origins": {
+            "confirmed": 0,
+            "auto_detected": 0,
+            "unspecified": 9
+          },
+          "source_activity_ids": [
+            "8001",
+            "8002",
+            "8003"
+          ],
+          "sets": [
+            {
+              "source_activity_id": "8001",
+              "sequence": 1
+            },
+            {
+              "source_activity_id": "8001",
+              "sequence": 2
+            },
+            {
+              "source_activity_id": "8001",
+              "sequence": 3
+            },
+            {
+              "source_activity_id": "8002",
+              "sequence": 1
+            },
+            {
+              "source_activity_id": "8002",
+              "sequence": 2
+            },
+            {
+              "source_activity_id": "8002",
+              "sequence": 3
+            },
+            {
+              "source_activity_id": "8003",
+              "sequence": 1
+            },
+            {
+              "source_activity_id": "8003",
+              "sequence": 2
+            },
+            {
+              "source_activity_id": "8003",
+              "sequence": 3
+            }
+          ]
+        }
+      ],
+      "by_primary_muscle": [
+        {
+          "key": "chest",
+          "active_set_count": 9,
+          "label_origins": {
+            "confirmed": 0,
+            "auto_detected": 0,
+            "unspecified": 9
+          },
+          "source_activity_ids": [
+            "8001",
+            "8002",
+            "8003"
+          ],
+          "sets": [
+            {
+              "source_activity_id": "8001",
+              "sequence": 1
+            },
+            {
+              "source_activity_id": "8001",
+              "sequence": 2
+            },
+            {
+              "source_activity_id": "8001",
+              "sequence": 3
+            },
+            {
+              "source_activity_id": "8002",
+              "sequence": 1
+            },
+            {
+              "source_activity_id": "8002",
+              "sequence": 2
+            },
+            {
+              "source_activity_id": "8002",
+              "sequence": 3
+            },
+            {
+              "source_activity_id": "8003",
+              "sequence": 1
+            },
+            {
+              "source_activity_id": "8003",
+              "sequence": 2
+            },
+            {
+              "source_activity_id": "8003",
+              "sequence": 3
+            }
+          ]
+        }
+      ],
+      "secondary_muscle_set_exposures": [
+        {
+          "key": "anterior_deltoid",
+          "active_set_count": 9,
+          "label_origins": {
+            "confirmed": 0,
+            "auto_detected": 0,
+            "unspecified": 9
+          },
+          "source_activity_ids": [
+            "8001",
+            "8002",
+            "8003"
+          ],
+          "sets": [
+            {
+              "source_activity_id": "8001",
+              "sequence": 1
+            },
+            {
+              "source_activity_id": "8001",
+              "sequence": 2
+            },
+            {
+              "source_activity_id": "8001",
+              "sequence": 3
+            },
+            {
+              "source_activity_id": "8002",
+              "sequence": 1
+            },
+            {
+              "source_activity_id": "8002",
+              "sequence": 2
+            },
+            {
+              "source_activity_id": "8002",
+              "sequence": 3
+            },
+            {
+              "source_activity_id": "8003",
+              "sequence": 1
+            },
+            {
+              "source_activity_id": "8003",
+              "sequence": 2
+            },
+            {
+              "source_activity_id": "8003",
+              "sequence": 3
+            }
+          ]
+        },
+        {
+          "key": "triceps",
+          "active_set_count": 9,
+          "label_origins": {
+            "confirmed": 0,
+            "auto_detected": 0,
+            "unspecified": 9
+          },
+          "source_activity_ids": [
+            "8001",
+            "8002",
+            "8003"
+          ],
+          "sets": [
+            {
+              "source_activity_id": "8001",
+              "sequence": 1
+            },
+            {
+              "source_activity_id": "8001",
+              "sequence": 2
+            },
+            {
+              "source_activity_id": "8001",
+              "sequence": 3
+            },
+            {
+              "source_activity_id": "8002",
+              "sequence": 1
+            },
+            {
+              "source_activity_id": "8002",
+              "sequence": 2
+            },
+            {
+              "source_activity_id": "8002",
+              "sequence": 3
+            },
+            {
+              "source_activity_id": "8003",
+              "sequence": 1
+            },
+            {
+              "source_activity_id": "8003",
+              "sequence": 2
+            },
+            {
+              "source_activity_id": "8003",
+              "sequence": 3
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "swimming": {
+    "session_count": 1,
+    "source_activity_ids": [
+      "8100"
+    ],
+    "summary_distance_meters": {
+      "key": "summary_distance_meters",
+      "unit": "m",
+      "rule": "sum",
+      "value": 400.0,
+      "values": [
+        {
+          "source_id": "8100",
+          "value": 400.0
+        }
+      ],
+      "missing_source_ids": []
+    },
+    "elapsed_seconds": {
+      "key": "elapsed_seconds",
+      "unit": "s",
+      "rule": "sum",
+      "value": 600.0,
+      "values": [
+        {
+          "source_id": "8100",
+          "value": 600.0
+        }
+      ],
+      "missing_source_ids": []
+    },
+    "moving_seconds": {
+      "key": "moving_seconds",
+      "unit": "s",
+      "rule": "sum",
+      "value": 500.0,
+      "values": [
+        {
+          "source_id": "8100",
+          "value": 500.0
+        }
+      ],
+      "missing_source_ids": []
+    },
+    "pool_lengths_meters": [
+      25.0
+    ],
+    "detail_distance_meters": {
+      "key": "detail_distance_meters",
+      "unit": "m",
+      "rule": "sum",
+      "value": 400.0,
+      "values": [
+        {
+          "source_id": "8100",
+          "value": 400.0
+        }
+      ],
+      "missing_source_ids": []
+    },
+    "plausible_detail_distance_meters": {
+      "key": "plausible_detail_distance_meters",
+      "unit": "m",
+      "rule": "sum",
+      "value": 400.0,
+      "values": [
+        {
+          "source_id": "8100",
+          "value": 400.0
+        }
+      ],
+      "missing_source_ids": []
+    },
+    "implausible_lap_count": 0,
+    "implausible_length_count": 0,
+    "sessions": [
+      {
+        "source_activity_id": "8100",
+        "local_date": "2026-03-16",
+        "summary_distance_meters": 400.0,
+        "elapsed_seconds": 600.0,
+        "moving_seconds": 500.0,
+        "pool_length_meters": 25.0,
+        "detail_available": true,
+        "lap_count": 1,
+        "length_count": 16,
+        "swimming_length_count": 16,
+        "detail_distance_meters": 400.0,
+        "implausible_lap_sequences": [],
+        "implausible_lap_distance_meters": 0.0,
+        "plausible_detail_distance_meters": 400.0,
+        "implausible_length_count": 0,
+        "summary_distance_includes_implausible_laps": false
+      }
+    ],
+    "load_metrics": [
+      {
+        "key": "training_load",
+        "unit": "score",
+        "rule": "sum",
+        "value": 1.0,
+        "values": [
+          {
+            "source_id": "8100",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "aerobic_training_effect",
+        "unit": "score",
+        "rule": "max",
+        "value": 1.0,
+        "values": [
+          {
+            "source_id": "8100",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "anaerobic_training_effect",
+        "unit": "score",
+        "rule": "max",
+        "value": 1.0,
+        "values": [
+          {
+            "source_id": "8100",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "hr_time_in_zone_1_seconds",
+        "unit": "s",
+        "rule": "sum",
+        "value": 1.0,
+        "values": [
+          {
+            "source_id": "8100",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "hr_time_in_zone_2_seconds",
+        "unit": "s",
+        "rule": "sum",
+        "value": 1.0,
+        "values": [
+          {
+            "source_id": "8100",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "hr_time_in_zone_3_seconds",
+        "unit": "s",
+        "rule": "sum",
+        "value": 1.0,
+        "values": [
+          {
+            "source_id": "8100",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "hr_time_in_zone_4_seconds",
+        "unit": "s",
+        "rule": "sum",
+        "value": 1.0,
+        "values": [
+          {
+            "source_id": "8100",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "hr_time_in_zone_5_seconds",
+        "unit": "s",
+        "rule": "sum",
+        "value": 1.0,
+        "values": [
+          {
+            "source_id": "8100",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "moderate_intensity_minutes",
+        "unit": "min",
+        "rule": "sum",
+        "value": 1.0,
+        "values": [
+          {
+            "source_id": "8100",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      },
+      {
+        "key": "vigorous_intensity_minutes",
+        "unit": "min",
+        "rule": "sum",
+        "value": 1.0,
+        "values": [
+          {
+            "source_id": "8100",
+            "value": 1.0
+          }
+        ],
+        "missing_source_ids": []
+      }
+    ]
+  },
+  "recovery": {
+    "requested_day_count": 7,
+    "dates_with_row": [
+      "2026-03-15",
+      "2026-03-16"
+    ],
+    "dates_without_row": [
+      "2026-03-10",
+      "2026-03-11",
+      "2026-03-12",
+      "2026-03-13",
+      "2026-03-14"
+    ],
+    "numeric_fields": [
+      {
+        "field": "sleep_seconds",
+        "unit": "s",
+        "rule": "daily",
+        "latest_value": 25200.0,
+        "latest_date": "2026-03-15",
+        "mean": 25200.0,
+        "minimum": 25200.0,
+        "maximum": 25200.0,
+        "available_dates": [
+          "2026-03-15"
+        ],
+        "null_dates": [
+          "2026-03-16"
+        ]
+      },
+      {
+        "field": "deep_sleep_seconds",
+        "unit": "s",
+        "rule": "daily",
+        "latest_value": 3600.0,
+        "latest_date": "2026-03-16",
+        "mean": 3600.0,
+        "minimum": 3600.0,
+        "maximum": 3600.0,
+        "available_dates": [
+          "2026-03-15",
+          "2026-03-16"
+        ],
+        "null_dates": []
+      },
+      {
+        "field": "light_sleep_seconds",
+        "unit": "s",
+        "rule": "daily",
+        "latest_value": 14400.0,
+        "latest_date": "2026-03-16",
+        "mean": 14400.0,
+        "minimum": 14400.0,
+        "maximum": 14400.0,
+        "available_dates": [
+          "2026-03-15",
+          "2026-03-16"
+        ],
+        "null_dates": []
+      },
+      {
+        "field": "rem_sleep_seconds",
+        "unit": "s",
+        "rule": "daily",
+        "latest_value": 5400.0,
+        "latest_date": "2026-03-16",
+        "mean": 5400.0,
+        "minimum": 5400.0,
+        "maximum": 5400.0,
+        "available_dates": [
+          "2026-03-15",
+          "2026-03-16"
+        ],
+        "null_dates": []
+      },
+      {
+        "field": "awake_sleep_seconds",
+        "unit": "s",
+        "rule": "daily",
+        "latest_value": 1800.0,
+        "latest_date": "2026-03-16",
+        "mean": 1800.0,
+        "minimum": 1800.0,
+        "maximum": 1800.0,
+        "available_dates": [
+          "2026-03-15",
+          "2026-03-16"
+        ],
+        "null_dates": []
+      },
+      {
+        "field": "sleep_score",
+        "unit": "score",
+        "rule": "daily",
+        "latest_value": 80.0,
+        "latest_date": "2026-03-16",
+        "mean": 80.0,
+        "minimum": 80.0,
+        "maximum": 80.0,
+        "available_dates": [
+          "2026-03-15",
+          "2026-03-16"
+        ],
+        "null_dates": []
+      },
+      {
+        "field": "sleep_avg_hrv_ms",
+        "unit": "ms",
+        "rule": "daily",
+        "latest_value": 50.0,
+        "latest_date": "2026-03-16",
+        "mean": 50.0,
+        "minimum": 50.0,
+        "maximum": 50.0,
+        "available_dates": [
+          "2026-03-15",
+          "2026-03-16"
+        ],
+        "null_dates": []
+      },
+      {
+        "field": "hrv_last_night_avg_ms",
+        "unit": "ms",
+        "rule": "daily",
+        "latest_value": 48.0,
+        "latest_date": "2026-03-16",
+        "mean": 48.0,
+        "minimum": 48.0,
+        "maximum": 48.0,
+        "available_dates": [
+          "2026-03-15",
+          "2026-03-16"
+        ],
+        "null_dates": []
+      },
+      {
+        "field": "hrv_weekly_avg_ms",
+        "unit": "ms",
+        "rule": "state",
+        "latest_value": 45.0,
+        "latest_date": "2026-03-16",
+        "mean": null,
+        "minimum": null,
+        "maximum": null,
+        "available_dates": [
+          "2026-03-15",
+          "2026-03-16"
+        ],
+        "null_dates": []
+      },
+      {
+        "field": "resting_heart_rate_bpm",
+        "unit": "bpm",
+        "rule": "daily",
+        "latest_value": 55.0,
+        "latest_date": "2026-03-16",
+        "mean": 55.0,
+        "minimum": 55.0,
+        "maximum": 55.0,
+        "available_dates": [
+          "2026-03-15",
+          "2026-03-16"
+        ],
+        "null_dates": []
+      },
+      {
+        "field": "body_battery_high",
+        "unit": "score",
+        "rule": "daily",
+        "latest_value": 90.0,
+        "latest_date": "2026-03-16",
+        "mean": 90.0,
+        "minimum": 90.0,
+        "maximum": 90.0,
+        "available_dates": [
+          "2026-03-15",
+          "2026-03-16"
+        ],
+        "null_dates": []
+      },
+      {
+        "field": "body_battery_low",
+        "unit": "score",
+        "rule": "daily",
+        "latest_value": 20.0,
+        "latest_date": "2026-03-16",
+        "mean": 20.0,
+        "minimum": 20.0,
+        "maximum": 20.0,
+        "available_dates": [
+          "2026-03-15",
+          "2026-03-16"
+        ],
+        "null_dates": []
+      },
+      {
+        "field": "stress_average",
+        "unit": "score",
+        "rule": "daily",
+        "latest_value": 30.0,
+        "latest_date": "2026-03-16",
+        "mean": 30.0,
+        "minimum": 30.0,
+        "maximum": 30.0,
+        "available_dates": [
+          "2026-03-15",
+          "2026-03-16"
+        ],
+        "null_dates": []
+      },
+      {
+        "field": "training_readiness_score",
+        "unit": "score",
+        "rule": "daily",
+        "latest_value": 60.0,
+        "latest_date": "2026-03-16",
+        "mean": 60.0,
+        "minimum": 60.0,
+        "maximum": 60.0,
+        "available_dates": [
+          "2026-03-15",
+          "2026-03-16"
+        ],
+        "null_dates": []
+      },
+      {
+        "field": "recovery_time_minutes",
+        "unit": "min",
+        "rule": "state",
+        "latest_value": 600.0,
+        "latest_date": "2026-03-16",
+        "mean": null,
+        "minimum": null,
+        "maximum": null,
+        "available_dates": [
+          "2026-03-15",
+          "2026-03-16"
+        ],
+        "null_dates": []
+      },
+      {
+        "field": "respiration_avg_brpm",
+        "unit": "brpm",
+        "rule": "daily",
+        "latest_value": 14.0,
+        "latest_date": "2026-03-16",
+        "mean": 14.0,
+        "minimum": 14.0,
+        "maximum": 14.0,
+        "available_dates": [
+          "2026-03-15",
+          "2026-03-16"
+        ],
+        "null_dates": []
+      }
+    ],
+    "categorical_fields": [
+      {
+        "field": "training_status_key",
+        "latest_value": "PRODUCTIVE",
+        "latest_date": "2026-03-16",
+        "values": [
+          {
+            "calendar_date": "2026-03-15",
+            "value": "PRODUCTIVE"
+          },
+          {
+            "calendar_date": "2026-03-16",
+            "value": "PRODUCTIVE"
+          }
+        ],
+        "null_dates": []
+      },
+      {
+        "field": "hrv_status",
+        "latest_value": "BALANCED",
+        "latest_date": "2026-03-16",
+        "values": [
+          {
+            "calendar_date": "2026-03-15",
+            "value": "BALANCED"
+          },
+          {
+            "calendar_date": "2026-03-16",
+            "value": "BALANCED"
+          }
+        ],
+        "null_dates": []
+      },
+      {
+        "field": "training_readiness_level",
+        "latest_value": "MODERATE",
+        "latest_date": "2026-03-16",
+        "values": [
+          {
+            "calendar_date": "2026-03-15",
+            "value": "MODERATE"
+          },
+          {
+            "calendar_date": "2026-03-16",
+            "value": "MODERATE"
+          }
+        ],
+        "null_dates": []
+      },
+      {
+        "field": "recovery_time_change_phrase",
+        "latest_value": null,
+        "latest_date": null,
+        "values": [],
+        "null_dates": [
+          "2026-03-15",
+          "2026-03-16"
+        ]
+      }
+    ],
+    "days": [
+      {
+        "calendar_date": "2026-03-15",
+        "sleep_seconds": 25200,
+        "deep_sleep_seconds": 3600,
+        "light_sleep_seconds": 14400,
+        "rem_sleep_seconds": 5400,
+        "awake_sleep_seconds": 1800,
+        "sleep_start_gmt_ms": null,
+        "sleep_end_gmt_ms": null,
+        "sleep_score": 80,
+        "sleep_avg_hrv_ms": 50.0,
+        "hrv_last_night_avg_ms": 48.0,
+        "hrv_weekly_avg_ms": 45.0,
+        "hrv_status": "BALANCED",
+        "resting_heart_rate_bpm": 55.0,
+        "body_battery_high": 90,
+        "body_battery_low": 20,
+        "stress_average": 30,
+        "training_readiness_score": 60,
+        "training_readiness_level": "MODERATE",
+        "recovery_time_minutes": 600,
+        "recovery_time_change_phrase": null,
+        "training_status_key": "PRODUCTIVE",
+        "respiration_avg_brpm": 14.0,
+        "normalizer_version": 2
+      },
+      {
+        "calendar_date": "2026-03-16",
+        "sleep_seconds": null,
+        "deep_sleep_seconds": 3600,
+        "light_sleep_seconds": 14400,
+        "rem_sleep_seconds": 5400,
+        "awake_sleep_seconds": 1800,
+        "sleep_start_gmt_ms": null,
+        "sleep_end_gmt_ms": null,
+        "sleep_score": 80,
+        "sleep_avg_hrv_ms": 50.0,
+        "hrv_last_night_avg_ms": 48.0,
+        "hrv_weekly_avg_ms": 45.0,
+        "hrv_status": "BALANCED",
+        "resting_heart_rate_bpm": 55.0,
+        "body_battery_high": 90,
+        "body_battery_low": 20,
+        "stress_average": 30,
+        "training_readiness_score": 60,
+        "training_readiness_level": "MODERATE",
+        "recovery_time_minutes": 600,
+        "recovery_time_change_phrase": null,
+        "training_status_key": "PRODUCTIVE",
+        "respiration_avg_brpm": 14.0,
+        "normalizer_version": 2
+      }
+    ]
+  },
+  "quality_issues": [
+    {
+      "code": "strength_unclassified_exercise",
+      "source_activity_id": "8001",
+      "detail": "1 ACTIVE sets have UNKNOWN/missing Garmin exercise classification",
+      "lap_sequences": [],
+      "set_sequences": [
+        4
+      ]
+    }
+  ]
+}

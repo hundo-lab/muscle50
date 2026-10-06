@@ -1,0 +1,7 @@
+Source: Samsung Health / InBody
+Records discovered: 1
+Inserted: 1
+Already existing: 0
+Changed RAW conflicts: 0
+RAW list snapshot stored: raw/inbody/samsung_health/inbody_samsung_health/measurement_list/f7/f7fbaa5006a34d696d76ae8580b8ba3d.json
+Normalized measurements available: 1

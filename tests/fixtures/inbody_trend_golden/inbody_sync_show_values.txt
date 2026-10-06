@@ -1,0 +1,8 @@
+Source: Samsung Health / InBody
+Records discovered: 1
+Inserted: 1
+Already existing: 0
+Changed RAW conflicts: 0
+RAW list snapshot stored: raw/inbody/samsung_health/inbody_samsung_health/measurement_list/f7/f7fbaa5006a34d696d76ae8580b8ba3d.json
+Normalized measurements available: 1
+Record 1 values: weight_kg=70.0 smm_kg=31.0 bfm_kg=None pbf=20.0 bmi=None tbw_l=None bmr_kcal_per_day=None
