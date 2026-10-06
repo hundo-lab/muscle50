@@ -129,7 +129,8 @@ muscle50 garmin backfill-recovery-coverage
 
 Discovery 실패, page limit 도달, 날짜를 읽을 수 없는 목록 항목이 있으면 그 범위의 activities는 `synced`로 기록하지 않고,
 오늘 이후 날짜와 인증 실패로 시도하지 않은 recovery 날짜도 기록하지 않습니다. 기록에 실패해도 sync 결과(stdout, exit code)는
-그대로이고 stderr에 경고 한 줄만 나옵니다. `backfill-recovery-coverage`는 이 기능 이전에 저장된 recovery 날짜를 accepted
+그대로입니다. 단독 명령은 stderr에 경고 한 줄을 내고, `daily`에서는 해당 stage(`activities`/`recovery`)의 warning으로
+보여 줍니다. `backfill-recovery-coverage`는 이 기능 이전에 저장된 recovery 날짜를 accepted
 RAW capture의 endpoint 목록으로 `synced`/`partial`(출처 `backfilled from RAW`)로 채웁니다. Garmin을 호출하거나 RAW를 쓰지
 않고, 이미 기록이 있는 날짜는 건드리지 않아 여러 번 실행해도 안전합니다. 과거 activity 날짜는 추정하지 않으므로
 `garmin activities --from --to`로 다시 sync하기 전까지 `not synced`입니다. 이 기능은 migration 010을 씁니다(첫 쓰기 명령에서
