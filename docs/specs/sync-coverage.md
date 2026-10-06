@@ -1,8 +1,8 @@
 ---
 id: sync-coverage
 title: Garmin Sync Coverage v1
-status: draft
-migration: none
+status: integrated
+migration: reserved:010
 output_change: additive
 user_gates: [design, integration, prod-migration, live-garmin, push]
 ---
@@ -90,3 +90,14 @@ date        activities              recovery
 - coverage를 추천 결정에 반영(v2): 예를 들어 `synced`이고 활동이 없으면 실제 휴식으로 확정.
 - `garmin latest` coverage, refresh coverage.
 - 남는 `sync_runs` 정리 여부.
+- 구현/검증에서 확인된 한계(상세: `docs/sync-coverage.md` "Known issues / limitations"):
+  - 날짜마다 최신 결과만 남는다(latest-state). 나중에 실패한 재시도가 이전 `synced`를 `failed`로 덮어쓰며 이력은 없다.
+  - 오늘의 `synced`는 `synced_at_utc` 시점까지만 뜻한다. 그 뒤 같은 날 한 운동은 다음 sync 전까지 반영되지 않는다.
+  - 날짜/ID를 읽을 수 없는 목록 항목이 최신 페이지에 계속 있으면 activities coverage가 계속 기록되지 않는다
+    (`daily --json`의 `activities.undated`로 확인).
+  - recovery backfill은 초기 capture에 실패가 아닌 이유로 빠진 endpoint kind가 있어도 `partial`로 기록한다.
+  - 과거 activity 날짜는 `not_synced`로 남는다(`garmin activities --from --to`로 다시 sync하면 기록된다).
+  - coverage 기록은 sync 뒤 별도 transaction이다. 기록이 실패하면 stderr 경고(daily는 stage warning)만 나고
+    stdout과 exit code는 sync 그대로다.
+  - 운영 DB는 첫 쓰기 명령에서 migration 10이 적용된다(009와 함께). 그 전까지 `recommend`/`daily`는 기존과 같게 읽는다.
+  - 실제 계정 확인(live Garmin 게이트)은 아직 하지 않았다. 모두 fake connector로만 확인했다.

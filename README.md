@@ -114,6 +114,27 @@ capture를 재사용하고, 응답이 바뀌면 과거 snapshot을 유지한 채
 최신 accepted capture 기준으로 갱신합니다. 잘못된 날짜는 로그인이나 네트워크 호출 전에
 거부합니다.
 
+## Garmin sync coverage
+
+날짜별로 "동기화했고 데이터가 없었음"(`synced`, activity 0개)과 "동기화한 적 없음"(`not synced`)을 구분해 보여 줍니다.
+`garmin activities --from/--to`, `garmin recovery`(단일 날짜/범위), `daily`가 sync한 날짜마다 최신 결과 하나를 기록합니다
+(activities: `synced`/`failed`, recovery: `synced`/`partial`/`failed`). `garmin latest`와 `garmin refresh`는 기록하지 않습니다.
+
+```powershell
+muscle50 garmin coverage --from 2026-10-01 --to 2026-10-05          # read-only, Garmin 호출 없음, 최대 366일
+muscle50 garmin coverage --from 2026-10-01 --to 2026-10-05 --json   # 기록한 명령과 시각 포함
+muscle50 garmin backfill-recovery-coverage --dry-run                # 이전에 저장한 recovery 날짜를 RAW에서 채울 결과만 표시
+muscle50 garmin backfill-recovery-coverage
+```
+
+Discovery 실패, page limit 도달, 날짜를 읽을 수 없는 목록 항목이 있으면 그 범위의 activities는 `synced`로 기록하지 않고,
+오늘 이후 날짜와 인증 실패로 시도하지 않은 recovery 날짜도 기록하지 않습니다. 기록에 실패해도 sync 결과(stdout, exit code)는
+그대로이고 stderr에 경고 한 줄만 나옵니다. `backfill-recovery-coverage`는 이 기능 이전에 저장된 recovery 날짜를 accepted
+RAW capture의 endpoint 목록으로 `synced`/`partial`(출처 `backfilled from RAW`)로 채웁니다. Garmin을 호출하거나 RAW를 쓰지
+않고, 이미 기록이 있는 날짜는 건드리지 않아 여러 번 실행해도 안전합니다. 과거 activity 날짜는 추정하지 않으므로
+`garmin activities --from --to`로 다시 sync하기 전까지 `not synced`입니다. 이 기능은 migration 010을 씁니다(첫 쓰기 명령에서
+적용, `garmin coverage`는 그 전 DB도 읽음). 상세: `docs/sync-coverage.md`.
+
 ## Training snapshot (Analytics v1)
 
 저장된 데이터만 읽어 지정 날짜로 끝나는 기간(기본 7일)의 운동/회복 요약을 계산합니다. DB를 읽기 전용으로
@@ -156,6 +177,10 @@ muscle50 recommend --date 2026-09-24 --json
 muscle50 recommend --date 2026-09-24 --avoid triceps
 muscle50 recommend --date 2026-09-24 --focus shoulders   # 오늘 할 focus 직접 지정: push/pull/legs/shoulders
 ```
+
+추천 창(D-28..D)에 sync coverage 기록이 있으면 `== Data freshness ==`에 coverage 요약 두 줄("synced, no activity"와
+"not synced" 날짜 구분)이, JSON `data_freshness`에는 `sync_coverage_recorded: true`와 마지막 key `sync_coverage`가 추가됩니다
+(`daily`의 추천도 같음). 기록이 없으면 출력은 기존과 같습니다. coverage는 표시만 하고 추천 결정은 바꾸지 않습니다.
 
 규칙과 한계는 `docs/training-recommendation.md`를 참고하세요.
 

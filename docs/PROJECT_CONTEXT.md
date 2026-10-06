@@ -45,7 +45,7 @@
 | 런타임 의존성 | **`garminconnect==0.3.15`** 하나뿐이다. lock에 따르면 transitive로 `curl-cffi 0.16.3`, `requests 2.34.2`, `ua-generator 2.1.4` 등이 들어온다. |
 | 개발 의존성 (`[dev]`) | `pytest 8.4.2`(<9), `pytest-cov 6.3.0`, `ruff 0.16.7`(<1), `mypy 1.20.2`(<2). 괄호 안은 범위 제약, 버전은 lock 기준. |
 | CLI 프레임워크 | 표준 라이브러리 `argparse` |
-| DB | **SQLite**(표준 `sqlite3`). 단일 파일 `%LOCALAPPDATA%\muscle50\db\muscle50.sqlite3`. 자체 numbered SQL migration loader(001~008)를 쓴다. ORM은 없다. |
+| DB | **SQLite**(표준 `sqlite3`). 단일 파일 `%LOCALAPPDATA%\muscle50\db\muscle50.sqlite3`. 자체 numbered SQL migration loader(001~010)를 쓴다. ORM은 없다. |
 | 숫자 정밀도 | 영양 값은 `Decimal`을 쓰고 DB에는 canonical text로 저장한다. |
 | 백엔드/인증/스토리지/호스팅 | **서버 없음**. 인증은 Garmin 계정 로그인(비공식 라이브러리, token을 로컬 디렉터리에 저장)뿐이다. 스토리지는 로컬 파일시스템과 SQLite다. 호스팅, 클라우드, 배포 파이프라인은 없다. |
 | 배포 방식 | 배포 개념이 없다. 사용자 PC에서 editable install 후 `muscle50 ...`나 `uv run muscle50 ...`로 실행한다. 별도 release/tag는 없다. [코드: `git tag` 결과 없음] |
@@ -131,7 +131,8 @@ muscle50/
 | Recovery sync (단일/범위) | `garmin recovery D` / `--from --to [--yes]` / `sync_garmin_recovery.py`, migration 005 | 완료 | 날짜당 endpoint 9개, 최대 31일, 7일 초과는 `--yes` 필요 |
 | Recovery 재정규화 | `garmin recovery-renormalize [--dry-run]` | 완료 | Garmin 호출 없이 accepted RAW로 재생성한다. |
 | Load metric backfill | `garmin backfill-load-metrics [--dry-run]` / `domain/activity_load.py` | 부분 | 10종 metric. `latest`/`activities`/`daily`가 import 뒤 자동으로 채운다(Auto Load Metrics v1). `garmin refresh` 뒤에는 다시 계산하지 않는다. [문서] |
-| Sync 이력 기록 | `sync_runs` 테이블 | 스텁 | 스키마만 있고 **어떤 코드도 쓰지 않는다**. [코드 grep] |
+| Sync coverage | `garmin coverage --from --to [--json]`, `garmin backfill-recovery-coverage [--dry-run]` / `application/sync_coverage.py`, migration 010 | 부분 | `garmin activities`/`recovery`/`daily`가 날짜별 최신 결과(synced/partial/failed)를 기록하고 `recommend`/`daily` data freshness에 표시한다. 추천 결정에는 쓰지 않는다(v2). `latest`/`refresh`는 기록하지 않는다. production 적용과 live 검증 전이다. [문서] |
+| Sync 이력 기록 | `sync_runs` 테이블 | 스텁 | 스키마만 있고 **어떤 코드도 쓰지 않는다**(날짜별 coverage는 `sync_coverage`가 맡는다). [코드 grep] |
 | Activity 보정 overlay | `activity_corrections` 테이블 | 스텁 | 스키마만 있고 **코드 사용 없음**. [코드 grep] |
 
 ### 4-2. 분석 / 추천 / 오케스트레이션
@@ -151,9 +152,9 @@ muscle50/
 | Nutrition Core (domain, port, JSON schema) | `domain/nutrition.py`, `application/nutrition.py`, `schemas/nutrition_meal_v1.schema.json`, migration 003 | 완료 | append-only fact, supersession |
 | Food catalog | `nutrition food add\|list\|show` | 완료 | source 4종만 허용하고 추정 source는 거부한다. |
 | Food fact versioning | `nutrition food fact add` | 완료 | 같은 unit의 새 버전만 만든다. unit 변환은 없다. |
-| 식사 기록 | `nutrition log --meal --item ID QTY UNIT ... [--additional]` | 부분 | food ID로만 기록한다. 이름/alias 입력, 자유 문장 parser(`MealParser`는 Protocol만 있음), 외부 food DB는 없다. |
+| 식사 기록 | `nutrition log --meal --item FOOD QTY UNIT ... [--additional]` | 부분 | `FOOD`는 food ID, 또는 정확히 같은 이름/alias다(Food Name Lookup v1, 부분 일치·추측 없음). 자유 문장 parser(`MealParser`는 Protocol만 있음), 외부 food DB는 없다. |
 | 하루 섭취 | `nutrition day [--date] [--json]` | 완료 | |
-| Meal edit | `nutrition meal show\|add-item\|remove-item\|replace-item`, migration 008 | 부분 | 식사 삭제, 날짜·종류·시간 수정, 병합, 제거 취소는 없다. |
+| Meal edit | `nutrition meal show\|add-item\|remove-item\|replace-item\|void\|edit\|merge`, migration 008, 009 | 부분 | void(집계 제외), 날짜·종류·시간 수정, 같은 날짜 두 식사 병합은 append-only 기록으로 한다(Meal Void, Edit and Merge v1). void·edit·item 제거 취소, 세 개 이상 병합, 메모 수정은 없다. |
 | Meal repeat | `nutrition repeat <meal_id>` | 완료 | 양 조절과 template은 없다. |
 | 영양 목표 + status | `nutrition target set\|show`, `nutrition status` / `domain/nutrition_targets.py`, `infrastructure/nutrition_target_store.py` | 부분 | 목표 history와 요일별 목표가 없다. 자동 계산도 없다(의도된 설계). |
 
@@ -174,7 +175,7 @@ muscle50/
 
 | 저장소 | 형식 | 비고 |
 |---|---|---|
-| SQLite `muscle50.sqlite3` | 테이블 29개 [코드: migration 001~008의 `CREATE TABLE` 수] | migration 001~008 |
+| SQLite `muscle50.sqlite3` | 테이블 33개 [코드: migration 001~010의 `CREATE TABLE` 수] | migration 001~010 |
 | RAW 파일 | Garmin JSON, original zip, recovery endpoint JSON, InBody JSON | immutable, sha256 content-addressed, DB에서 상대 경로와 hash로 추적한다. |
 | `config/nutrition_targets.json` | versioned JSON(`schema_version` 1, 값은 decimal 문자열) | DB가 아닌 파일로 둔다(의도된 결정). |
 | Garmin token | `auth/garmin/` 디렉터리 | garminconnect 라이브러리가 관리한다. |
@@ -200,13 +201,15 @@ muscle50/
 | 006 | `activity_raw_captures`, `activity_raw_capture_artifacts`, `activity_refresh_state` | refresh snapshot, current_capture_id | |
 | 007 | `inbody_raw_artifacts`, `body_composition_measurements`, `_source_identities`, `_raw_artifact_links`, `_provenance`, `_segmental_metrics`, `_metrics` | 체성분 지표, fingerprint, source identity | fingerprint는 의도적으로 unique가 아니다(자동 병합 금지). |
 | 008 | `nutrition_meal_item_removals` | (meal_id, item_sequence) PK, removed_at, replaced_by_item_sequence | append-only tombstone, UPDATE/DELETE 금지 trigger |
+| 009 | `nutrition_meal_revisions`, `nutrition_meal_voids`, `nutrition_meal_merged_items` | 식사 날짜·종류·시간 revision, void 사유, merge로 옮긴 item | append-only, UPDATE/DELETE 금지 trigger, void된 식사의 revision 거부 trigger |
+| 010 | `sync_coverage` | (provider, data_kind, calendar_date) PK, status, missing_endpoints, failed_activity_ids, source(sync/raw_backfill), command, synced_at_utc | 날짜별 최신 상태(latest-state). `not_synced`는 row 부재 |
 
 핵심 관계를 요약하면 다음과 같다. `activities` 1—N `activity_metrics`/`strength_sets`, 1—1 `swim_activities` 1—N laps 1—N lengths. `nutrition_meals` 1—N items 1—N facts(item 소유 snapshot). `food_profiles` 1—N facts(catalog).
 
 ### 5-3. 보안 규칙
 
 - Firebase rules, RLS 같은 **접근 제어 계층은 없다**. 단일 사용자 로컬 파일이기 때문이다.
-- 무결성 장치로는 CHECK 제약, FK, append-only trigger(nutrition facts, meal item removals)를 쓴다. migration은 `BEGIN IMMEDIATE` transaction으로 적용한다.
+- 무결성 장치로는 CHECK 제약, FK, append-only trigger(nutrition facts, meal item removals, meal revisions/voids/merged items)를 쓴다. migration은 `BEGIN IMMEDIATE` transaction으로 적용한다.
 - **암호화는 없다(at-rest 포함)**. 디렉터리에 `chmod 0o700`을 시도하지만 Windows에서는 오류를 무시하며 ACL 설정은 하지 않는다 [코드: `config.py`].
 - `.gitignore`가 `.env*`, `*.sqlite*`, `*.db`, `garmin_tokens.json`, `tokens/`, `raw/`, `data/`를 제외한다. `config.py`는 데이터 루트가 git worktree 안이면 거부한다.
 
@@ -226,7 +229,9 @@ muscle50
 │  ├─ recovery [D] | --from D --to D [--yes]
 │  ├─ refresh <activity_id>
 │  ├─ backfill-load-metrics [--dry-run]
-│  └─ recovery-renormalize [--dry-run]
+│  ├─ recovery-renormalize [--dry-run]
+│  ├─ coverage --from D --to D [--json]
+│  └─ backfill-recovery-coverage [--dry-run]
 ├─ analytics snapshot --date D [--days N] [--json]
 ├─ recommend --date D [--focus push|pull|legs|shoulders] [--avoid MUSCLE ...] [--json]
 ├─ daily [--date D] [--focus F] [--avoid M ...] [--json] | --after-workout [--date D] [--json]
@@ -237,7 +242,7 @@ muscle50
    ├─ food list [--json] / food show <food_id> [--json]
    ├─ log --meal T [--date] [--time HH:MM] --item ID QTY UNIT ... [--additional] [--json]
    ├─ repeat <meal_id> [--date] [--time] [--meal] [--additional] [--json]
-   ├─ meal show|add-item|remove-item|replace-item <meal_id> ... [--json]
+   ├─ meal show|add-item|remove-item|replace-item|void|edit|merge <meal_id> ... [--json]
    ├─ day [--date] [--json]
    ├─ target set {kcal,protein,carbs,fat} (--exact N | --range MIN MAX | --unset) [--json] / target show [--json]
    └─ status [--date] [--json]
@@ -478,11 +483,11 @@ InBody/Samsung은 네트워크 호출이 없다. Android 앱이 기기 안의 Sa
 
 | 항목 | 내용 |
 |---|---|
-| `sync_runs`, `activity_corrections` | 스키마만 있고 사용처가 없다. 그래서 "운동 없음"과 "미동기화"를 구분하지 못한다. 보정 overlay도 미구현이다. |
+| `sync_runs`, `activity_corrections` | 스키마만 있고 사용처가 없다. 보정 overlay도 미구현이다. "운동 없음"과 "미동기화"의 구분은 이제 `sync_coverage`(migration 010)에 기록되지만 추천 결정은 아직 쓰지 않는다(v2). 과거 activity 날짜, `garmin latest`/`refresh`는 coverage가 없다. |
 | InBody 네트워크 경로 | `auth`/`connector`/`authenticated_source`/`synthetic`/`sync_latest_inbody`는 테스트 전용 스텁이다. |
 | 체성분 미활용 | 저장된 body composition을 분석이나 추천이 읽지 않는다. |
 | Load metric 재계산 | `garmin refresh` 뒤에는 load metric을 다시 계산하지 않고 기존 값을 유지한다. |
-| 영양 | 식사 삭제와 메타데이터 수정, 병합, 이름/alias 입력, 자유 문장 parser, unit 변환, 목표 history가 없다. |
+| 영양 | 자유 문장 parser, unit 변환, 목표 history, void·edit 취소, 음식 이름/alias 수정, `food show`/`food fact add`의 이름 조회가 없다. |
 | 추천 | 장비별 증량 단위 미학습(Progression v2 후보), posterior deltoid 미커버, plyometric 범위 밖 |
 | 자동 실행 | scheduler가 없다. `daily`는 사람이 실행한다. |
 
