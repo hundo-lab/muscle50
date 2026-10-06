@@ -16,6 +16,7 @@ from muscle50.application.daily_sync import DailyMode, RunDailySync, daily_sync_
 from muscle50.application.food_lookup import ResolveFoodReference
 from muscle50.application.imported_load_metrics import FillImportedLoadMetrics
 from muscle50.application.inbody_source import InBodySourceError
+from muscle50.application.inbody_trend import ShowBodyCompositionTrend
 from muscle50.application.ingest_activity import ActivitySyncError
 from muscle50.application.ingest_activity_range import IngestGarminActivityRange, InvalidDateRangeError
 from muscle50.application.meal_corrections import EditMeal, MergeMeals, VoidMeal
@@ -73,6 +74,11 @@ from muscle50.application.sync_latest_garmin import NoActivitiesError, SyncLates
 from muscle50.application.training_snapshot import BuildTrainingSnapshot
 from muscle50.config import AppPaths, ConfigurationError
 from muscle50.domain.analytics import DEFAULT_LOOKBACK_DAYS, MAX_LOOKBACK_DAYS, InvalidSnapshotWindowError
+from muscle50.domain.body_composition_trend import (
+    InvalidStoredMeasurementError,
+    InvalidTrendRangeError,
+    validate_trend_range,
+)
 from muscle50.domain.exercise_taxonomy import MuscleGroup
 from muscle50.domain.inbody_normalization import InBodyNormalizationError
 from muscle50.domain.normalization import NormalizationError, activity_id_from
@@ -94,10 +100,12 @@ from muscle50.infrastructure.nutrition_target_store import JsonNutritionTargetRe
 from muscle50.infrastructure.raw_store import RawStore, RawStoreError, RecoveryRawStore
 from muscle50.infrastructure.sqlite.analytics_reader import AnalyticsDatabaseError, SqliteAnalyticsReader
 from muscle50.infrastructure.sqlite.body_composition import SqliteBodyCompositionRepository
+from muscle50.infrastructure.sqlite.body_composition_reader import BodyCompositionReadError, SqliteBodyCompositionReader
 from muscle50.infrastructure.sqlite.database import ActivityRepository, DailyRecoveryRepository
 from muscle50.infrastructure.sqlite.nutrition_reader import SqliteNutritionReader
 from muscle50.infrastructure.sqlite.nutrition_repository import SqliteFoodNutritionRepository, SqliteMealRepository
 from muscle50.infrastructure.sqlite.sync_coverage import SqliteSyncCoverageRepository
+from muscle50.presentation.inbody_terminal import render_body_composition_trend, render_body_composition_trend_json
 from muscle50.presentation.nutrition_terminal import (
     render_daily_intake,
     render_daily_intake_json,
@@ -274,6 +282,19 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="explicitly print normalized health values; disabled by default",
     )
+    inbody_trend = inbody_commands.add_parser(
+        "trend", help="Show stored InBody measurements and body-composition changes (read-only)"
+    )
+    inbody_trend.add_argument(
+        "--from", dest="from_date", metavar="YYYY-MM-DD", help="first local date (default: earliest stored)"
+    )
+    inbody_trend.add_argument(
+        "--to",
+        dest="to_date",
+        metavar="YYYY-MM-DD",
+        help="last local date, inclusive; also the reference date (default: today on this computer)",
+    )
+    inbody_trend.add_argument("--json", action="store_true", help="print the trend as JSON")
     return parser
 
 
@@ -549,6 +570,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if args.command == "inbody" and args.inbody_command == "sync":
         return _inbody_sync(args.file, show_values=args.show_values)
+    if args.command == "inbody" and args.inbody_command == "trend":
+        return _inbody_trend(args.from_date, args.to_date, as_json=args.json)
     if args.command == "nutrition":
         return _nutrition(args)
     return 2
@@ -1287,6 +1310,35 @@ def _inbody_sync(payload_path: Path, *, show_values: bool) -> int:
         return 1
     except KeyboardInterrupt:
         print("\nInBody sync cancelled.", file=sys.stderr)
+        return 130
+
+
+def _inbody_trend(from_text: str | None, to_text: str | None, *, as_json: bool) -> int:
+    # Deliberately read-only: no ensure_directories(), no migrate(); nothing is created when the DB is missing.
+    try:
+        from_date = date.fromisoformat(validate_calendar_date(from_text)) if from_text is not None else None
+        to_date = date.fromisoformat(validate_calendar_date(to_text)) if to_text is not None else None
+        validate_trend_range(from_date, to_date)
+    except RecoveryNormalizationError:
+        print("오류: --from/--to는 YYYY-MM-DD 형식이어야 합니다.", file=sys.stderr)
+        return 1
+    except InvalidTrendRangeError as exc:
+        print(f"오류: {exc}", file=sys.stderr)
+        return 1
+    try:
+        paths = AppPaths.from_environment()
+        # This computer's today is consulted only when --to is absent (--to is then the reference date).
+        today = to_date if to_date is not None else _today()
+        trend = ShowBodyCompositionTrend(SqliteBodyCompositionReader(paths.database_path)).execute(
+            from_date, to_date, today=today
+        )
+        print(render_body_composition_trend_json(trend) if as_json else render_body_composition_trend(trend))
+        return 0
+    except (BodyCompositionReadError, ConfigurationError, InvalidStoredMeasurementError) as exc:
+        print(f"오류: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\n취소되었습니다.", file=sys.stderr)
         return 130
 
 

@@ -83,3 +83,18 @@ NEIGHBOUR_ROWS = (
     measurement("neighbour-1", "2026-03-02T08:10:00+09:00", weight=80.0, smm=36.0, bfm=15.0, pbf=18.8),
     measurement("neighbour-2", "2026-03-16T07:30:00+09:00", weight=80.6, smm=36.5, bfm=None, pbf=18.7),
 )
+
+
+# The spec example (AC1): three dates, body fat mass and PBF missing on the last one.
+AC1_ROWS = (
+    measurement("synthetic-1", "2026-07-02T08:10:00+09:00", weight=80.0, smm=36.0, bfm=15.0, pbf=18.8),
+    measurement("synthetic-2", "2026-08-05T08:05:00+09:00", weight=80.6, smm=36.5, bfm=15.1, pbf=18.7),
+    measurement("synthetic-3", "2026-09-16T16:43:00+09:00", weight=81.0, smm=36.9),
+)
+
+
+def migrated_database(root: Path) -> Path:
+    """`<root>/db/muscle50.sqlite3`, migrated by every migration file, with no rows."""
+    path = root / "db" / "muscle50.sqlite3"
+    SqliteBodyCompositionRepository(path).migrate()
+    return path
