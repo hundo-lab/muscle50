@@ -303,11 +303,13 @@ DB가 없으면 만들지 않음) 값은 0.1 단위로 반올림합니다. 없�
 뺍니다. 사용자가 직접 실행하는 명령이라 수치를 출력하며, `inbody sync`의 값 숨김 정책과 다른 명령의 출력은 그대로입니다.
 상세: `docs/inbody-trend.md`.
 
-## Telegram bot (v1, 명령어형)
+## Telegram bot (v1.1, 명령어형)
 
-휴대폰 Telegram에서 정해진 명령으로 muscle50을 씁니다. 각 bot 명령은 해당 CLI 명령을 같은 코드로 실행하고, 그 CLI의
-text 출력을 그대로 답합니다. LLM, 자유 문장 해석, 서버, 예약 알림은 없습니다. 이 PC에서 `telegram run`이 실행 중일 때만
-답합니다.
+휴대폰 Telegram에서 정해진 명령으로 muscle50을 씁니다. 각 bot 명령은 해당 CLI 명령을 같은 코드로 실행합니다.
+`/today`, `/status`, `/daily`는 그 CLI의 JSON 결과로 만든 짧은 요약을 답하고, 뒤에 `full`을 붙이면 CLI text 전체를
+그대로 답합니다. 나머지 명령은 CLI text 출력을 그대로 답합니다. 요약의 숫자와 상태는 JSON 값 그대로이고 CLI 출력은
+바뀌지 않습니다. LLM, 자유 문장 해석, 서버, 예약 알림, 자동 refresh는 없습니다. 이 PC에서 `telegram run`이 실행 중일
+때만 답합니다.
 
 설정 파일 `%LOCALAPPDATA%\muscle50\config\telegram.json`은 사용자가 직접 만듭니다(muscle50은 만들지 않음, repo에 두지
 않음). BotFather로 bot을 만들고 내 chat id를 찾는 방법은 `docs/telegram-bot.md`를 참고하세요.
@@ -328,19 +330,21 @@ muscle50 telegram run      # long polling 시작. Ctrl+C로 종료(exit 130)
 
 | bot 명령 | 실행되는 CLI 명령 |
 |---|---|
-| `/today` | `recommend --date <오늘>` |
-| `/status` | `nutrition status` |
+| `/today [full]` | `recommend --date <오늘>` (기본은 요약, `full`은 CLI text) |
+| `/status [full]` | `nutrition status` (기본은 요약, `full`은 CLI text) |
 | `/day [YYYY-MM-DD]` | `nutrition day [--date ...]` |
 | `/log <meal>[+] <food> <qty> <unit>[, ...]` | `nutrition log --meal <meal> --item ... [--additional]` (`+`는 `--additional`) |
 | `/void <meal_id> [이유]` | `nutrition meal void <meal_id> [--reason ...]` |
 | `/show <meal_id>` | `nutrition meal show <meal_id>` |
 | `/inbody` | `inbody trend` |
-| `/daily` | `daily` (Garmin 동기화 포함, 진행 답을 먼저 보냄) |
+| `/daily [full]` | `daily` (Garmin 동기화 포함, 진행 답을 먼저 보냄. 기본은 요약, `full`은 CLI text) |
+| `/unknown` | `recommend --date <오늘>`의 UNKNOWN notice (최근 14일, 오늘 운동 제외. 운동마다 Garmin Connect 링크와 `/refresh <id>`) |
+| `/refresh <activity_id>` | `garmin refresh <activity_id>` (진행 답을 먼저 보내고, 전후 UNKNOWN 세트 수를 답함) |
 | `/help`, `/start` | 명령 목록 |
 
 `allowed_chat_ids`에 없는 chat의 메시지에는 답하지 않고 콘솔에 chat id 한 줄만 남깁니다. 개인 chat id만 넣으세요.
 token은 콘솔, 오류, 답장 어디에도 출력하지 않습니다. 처리한 update는 `config\telegram_state.json`에 기록해 재시작 뒤에도
 다시 실행하지 않고(`/log` 중복 방지), bot이 시작되기 전에 보낸 메시지는 실행하지 않습니다. 적용하지 않은 migration이
-있으면 bot은 migration을 적용하지 않고 `/status`, `/day`, `/show`, `/log`, `/void`, `/daily`를 거부합니다(터미널에서 백업 후 적용하고
+있으면 bot은 migration을 적용하지 않고 `/status`, `/day`, `/show`, `/log`, `/void`, `/daily`, `/refresh`를 거부합니다(터미널에서 백업 후 적용하고
 `telegram run`을 다시 시작). bot이 직접 쓰는 문구(`/help`, 사용법, `취소: /void <meal_id>` 줄 등)는 한국어입니다.
 상세와 한계: `docs/telegram-bot.md`.

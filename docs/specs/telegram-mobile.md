@@ -1,9 +1,9 @@
 ---
 id: telegram-mobile
 title: Telegram Mobile Replies v1.1
-status: draft
+status: integrated
 migration: none
-output_change: additive
+output_change: none
 user_gates: [design, integration, live-garmin, push]
 ---
 
@@ -152,6 +152,21 @@ refresh 24610155225 완료: 10-05 근력, UNKNOWN 11 → 0세트
 - 자동 refresh가 없으므로 Garmin에서 고친 운동은 사용자가 `/refresh`를 보내야 반영된다.
 - Garmin Connect 링크가 휴대폰에서 웹으로 열릴지 앱으로 열릴지는 기기 설정에 따른다.
 - 요약은 추천 리포트의 일부만 보여 준다. 근거와 전체 notice는 `full`로 본다.
+- `output_change: none`: CLI 명령의 text와 JSON 출력은 바뀌지 않았다(`recommend --json`에도 key 추가 없음). 바뀐 것은
+  bot 답장(`/today`, `/status`, `/daily` 기본 답장, `/help`, 사용법 줄, 새 `/unknown`, `/refresh`)뿐이다.
+- 이 spec과 달라진 점(gate 1에서 승인, gate 2에서 확인. 상세: `docs/telegram-bot.md` "v1.1"):
+  - `/daily` 실패 요약의 안내는 `/daily full`이 아니라 `/today`(저장된 데이터로 본 계획, 동기화 없음)와
+    `/daily`(다시 동기화)다.
+  - `/refresh` 전후 세트 수를 구할 수 없을 때의 답장은 CLI 첫 줄 다음에 CLI의 `경고:` 줄을 그대로 붙인다.
+  - `/help`와 `/today`, `/status`, `/daily`의 사용법 줄이 `[full]`을 보여 준다.
+  - 링크와 복사용 `/refresh <id>`는 `<pre>` 밖에 둔다. 링크 미리보기는 링크(`<a href=`)가 있는 메시지에서만 끈다.
+- 구현·검증에서 확인한 한계(상세: `docs/telegram-bot.md` "Known issues / limitations (v1.1)"):
+  - 오늘 한 근력 운동의 UNKNOWN 세트는 다음 날부터 목록에 나온다(recommend가 오늘 운동을 빼기 때문). `/refresh <id>`는
+    오늘 운동에도 쓸 수 있다.
+  - Garmin Connect URL 형식, `<code>` 탭 복사, 실제 Telegram 앱의 표시는 live 확인 대상이다.
+  - recovery level이 normal이 아닌 `/daily` 성공 요약은 end to end로 실행해 보지 않았다(`/today`와 같은 본문 코드를
+    쓰고 테스트가 있다).
+  - `/refresh`는 `<code>`를 탭해 복사한 뒤 보낸다. 한 번 탭으로 보내는 `/refresh_<id>` 별칭은 없다(사용자 결정).
 - 후속 후보:
   - 최근 며칠의 UNKNOWN 운동만 자동 refresh(요청 수 상한 포함).
   - 아침 자동 요약 push.

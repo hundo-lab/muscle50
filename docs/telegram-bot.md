@@ -180,9 +180,9 @@ Whole day: muscle50 nutrition day --date 2026-10-06
 
 - `migrate()`는 실행할 때마다 코드에 있는 migration 파일을 모두 적용한다. `telegram run`이 도는 동안 새 migration이
   main에 통합되면, 휴대폰에서 보낸 명령 하나가 백업 없이 production DB에 migration을 적용할 수 있다(human gate 3 우회).
-- 그래서 CLI handler가 `migrate()`를 부르는 명령(`/status`, `/day`, `/show`, `/log`, `/void`, `/daily`)을 실행하기 전에
-  DB를 read-only(`mode=ro` + `PRAGMA query_only`)로 열어 `schema_migrations`와 코드의 migration 번호를 비교한다.
-  빠진 번호가 있으면 실행하지 않고 다음처럼 답한다.
+- 그래서 CLI handler가 `migrate()`를 부르는 명령(`/status`, `/day`, `/show`, `/log`, `/void`, `/daily`, v1.1의 `/refresh`)을
+  실행하기 전에 DB를 read-only(`mode=ro` + `PRAGMA query_only`)로 열어 `schema_migrations`와 코드의 migration 번호를
+  비교한다. 빠진 번호가 있으면 실행하지 않고 다음처럼 답한다.
 
 ```text
 오류: DB에 아직 적용하지 않은 migration 011이 있습니다. bot은 migration을 적용하지 않습니다. DB를 백업한 뒤 PC 터미널에서 muscle50 명령 하나로 적용하고 다시 보내세요.
@@ -209,7 +209,7 @@ Whole day: muscle50 nutrition day --date 2026-10-06
   (`muscle50 daily ` 진행 줄은 뺀다). 둘 다 비어 있으면 `오류: 명령이 아무것도 출력하지 않았습니다 (exit N).`
 - `<pre>` + HTML escape(`<`, `>`, `&`) + `</pre>`, `parse_mode=HTML`로 보내 고정폭 정렬을 유지한다.
 - Telegram 한도 4096자(UTF-16 단위, 이모지는 2)를 넘으면 줄 경계에서 여러 메시지로 나눈다. 한 줄이 한도보다 길면 줄
-  안에서 자른다. 내용은 버리지 않는다. `/today`는 보통 2개 메시지로 온다.
+  안에서 자른다. 내용은 버리지 않는다. `/today full`은 보통 2개 메시지로 온다.
 - 예상하지 못한 예외가 나면 `오류: 예상하지 못한 오류로 명령을 마치지 못했습니다 (<예외 종류>). telegram run 콘솔을
   확인하세요.`라고 답하고, 콘솔에 traceback을 남기고 계속 돈다.
 
