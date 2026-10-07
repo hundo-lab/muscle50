@@ -90,6 +90,15 @@ class SqliteAnalyticsReader:
             coverage = _sync_coverage_rows(connection, start, end) or ()
         return TrainingData(activities, undated, recoveries, coverage)
 
+    def load_activity(self, source_activity_id: str) -> NormalizedActivity | None:
+        """One stored Garmin activity with its sets, laps and metrics; None when it is not stored."""
+        with self._read_transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM activities WHERE provider = 'garmin' AND source_activity_id = ?",
+                (source_activity_id,),
+            ).fetchone()
+            return None if row is None else _load_activity(connection, row)
+
     def load_sync_coverage(self, start: date, end: date) -> SyncCoverageData:
         """Recorded coverage and stored-activity counts per local date for an inclusive range."""
         with self._read_transaction() as connection:

@@ -44,8 +44,13 @@ def parse(text: str | None) -> CliInvocation | UsageReply:
 @pytest.mark.parametrize(
     ("text", "argv", "migrates", "is_daily", "adds_undo"),
     [
-        ("/today", ("recommend", "--date", "2026-10-06"), False, False, False),
-        ("/status", ("nutrition", "status"), True, False, False),
+        ("/today", ("recommend", "--date", "2026-10-06", "--json"), False, False, False),
+        ("/today full", ("recommend", "--date", "2026-10-06"), False, False, False),
+        ("/status", ("nutrition", "status", "--json"), True, False, False),
+        ("/status full", ("nutrition", "status"), True, False, False),
+        ("/unknown", ("recommend", "--date", "2026-10-06", "--json"), False, False, False),
+        ("/refresh 24610155225", ("garmin", "refresh", "24610155225"), True, False, False),
+        ("/refresh 1", ("garmin", "refresh", "1"), True, False, False),
         ("/day", ("nutrition", "day"), True, False, False),
         ("/day 2026-10-05", ("nutrition", "day", "--date", "2026-10-05"), True, False, False),
         ("/day 2026-13-40", ("nutrition", "day", "--date", "2026-13-40"), True, False, False),  # the CLI validates
@@ -59,7 +64,8 @@ def parse(text: str | None) -> CliInvocation | UsageReply:
             False,
         ),
         ("/inbody", ("inbody", "trend"), False, False, False),
-        ("/daily", ("daily",), True, True, False),
+        ("/daily", ("daily", "--json"), True, True, False),
+        ("/daily full", ("daily",), True, True, False),
         (
             "/log lunch 닭가슴살 150 g, 햇반 1 pack",
             ("nutrition", "log", "--meal", "lunch", "--item", "닭가슴살", "150", "g", "--item", "햇반", "1", "pack"),
@@ -102,9 +108,9 @@ def parse(text: str | None) -> CliInvocation | UsageReply:
             False,
             True,
         ),
-        (f"/status@{BOT}", ("nutrition", "status"), True, False, False),
-        ("/status@MUSCLE50_Example_Bot", ("nutrition", "status"), True, False, False),
-        ("  /today  ", ("recommend", "--date", "2026-10-06"), False, False, False),
+        (f"/status@{BOT}", ("nutrition", "status", "--json"), True, False, False),
+        ("/status@MUSCLE50_Example_Bot", ("nutrition", "status", "--json"), True, False, False),
+        ("  /today  ", ("recommend", "--date", "2026-10-06", "--json"), False, False, False),
     ],
 )
 def test_commands_map_to_exact_cli_argv(
@@ -177,15 +183,17 @@ def test_everything_else_gets_help_or_usage(text: str | None, reason: UsageReaso
 
 HELP_LINES = [
     "muscle50 명령:",
-    "/today - 오늘 운동 추천",
-    "/status - 오늘 영양 상태(목표 대비)",
+    "/today [full] - 오늘 운동 추천 요약(full: 전체 리포트)",
+    "/status [full] - 오늘 영양 상태 요약, 목표 대비(full: 전체)",
     "/day [YYYY-MM-DD] - 그날 식사와 합계(기본: 오늘)",
     "/log <meal>[+] <food> <qty> <unit>[, <food> <qty> <unit> ...] - 식사 기록",
     "     meal: breakfast, lunch, dinner, snack, other. 끝에 +를 붙이면 같은 종류 식사를 하나 더 기록",
     "/void <meal_id> [이유] - 기록한 식사 취소(void)",
     "/show <meal_id> - 기록한 식사 하나 보기",
     "/inbody - InBody 체성분 추세",
-    "/daily - Garmin 동기화 후 오늘 계획(시간이 걸림)",
+    "/daily [full] - Garmin 동기화 후 오늘 계획 요약(시간이 걸림, full: 전체 리포트)",
+    "/unknown - Garmin UNKNOWN 세트가 있는 최근 운동(링크와 /refresh)",
+    "/refresh <activity_id> - Garmin에서 고친 운동 하나를 다시 받기",
     "/help - 이 목록",
 ]
 
@@ -207,7 +215,7 @@ def test_bot_reply_texts_are_pinned() -> None:
     assert usage_text("show") == "사용법: /show <meal_id>\n예: /show 2026-10-06-lunch-1"
     assert usage_text("void") == "사용법: /void <meal_id> [이유]\n예: /void 2026-10-06-snack-1 중복 기록"
     assert usage_text("day") == "사용법: /day [YYYY-MM-DD]\n예: /day 2026-10-05"
-    assert usage_text("status") == "사용법: /status\n예: /status"
+    assert usage_text("status") == "사용법: /status [full]\n예: /status full"
     assert undo_line("2026-10-06-lunch-1") == "취소: /void 2026-10-06-lunch-1"
     assert DAILY_PROGRESS_TEXT == (
         "daily 실행 중: 어제와 오늘의 Garmin 동기화 후 오늘 계획을 만듭니다. 끝나면 결과를 보냅니다."

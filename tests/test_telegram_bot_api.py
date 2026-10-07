@@ -130,6 +130,21 @@ def test_send_message_uses_html_parse_mode(monkeypatch: pytest.MonkeyPatch) -> N
     assert recorder.payload() == {"chat_id": 111, "text": "<pre>x</pre>", "parse_mode": "HTML"}
 
 
+def test_send_message_with_a_link_disables_the_link_preview(monkeypatch: pytest.MonkeyPatch) -> None:
+    # v1.1: a Garmin Connect link would add a preview card to every summary; plain <pre> replies are unchanged.
+    recorder = _install(monkeypatch, _ok({"message_id": 1}))
+    text = '<pre>x</pre>\n<a href="https://example.invalid/a/1">https://example.invalid/a/1</a>'
+    UrllibTelegramBotApi(TOKEN).send_message(111, text)
+    assert recorder.payload() == {
+        "chat_id": 111,
+        "text": text,
+        "parse_mode": "HTML",
+        "link_preview_options": {"is_disabled": True},
+    }
+    UrllibTelegramBotApi(TOKEN).send_message(111, "<pre>&lt;a href=</pre>\n<code>/refresh 1</code>")
+    assert "link_preview_options" not in recorder.payload()
+
+
 @pytest.mark.parametrize(("url", "expected"), [("", False), ("https://example.invalid/hook", True)])
 def test_webhook_is_set_reads_the_url_without_returning_it(
     monkeypatch: pytest.MonkeyPatch, url: str, expected: bool

@@ -74,7 +74,11 @@ class UrllibTelegramBotApi:
         return tuple(_update(item) for item in result)
 
     def send_message(self, chat_id: int, html: str) -> None:
-        self._call("sendMessage", {"chat_id": chat_id, "text": html, "parse_mode": "HTML"}, REQUEST_TIMEOUT_S)
+        payload: dict[str, Any] = {"chat_id": chat_id, "text": html, "parse_mode": "HTML"}
+        if "<a href=" in html:
+            # A Garmin Connect link would otherwise add a preview card to every summary.
+            payload["link_preview_options"] = {"is_disabled": True}
+        self._call("sendMessage", payload, REQUEST_TIMEOUT_S)
 
     def _call(self, method: str, payload: dict[str, Any], timeout_s: float) -> Any:
         request = urllib.request.Request(

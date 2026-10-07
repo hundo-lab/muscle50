@@ -1374,6 +1374,19 @@ def _alternative(
     return None
 
 
+def unknown_active_set_sequences(activity: NormalizedActivity) -> tuple[int, ...]:
+    """Sequences of the ACTIVE sets Garmin left UNKNOWN: the predicate of the UNKNOWN notices.
+
+    Shared with the Telegram `/refresh` before/after count, so both always count the same sets.
+    """
+    return tuple(
+        item.sequence
+        for item in activity.strength_sets
+        if item.set_type == "ACTIVE"
+        and classify_strength_set(item).unmapped_reason is UnmappedReason.UNKNOWN_SOURCE_LABEL
+    )
+
+
 def _unknown_notices(
     as_of: date, history: Sequence[tuple[date, NormalizedActivity]]
 ) -> tuple[UnknownExerciseNotice, ...]:
@@ -1382,12 +1395,7 @@ def _unknown_notices(
     for day, activity in history:
         if day < start:
             continue
-        sequences = tuple(
-            item.sequence
-            for item in activity.strength_sets
-            if item.set_type == "ACTIVE"
-            and classify_strength_set(item).unmapped_reason is UnmappedReason.UNKNOWN_SOURCE_LABEL
-        )
+        sequences = unknown_active_set_sequences(activity)
         if sequences:
             notices.append(
                 UnknownExerciseNotice(

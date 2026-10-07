@@ -3,6 +3,10 @@
 Spec: `docs/specs/telegram-bot.md`. Migration 없음(설정과 상태는 JSON 파일, DB schema 변경 없음). Output change: additive
 (새 `telegram` 명령 그룹. `muscle50 --help`에 한 줄이 늘어난다).
 
+> v1.1(Telegram Mobile Replies, 아래 [v1.1](#v11-telegram-mobile-replies) 절)부터 `/today`, `/status`, `/daily`의 기본
+> 답장은 짧은 요약이다. 이 문서의 v1 절에 있는 이 세 명령의 CLI 명령과 답장 설명은 이제 `full`을 붙였을 때(`/today full`
+> 등)의 동작이다. `/unknown`, `/refresh`는 v1.1에서 추가됐다.
+
 ## 목적과 non-goal
 
 - 휴대폰 Telegram에서 정해진 명령으로 muscle50을 쓴다. 오늘 운동 추천, 오늘 영양 상태, 식사 기록과 취소, InBody 추세,
@@ -269,3 +273,219 @@ chat 123456789: /daily interrupted by Ctrl+C; it will not be run again
 - stdout/stderr/stdin 교체는 process 전체에 적용된다. 메시지를 하나씩 처리하므로 안전하다. thread로 동시 처리를 넣으려면
   이 부분을 다시 설계해야 한다.
 - v1에 없는 것: `/log` 시간 지정, `/edit`, `/merge`, `/repeat`, 음식 검색, 예약 알림, 자동 시작, 자유 문장(LLM).
+
+# v1.1 Telegram Mobile Replies
+
+Spec: `docs/specs/telegram-mobile.md`. Migration 없음. CLI 출력 변경 없음(모든 CLI 명령의 text와 JSON은 그대로다).
+bot 답장만 바뀐다: `/today`, `/status`, `/daily`의 기본 답장이 요약이 되고, `/help`와 이 세 명령의 사용법 줄이 바뀌고,
+`/unknown`과 `/refresh`가 생긴다. `/day`, `/show`, `/log`, `/void`, `/inbody`의 답장과 모든 `full` 답장은 v1과 byte 단위로
+같다.
+
+## 목적과 non-goal
+
+- 휴대폰에서 바로 읽을 짧은 요약을 기본으로 보낸다. 전체 리포트는 `full`을 붙여서 본다.
+- Garmin에서 운동 이름이 UNKNOWN인 세트를 짧게 알려 주고, Garmin Connect 링크와 `/refresh <id>`로 휴대폰에서 고칠 수 있게
+  한다. UNKNOWN 세트는 근육별 세트 수와 진척 계산에서 빠지므로, 줄일수록 근육별 집계가 정확해진다.
+- Non-goal: 자동 refresh(운동마다 Garmin 요청 4~5번), 운동 이름 추측, LLM, 새 계산이나 판단, CLI 출력 변경, 예약 알림.
+
+## 명령
+
+| bot 명령 | 실행되는 CLI 명령(한 메시지에 한 번) | 답장 | migration 검사 | 진행 안내 |
+|---|---|---|---|---|
+| `/today` | `recommend --date <오늘> --json` | 요약 | 없음 | - |
+| `/today full` | `recommend --date <오늘>` | v1과 같은 CLI text | 없음 | - |
+| `/status` | `nutrition status --json` | 요약 | 있음 | - |
+| `/status full` | `nutrition status` | v1과 같은 CLI text | 있음 | - |
+| `/daily` | `daily --json` | 요약 | 있음 | `daily 실행 중: ...` |
+| `/daily full` | `daily` | v1과 같은 CLI text | 있음 | `daily 실행 중: ...` |
+| `/unknown` | `recommend --date <오늘> --json` | UNKNOWN 목록 | 없음 | - |
+| `/refresh <activity_id>` | `garmin refresh <activity_id>` | 전후 UNKNOWN 세트 수 | 있음 | `refresh 실행 중: ...` |
+
+- `full`은 소문자 `full` 한 단어만 받는다. `/today 2026-10-05`, `/status now`, `/daily Full`, `/today full x`는 사용법 답장이다.
+- `/unknown`은 인자가 없다.
+- `/refresh`의 id는 ASCII 숫자 1~20자리이고 0으로 시작하지 않는다(`[1-9][0-9]{0,19}`). `/refresh`, `/refresh abc`,
+  `/refresh 0`, `/refresh 1 2`, `/refresh -5`, 다른 문자 체계의 숫자(예: `١٢٣`)는 모두 사용법 답장이다.
+- `/refresh_<id>` 같은 한 번 탭 별칭은 없다(gate 1 결정). 요약의 `/refresh <id>`는 `<code>`로 보내므로 탭하면 복사되고,
+  붙여 넣어 보낸다.
+- `/daily`는 `daily --json`을 **한 번** 실행한다. 한 메시지가 Garmin 동기화를 두 번 하는 일은 없다. `/daily full`은 따로 보내는
+  메시지이고, 그것도 한 번만 동기화한다.
+
+## 요약 형식(합성 값)
+
+요약 본문은 `<pre>`(고정폭)이고, 링크·복사용 명령·마지막 줄은 `<pre>` 밖에 둔다. Telegram은 `<pre>`/`<code>` 안의 링크를
+누를 수 없게 하기 때문이다. 아래에서 `<pre>`와 `</pre>` 사이가 고정폭 본문이다.
+
+`/today`:
+
+```text
+<pre>오늘 추천 10-07
+주의: 회복 hold - hrv_status LOW
+주의: 세션 조정 reduce (회복이 아닌 규칙)
+
+근력: legs · 약 32분 · 9세트
+ 1. SQUAT/BARBELL_BACK_SQUAT 3x12 @ ~40 kg (무게 불확실)
+ 2. DEADLIFT/BARBELL_DEADLIFT 3x12 @ 40 kg
+ 3. LUNGE/DUMBBELL_LUNGE 3x8-12 @ ~12 kg (무게 불확실, 지난 무게 확인)
+회복: hold (readiness MODERATE 64, HRV LOW, 오늘 수면 기록 없음)
+수영: easy_continuous 약 800 m (마지막 수영 20일 전)
+영양: 오늘 기록 없음 (0 kcal이 아님)</pre>
+확인 필요: Garmin UNKNOWN 세트
+• 10-05 근력 11세트: https://connect.garmin.com/modern/activity/24610155225   (링크)
+  고친 뒤: /refresh 24610155225                                                 (<code>, 탭하면 복사)
+• 10-02 근력 16세트: https://connect.garmin.com/modern/activity/24576105658
+  고친 뒤: /refresh 24576105658
+기타 알림 6건 · 전체: /today full
+```
+
+- 머리줄은 `오늘 추천 MM-DD`다(`as_of`의 월-일).
+- **주의 줄**(머리줄 바로 아래):
+  - 회복 level이 `normal`이 아니면 `주의: 회복 <level> - <근거>`. 근거는 규칙이 발동한(`fired_level`이 있는) 관측값
+    `<field> <값>`이고, 이전 아침 기록 때문에 유지된 level이면 `이전 아침 기록으로 hold 유지`가 붙는다. 근거가 하나도 없으면
+    `주의: 회복 <level>`만 쓴다.
+  - 세션 조정 level이 회복 level과 다르면(어제 훈련량 같은 회복이 아닌 규칙) `주의: 세션 조정 <level> (회복이 아닌 규칙)`.
+- **근력**: `근력: <focus> · 약 <분>분 · <세트>세트`. 사용자가 고른 focus면 `(직접 선택)`이 붙는다. 계획이 없으면
+  `근력: 계획 없음 (사용할 근력 기록 없음)`.
+- **운동 줄**은 CLI `recommend`의 처방과 같은 규칙이다. 반복 수는 목표 반복 수, 없으면 범위(`8-12`). 무게는 CLI와 같은
+  `kg_text`(예: `50 kg`). 무게 신뢰도가 low이면 `~`를 붙이고 정확한 무게로 보이지 않게 한다. 그리고 `(무게 불확실)`을 붙이고,
+  지난 무게와 같은 조건이라는 근거가 없으면 `(무게 불확실, 지난 무게 확인)`을 붙인다. 무게 목표가 없으면 `(무게 목표 없음)`,
+  다음 단계 무게면 `@ 50 kg에서 다음 단계 위`, 보조/추가 방향을 모르면 `@ 50 kg에서 한 단계 (보조인지 추가 무게인지 확인)`,
+  비교 기록이 없으면 `(무게 직접 선택: 비교 기록 없음)`이다.
+- **회복**: `회복: <level> (readiness <level> <score>, HRV <상태>, <수면>)`. 값이 없으면 `알 수 없음`이다(0이 아님).
+  오늘 회복 행에 수면이 없으면(partial) `오늘 수면 기록 없음`, 오늘 회복 행이 없으면 괄호 전체가
+  `(오늘 회복 기록 없음 · 없음은 나쁜 회복이 아님)`이다. 수면 시간은 CLI와 같은 `HH:MM:SS`.
+- **수영**: `수영: <session_type> 약 <m> m (마지막 수영 N일 전)`. 최근 28일에 수영이 없으면 `(최근 28일 수영 기록 없음)`.
+  주의가 있으면 `· 주의 N건`.
+- **영양**(recommend JSON의 `nutrition`): 목표 없음 → `영양: 목표 없음`, 읽을 수 없음 → `영양: 읽을 수 없음 (<이유>)`, 식사
+  기록 없음 → `영양: 오늘 기록 없음 (0 kcal이 아님)`, 평가됨 → `영양: 식사 N끼 · <목표가 있는 영양소들> · 안내 N건`
+  (영양소 형식은 아래 `/status`와 같다). key가 없으면 `영양: 알 수 없음`.
+- **UNKNOWN 알림**: recommend JSON의 `strength.unknown_notices`(구조화된 값)를 쓴다. JSON 순서(최근 운동 먼저) 그대로
+  최대 **3개**를 보이고, 더 있으면 `외 N개 · /unknown`. 대상 기간은 recommend가 이미 쓰는 기간(오늘 전 14일, 오늘 운동은
+  제외)이다. 없으면 이 절 전체가 없다. 링크는 `https://connect.garmin.com/modern/activity/<id>`이고, id가 ASCII 숫자인지
+  확인한 뒤에만 링크에 넣는다.
+- **마지막 줄**은 항상 `기타 알림 N건 · 전체: /today full`이다. N은 notice 전체에서 요약이 이미 보여 준 것
+  (`strength_unknown_exercise` 전부, 회복 줄이 보여 주는 `recovery_row_partial`, `recovery_row_missing`)을 뺀 수이고, 0이어도
+  쓴다.
+
+`/daily`(성공):
+
+```text
+<pre>daily 10-07: 동기화 완료 (새 운동 0, 회복 2일 갱신)
+경고(activities): <단계 경고 그대로>
+
+근력: ...                       (/today와 같은 본문)</pre>
+확인 필요: Garmin UNKNOWN 세트
+...
+기타 알림 6건 · 전체: /today full
+```
+
+- 새 운동 수는 `activities.inserted`, 회복은 `recovery.outcomes` 중 `created`/`updated`인 날짜 수다. 값이 없으면
+  `알 수 없음`. 모든 단계의 경고를 그대로 한 줄씩 쓴다.
+- `전체: /today full`은 다시 동기화하지 않고 방금 저장된 데이터로 같은 계획 전체를 보여 준다.
+
+`/daily`(실패한 단계가 있음, 추천 요약은 만들지 않는다):
+
+```text
+<pre>daily 10-07: 실패 (recovery 단계)
+  recovery: <daily --json의 stages[].error 그대로>
+  경고(load_metrics): <경고 그대로></pre>
+추천은 만들지 않았습니다. 이미 받은 데이터는 저장되어 있습니다.
+저장된 데이터로 본 계획: /today · 다시 동기화: /daily
+```
+
+- 오류 문구는 CLI `daily`가 `error:` 뒤에 출력하는 값과 같다(text를 파싱하지 않는다). 오류 문구가 없는 실패 단계는
+  `오류 문구 없음`. spec 예시의 `/daily full` 대신 `/today`(저장된 데이터, 동기화 없음)와 `/daily`(다시 시도)를 안내한다
+  (gate 1 결정).
+
+`/status`:
+
+```text
+<pre>영양 10-07 (UTC+09:00): 식사 2끼, 3개
+kcal 845 / 목표 2200-2500 (below_range, 최소까지 1355)
+단백질 61.5 g 이상 (값 없는 항목 1개) / 목표 120 g (indeterminate)
+탄수화물 140 g / 목표 없음 (no_target)
+지방 알 수 없음 / 목표 없음 (no_target) (추정 포함)</pre>
+전체: /status full
+```
+
+- 네 영양소를 항상 이 순서로 쓴다. kcal은 단위 없이, 나머지는 ` g`을 값·목표·남은 양에 모두 붙인다.
+- 양: 완전하면 `consumed` 그대로. 값 없는 항목이 있으면 아는 항목의 합을 하한으로 `<합> 이상 (값 없는 항목 N개)`라고
+  쓴다(합계라고 하지 않는다). 그 합도 없으면 `알 수 없음`.
+- 목표: 정확값, `최소-최대`, 또는 `없음`. 괄호 안은 JSON의 상태 값 그대로이고, 상태에 따라 `, N 남음`, `, 최소까지 N`,
+  `, 최대까지 N`, `, N 초과`(초과량을 모르면 `, 초과량 알 수 없음`)가 붙는다. 추정 source가 섞이면 `(추정 포함)`.
+- 식사 기록이 없으면 머리줄이 `영양 MM-DD: 오늘 기록 없음 (0 kcal이 아님)`이다.
+
+`/unknown`:
+
+```text
+<pre>Garmin UNKNOWN 세트가 있는 운동 2개 (최근 14일, 오늘 운동 제외)</pre>
+• 10-05 근력 11세트 (세트 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13): https://connect.garmin.com/modern/activity/24610155225
+  고친 뒤: /refresh 24610155225
+• ...
+Garmin Connect에서 운동 이름을 고친 뒤 /refresh로 다시 받습니다.
+```
+
+- 개수 제한 없이 모두 보인다. 없으면 `Garmin UNKNOWN 세트가 있는 운동 없음 (최근 14일, 오늘 운동 제외)`.
+
+`/refresh 24610155225`:
+
+```text
+refresh 실행 중: Garmin에서 운동 24610155225를 다시 받습니다. 끝나면 결과를 보냅니다.
+```
+
+```text
+refresh 24610155225 완료: 10-05 근력, UNKNOWN 11 → 0세트
+```
+
+- 아직 UNKNOWN이 남으면 `아직 UNKNOWN 2세트: Garmin Connect에서 고친 뒤 /refresh <id>를 다시 보내세요.`가 붙는다. 날짜를
+  모르면 `날짜 알 수 없음`.
+- 세트 수는 refresh 전과 후에 DB를 read-only(`mode=ro` + `PRAGMA query_only`, migrate 없음)로 읽어 센다. recommend의 UNKNOWN
+  notice와 **같은 판정 함수**(`unknown_active_set_sequences`)를 쓰므로, 날짜와 상관없이 그 운동의 notice 세트 수와 같다.
+- 전후 값을 구할 수 없거나(읽기 실패) 근력 운동이 아니면, 추측하지 않고 CLI 결과 첫 줄(`Garmin activity refresh complete`)만
+  보낸다.
+- 어느 경우든 CLI 결과의 `경고: ` 줄(Garmin endpoint 경고)을 그대로 붙인다.
+- 거부와 실패:
+  - 형식이 틀린 id → 사용법 답장. 아무것도 실행하지 않는다.
+  - 적용 안 된 migration → v1과 같은 `오류: DB에 아직 적용하지 않은 migration ...`. 진행 안내도 없다.
+  - 저장되지 않은 activity → 진행 안내 뒤 CLI 거부 그대로(`오류: local Garmin activity not found: <id>`). Garmin에 접속하지
+    않는다.
+  - Garmin 로그인이 필요함 → 진행 안내 뒤
+    `오류: Garmin에 다시 로그인해야 합니다. PC 터미널에서 muscle50 garmin refresh <id>를 한 번 실행하세요(로그인한 뒤 그대로 refresh됩니다).`
+    로그인 prompt가 빈 stdin에서 바로 끝나므로 RAW와 DB에 아무것도 쓰지 않는다.
+  - 그 밖의 CLI 오류(exit 1)는 v1처럼 `오류:` 줄 그대로.
+
+## 규칙
+
+- 요약의 숫자, 무게, 상태 이름, 운동 label은 같은 명령의 JSON 값 그대로다. 다시 계산하거나 반올림을 바꾸지 않는다. JSON에
+  없는 값은 `알 수 없음`이나 구체적인 상태(`오늘 수면 기록 없음`, `0 kcal이 아님`)로 쓰고 0으로 채우지 않는다.
+- 같은 JSON이면 요약은 byte 단위로 같다.
+- 메시지 나누기: `<pre>` 본문은 v1 규칙(줄 경계, 손실 없음)으로 나누고, 그 뒤 rich 묶음(UNKNOWN 한 항목 = 두 줄)을 순서대로
+  4096 UTF-16 단위 안에 채운다. 한 묶음은 한 메시지 안에 둔다. 보통 요약은 메시지 하나다.
+- 링크가 있는 메시지(`<a href=`가 있을 때만)는 `link_preview_options: {"is_disabled": true}`로 보내 Garmin Connect 미리보기
+  카드가 붙지 않게 한다. 링크가 없는 메시지는 v1과 같은 요청이다.
+- stdout이 JSON이면 exit 코드와 상관없이 요약한다(`daily`는 실패 단계가 있으면 JSON을 출력하고 exit 1). stdout이 비어 있으면
+  v1처럼 stderr의 `오류:` 줄을 보낸다.
+- stdout이 JSON이 아니면 v1처럼 text로 보내고, 콘솔에 `chat N: /today reply was not JSON; relayed as text`를 남긴다.
+- JSON 모양이 예상과 다르면(key 없음, 타입이 다름, 모르는 상태 값, 숫자가 아닌 activity id) bot은 멈추지 않고
+  `오류: 결과를 요약하지 못했습니다. 전체: /today full`(`/status`는 `/status full`, `/daily`는
+  `오류: daily는 끝났지만 결과를 요약하지 못했습니다 (exit N). 저장된 데이터로 본 전체 계획: /today full`)로 답하고 콘솔에
+  `chat N: /today summary failed (KeyError)`를 남긴다.
+- 콘솔 줄은 v1과 같다(`chat N: /today -> exit 0`, `full`이어도 명령 이름만). `/refresh`의 전후 세트 수를 읽지 못하면
+  `chat N: /refresh could not count UNKNOWN sets (<예외 종류>)`를 남긴다.
+- bot이 쓰는 고정 문구는 `domain/telegram_commands.py`, 데이터로 만드는 요약 형식은 `presentation/telegram_summary.py`에 있다.
+
+## Known issues / limitations (v1.1)
+
+- **오늘 한 운동의 UNKNOWN은 다음 날부터 보인다.** recommend는 오늘 한 근력 운동을 계획에서 빼므로, `/today`, `/daily`,
+  `/unknown`에도 오늘 운동의 UNKNOWN이 나오지 않는다. `/refresh <id>`는 오늘 운동에도 쓸 수 있다.
+- UNKNOWN 목록은 recommend의 기간(오늘 전 14일)만 본다. 더 오래된 운동은 `/refresh <id>`로 직접 다시 받을 수 있다.
+- 자동 refresh가 없다. Garmin에서 고친 운동은 `/refresh`를 보내야 반영된다.
+- Garmin Connect 링크(`https://connect.garmin.com/modern/activity/<id>`)가 휴대폰에서 웹으로 열릴지 앱으로 열릴지는 기기
+  설정에 따른다. URL 형식은 live 확인 전까지 검증되지 않았다.
+- `<code>`를 탭해서 복사하는 동작은 Telegram 앱 버전에 따른다. 복사가 안 되면 길게 눌러 복사한다.
+- 요약은 리포트의 일부만 보여 준다. 근거, region 순위, 진척 근거, 전체 notice는 `full`로 본다.
+- 요약은 JSON key 이름에 의존한다. CLI JSON이 바뀌면 golden 기반 테스트가 잡고, 실행 중에는 bot이 멈추지 않고
+  "요약하지 못했습니다"와 `full` 안내로 답한다.
+- `/refresh`의 `경고: ` 줄은 `garmin refresh` text 출력의 접두어에 의존한다(`garmin refresh`에는 `--json`이 없다). v1의
+  `Recorded meal` 줄과 같은 종류의 결합이다.
+- `/daily`가 실패하면 요약에 계획이 없다. 저장된 데이터로 본 계획은 `/today`로 따로 본다.
+- 이 절의 답장 형식은 live 확인(통합 후 사용자 게이트) 전까지 실제 Telegram 앱에서 보이는 모양을 확인하지 않았다.

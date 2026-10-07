@@ -12,6 +12,7 @@ from pathlib import Path
 from time import sleep
 from typing import Literal
 
+from muscle50.application.activity_unknown_sets import ActivityUnknownSets, CountActivityUnknownSets
 from muscle50.application.backfill_activity_load_metrics import BackfillActivityLoadMetrics
 from muscle50.application.daily_sync import DailyMode, RunDailySync, daily_sync_start
 from muscle50.application.food_lookup import ResolveFoodReference
@@ -144,6 +145,7 @@ from muscle50.presentation.sync_coverage_terminal import (
     render_sync_coverage_json,
 )
 from muscle50.presentation.telegram_format import render_telegram_check, telegram_messages
+from muscle50.presentation.telegram_summary import TelegramSummaries
 from muscle50.presentation.terminal import (
     render_activity_load_backfill_result,
     render_daily_sync,
@@ -1450,6 +1452,8 @@ def _telegram_run() -> int:
             today=lambda: _today(),
             pending_migrations=lambda: pending_migrations(paths.database_path),
             format_reply=telegram_messages,
+            summaries=TelegramSummaries(),
+            unknown_sets=lambda activity_id: _telegram_unknown_sets(paths, activity_id),
             log=log,
             sleep=lambda seconds: _telegram_sleep(seconds),
             clock=lambda: _now().timestamp(),
@@ -1461,6 +1465,14 @@ def _telegram_run() -> int:
         pass
     print("\n취소되었습니다.", file=sys.stderr)
     return 130
+
+
+def _telegram_unknown_sets(paths: AppPaths, source_activity_id: str) -> ActivityUnknownSets | None:
+    # `/refresh` before/after count. Read-only (mode=ro + query_only): no ensure_directories(), no migrate().
+    try:
+        return CountActivityUnknownSets(SqliteAnalyticsReader(paths.database_path)).execute(source_activity_id)
+    except AnalyticsDatabaseError:
+        return None
 
 
 def _telegram_error(exc: Exception) -> str:

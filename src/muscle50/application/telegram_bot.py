@@ -11,31 +11,41 @@ held here:
 - Migrations: a command whose CLI handler migrates is refused while the code has a migration the
   database lacks (the bot never applies one; that is a human gate).
 - Network and API errors are logged and retried with backoff; `run` stops only on Ctrl+C.
+- v1.1 summaries: `/today`, `/status`, `/daily` and `/unknown` run the CLI's `--json` form once and
+  reply with a short summary of that document (`ReplySummaries`); `full` is the v1 text. `/refresh`
+  runs `garmin refresh` and reports the activity's UNKNOWN set count read before and after it.
 
 The Bot API token never reaches this module: the adapter holds it and redacts its messages.
 """
 
 from __future__ import annotations
 
+import json
 import re
 import traceback
 from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import Protocol
+from typing import Any, Protocol
 
+from muscle50.application.activity_unknown_sets import ActivityUnknownSets
 from muscle50.domain.telegram_commands import (
     DAILY_PROGRESS_TEXT,
     GARMIN_LOGIN_TEXT,
     MIGRATION_STATUS_UNKNOWN_TEXT,
     CliInvocation,
+    ReplyKind,
     UsageReason,
     UsageReply,
+    daily_summary_failed_text,
     empty_output_text,
     parse_bot_message,
     pending_migration_text,
+    refresh_login_text,
+    refresh_progress_text,
     stale_text,
+    summary_failed_text,
     undo_line,
     unexpected_error_text,
     usage_reply_text,
@@ -68,6 +78,10 @@ class TelegramTokenRejectedError(TelegramUnavailableError):
 
 class TelegramStateError(RuntimeError):
     """The handled-updates state file cannot be read or written."""
+
+
+class SummaryUnavailableError(ValueError):
+    """The CLI JSON did not have the shape a summary reads; the message is the underlying error type."""
 
 
 @dataclass(frozen=True)
@@ -139,6 +153,22 @@ class CliCommandRunner(Protocol):
     def run(self, argv: Sequence[str]) -> CommandOutcome: ...
 
 
+class ReplySummaries(Protocol):
+    def summary(self, kind: ReplyKind, document: Any) -> Sequence[str]:
+        """HTML messages summarizing one CLI JSON document; `SummaryUnavailableError` on an unexpected shape."""
+        ...
+
+    def refresh(
+        self,
+        activity_id: str,
+        before: ActivityUnknownSets | None,
+        after: ActivityUnknownSets | None,
+        cli_stdout: str,
+    ) -> Sequence[str]:
+        """HTML messages for a successful `garmin refresh`."""
+        ...
+
+
 class CheckTelegramBot:
     """`telegram check`: state read, getMe and getWebhookInfo. Reads no message and writes nothing."""
 
@@ -163,6 +193,8 @@ class RunTelegramBot:
         today: Callable[[], date],
         pending_migrations: Callable[[], tuple[int, ...] | None],
         format_reply: Callable[[str], Sequence[str]],
+        summaries: ReplySummaries,
+        unknown_sets: Callable[[str], ActivityUnknownSets | None],
         log: Callable[[str], None],
         sleep: Callable[[float], None],
         clock: Callable[[], float],
@@ -175,6 +207,8 @@ class RunTelegramBot:
         self._today = today
         self._pending_migrations = pending_migrations
         self._format_reply = format_reply
+        self._summaries = summaries
+        self._unknown_sets = unknown_sets
         self._log_sink = log
         self._sleep = sleep
         self._clock = clock
@@ -275,16 +309,21 @@ class RunTelegramBot:
                 self._log(f"chat {chat_id}: /{name} not run (migration {numbers} not applied)")
                 self._reply(chat_id, pending_migration_text(pending))
                 return False
+        refresh_id = invocation.activity_id if invocation.reply is ReplyKind.REFRESH else None
         if invocation.is_daily:
             self._reply(chat_id, DAILY_PROGRESS_TEXT)
+        elif refresh_id is not None:
+            self._reply(chat_id, refresh_progress_text(refresh_id))
+        # Read-only, before the refresh writes anything.
+        before = self._count_unknown(chat_id, refresh_id) if refresh_id is not None else None
         self._running = (name, chat_id)
         try:
             outcome = self._commands.run(invocation.argv)
         except EOFError:
-            # `daily` asked for a Garmin login on stdin, which the bot does not have.
+            # `daily`/`garmin refresh` asked for a Garmin login on stdin, which the bot does not have.
             self._running = None
             self._log(f"chat {chat_id}: /{name} needs a Garmin login in a terminal")
-            self._reply(chat_id, GARMIN_LOGIN_TEXT)
+            self._reply(chat_id, GARMIN_LOGIN_TEXT if refresh_id is None else refresh_login_text(refresh_id))
             return False
         except Exception as exc:
             self._running = None
@@ -299,6 +338,13 @@ class RunTelegramBot:
         if outcome.usage_error:
             self._reply(chat_id, usage_reply_text(UsageReply(UsageReason.MALFORMED, name)))
             return False
+        if refresh_id is not None and outcome.exit_code == 0:
+            after = self._count_unknown(chat_id, refresh_id)
+            self._send_all(chat_id, self._summaries.refresh(refresh_id, before, after, outcome.stdout))
+            return False
+        if invocation.reply not in (ReplyKind.TEXT, ReplyKind.REFRESH) and outcome.stdout:
+            self._summary_reply(chat_id, invocation, outcome)
+            return False
         text = _reply_text(outcome)
         if invocation.adds_undo and outcome.exit_code == 0:
             meal_id = _recorded_meal_id(outcome.stdout)
@@ -309,8 +355,41 @@ class RunTelegramBot:
         self._reply(chat_id, text)
         return False
 
+    def _count_unknown(self, chat_id: int, activity_id: str) -> ActivityUnknownSets | None:
+        """The read-only UNKNOWN count; any failure is None (the reply then falls back to the CLI headline)."""
+        try:
+            return self._unknown_sets(activity_id)
+        except Exception as exc:
+            self._log(f"chat {chat_id}: /refresh could not count UNKNOWN sets ({type(exc).__name__})")
+            return None
+
+    def _summary_reply(self, chat_id: int, invocation: CliInvocation, outcome: CommandOutcome) -> None:
+        """A summary of the CLI JSON, whatever the exit code (`daily` prints JSON and exits 1 on a failed stage)."""
+        name = invocation.command
+        try:
+            document = json.loads(outcome.stdout)
+        except ValueError:
+            self._log(f"chat {chat_id}: /{name} reply was not JSON; relayed as text")
+            self._reply(chat_id, _reply_text(outcome))
+            return
+        try:
+            messages = self._summaries.summary(invocation.reply, document)
+        except SummaryUnavailableError as exc:
+            self._log(f"chat {chat_id}: /{name} summary failed ({exc})")
+            failed = (
+                daily_summary_failed_text(outcome.exit_code)
+                if invocation.reply is ReplyKind.DAILY_SUMMARY
+                else summary_failed_text(name)
+            )
+            self._reply(chat_id, failed)
+            return
+        self._send_all(chat_id, messages)
+
     def _reply(self, chat_id: int, text: str) -> None:
-        for html in self._format_reply(text):
+        self._send_all(chat_id, self._format_reply(text))
+
+    def _send_all(self, chat_id: int, messages: Sequence[str]) -> None:
+        for html in messages:
             if not self._send(chat_id, html):
                 return
 

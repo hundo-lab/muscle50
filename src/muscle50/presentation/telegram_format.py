@@ -5,12 +5,15 @@ column alignment of the CLI text survives. Telegram allows 4096 characters per m
 UTF-16 code units (an emoji counts 2). A longer reply is cut into consecutive pieces, preferably
 at line ends; a single line longer than a message is cut inside the line. Nothing is dropped:
 ``"".join(split_reply(text)) == text``. The `telegram check` report is ASCII apart from the path.
+v1.1 summaries (`BotReply`) add a tail after the ``<pre>`` body with links and ``<code>`` commands;
+`reply_messages` packs both under the same limit without loss.
 """
 
 from __future__ import annotations
 
 import html
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 from muscle50.application.telegram_bot import TelegramCheck
@@ -66,6 +69,78 @@ def telegram_messages(text: str) -> list[str]:
 
 def _pre(text: str) -> str:
     return f"{_PRE_OPEN}{html.escape(text, quote=False)}{_PRE_CLOSE}"
+
+
+# --- v1.1 summaries: a <pre> body plus a rich tail outside <pre> -------------------------------------
+# Telegram does not link or mark entities inside <pre>/<code>, so links and tap-to-copy commands go after it.
+
+
+@dataclass(frozen=True)
+class Link:
+    url: str
+
+
+@dataclass(frozen=True)
+class Code:
+    text: str
+
+
+RichLine = tuple[str | Link | Code, ...]
+
+
+@dataclass(frozen=True)
+class BotReply:
+    pre: str
+    """Monospace body (plain text; escaped when rendered)."""
+    rich: tuple[tuple[RichLine, ...], ...] = ()
+    """Groups of lines after the body; a group (for example one UNKNOWN item) stays in one message."""
+
+    def plain_text(self) -> str:
+        lines = [self.pre] if self.pre else []
+        lines.extend("".join(_plain_part(part) for part in line) for group in self.rich for line in group)
+        return "\n".join(lines)
+
+
+def reply_messages(reply: BotReply) -> list[str]:
+    """``reply`` as HTML messages within the Telegram limit; every unit appears once, in order.
+
+    Units: each `split_reply` piece of the body as ``<pre>``, then each rich group. Units are packed
+    in order into messages joined by a newline; a group over the limit is cut at its line ends.
+    """
+    units = telegram_messages(reply.pre) if reply.pre else []
+    for group in reply.rich:
+        units.extend(_pack([_rich_html(line) for line in group]))
+    return _pack(units)
+
+
+def _pack(units: list[str]) -> list[str]:
+    messages: list[str] = []
+    for unit in units:
+        if messages and utf16_units(messages[-1]) + 1 + utf16_units(unit) <= TELEGRAM_MESSAGE_LIMIT:
+            messages[-1] = f"{messages[-1]}\n{unit}"
+        else:
+            messages.append(unit)
+    return messages
+
+
+def _rich_html(line: RichLine) -> str:
+    parts = []
+    for part in line:
+        if isinstance(part, Link):
+            parts.append(f'<a href="{html.escape(part.url, quote=True)}">{html.escape(part.url, quote=False)}</a>')
+        elif isinstance(part, Code):
+            parts.append(f"<code>{html.escape(part.text, quote=False)}</code>")
+        else:
+            parts.append(html.escape(part, quote=False))
+    return "".join(parts)
+
+
+def _plain_part(part: str | Link | Code) -> str:
+    if isinstance(part, Link):
+        return part.url
+    if isinstance(part, Code):
+        return part.text
+    return part
 
 
 def render_telegram_check(config_path: Path, allowed_chat_ids: Iterable[int], check: TelegramCheck) -> str:

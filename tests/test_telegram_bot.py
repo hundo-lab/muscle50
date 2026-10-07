@@ -263,8 +263,8 @@ def _seed_reads(capsys: pytest.CaptureFixture[str], root: Path) -> None:
 # --- AC1: read commands --------------------------------------------------------------------------
 
 READ_COMMANDS = [
-    ("/today", ("recommend", "--date", "2026-10-06")),
-    ("/status", ("nutrition", "status")),
+    ("/today full", ("recommend", "--date", "2026-10-06")),
+    ("/status full", ("nutrition", "status")),
     ("/day", ("nutrition", "day")),
     ("/day 2026-10-05", ("nutrition", "day", "--date", "2026-10-05")),
     (f"/show {LUNCH}", ("nutrition", "meal", "show", LUNCH)),
@@ -499,7 +499,7 @@ def test_state_saved_before_command_runs(
         return main(argv)
 
     monkeypatch.setattr(cli, "main", spy)
-    _bot(monkeypatch, capsys, "/status", "/day")
+    _bot(monkeypatch, capsys, "/status full", "/day")
     assert seen == [[1], [1, 2]]
 
 
@@ -528,7 +528,7 @@ def test_message_sent_before_start_is_not_run(
     _catalog(capsys)
     before = _tables(_database(home))
     stale = NOW_TS - 61
-    fake = FakeTelegramApi([update(1, LOG_TEXT, sent=stale), update(2, "/status", sent=NOW_TS - 60)])
+    fake = FakeTelegramApi([update(1, LOG_TEXT, sent=stale), update(2, "/status full", sent=NOW_TS - 60)])
     _, err = _run_bot(monkeypatch, capsys, fake)
     replies = fake.replies()
     assert replies[0] == stale_text(datetime.fromtimestamp(stale, UTC).astimezone())
@@ -784,7 +784,7 @@ def test_daily_sends_progress_then_the_daily_stdout(
         raise GarminConnectorError("Garmin 인증에 실패했습니다.")
 
     monkeypatch.setattr(PythonGarminConnector, "authenticate", refused)
-    replies = _bot(monkeypatch, capsys, "/daily", "/help")
+    replies = _bot(monkeypatch, capsys, "/daily full", "/help")
     code, out, err = _cli(capsys, "daily")
     assert code == 1
     assert err.startswith("muscle50 daily 2026-10-06: syncing 2026-10-05..2026-10-06")
@@ -906,7 +906,7 @@ def test_commands_that_migrate_are_refused_while_a_migration_is_pending(
         f"/show {LUNCH}",
         f"/void {LUNCH}",
         "/daily",
-        "/today",
+        "/today full",
         "/inbody",
     )
     refusal = pending_migration_text((10,))
@@ -941,7 +941,7 @@ def test_fresh_home_without_a_database_runs_the_command(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
 ) -> None:
     assert pending_migrations(_database(home)) == ()
-    replies = _bot(monkeypatch, capsys, "/status")
+    replies = _bot(monkeypatch, capsys, "/status full")
     assert replies[0] == _ok(capsys, "nutrition", "status").removesuffix("\n")
     assert pending_migrations(_database(home)) == ()
 
