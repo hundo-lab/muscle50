@@ -109,6 +109,8 @@ muscle50/
 ├─ imports\inbody\samsung-health\latest.json   # Android export 투입 위치 (README 권장)
 ├─ db\muscle50.sqlite3
 ├─ config\nutrition_targets.json # 첫 `target set` 때만 생성
+├─ config\telegram.json          # bot token + 허용 chat id. 사용자가 직접 만듦
+├─ config\telegram_state.json    # 처리한 update id. `telegram run`이 첫 허용 메시지 때 생성
 └─ tmp\
 ```
 
@@ -167,6 +169,12 @@ muscle50/
 | InBody 네트워크(OAuth/계정) 연동 | `infrastructure/inbody/auth.py`, `connector.py`, `authenticated_source.py`, `synthetic.py`, `application/sync_latest_inbody.py` | 스텁 | Protocol 경계와 합성 구현뿐이다. **테스트에서만 사용**하고 CLI와는 연결되지 않았다 [코드 grep]. 접근 경로 결정은 `docs/inbody-access-decision.md`에 있다. |
 | InBody smoke 진입점 | `infrastructure/inbody/samsung_health_smoke.py` | 스텁(개발용) | 공용 CLI와는 의도적으로 연결하지 않았다. |
 
+### 4-5. Telegram
+
+| 기능 | 관련 파일 / 명령 | 완성도 | 비고 |
+|---|---|---|---|
+| Telegram 명령어 bot v1 | `telegram check\|run` / `application/telegram_bot.py`, `domain/telegram_commands.py`, `infrastructure/telegram/`, `presentation/telegram_format.py` | 부분 | 고정 명령(`/today` `/status` `/day` `/log` `/void` `/show` `/inbody` `/daily`)을 `cli.main`으로 실행하고 CLI text를 답한다. stdlib `urllib` long polling, 허용 chat 목록, token 비출력, migration 없음. LLM 자유 문장은 v2. 실제 Telegram 확인은 사용자 수동 단계다. 상세: `docs/telegram-bot.md`. |
+
 ---
 
 ## 5. 데이터 모델
@@ -178,6 +186,8 @@ muscle50/
 | SQLite `muscle50.sqlite3` | 테이블 33개 [코드: migration 001~010의 `CREATE TABLE` 수] | migration 001~010 |
 | RAW 파일 | Garmin JSON, original zip, recovery endpoint JSON, InBody JSON | immutable, sha256 content-addressed, DB에서 상대 경로와 hash로 추적한다. |
 | `config/nutrition_targets.json` | versioned JSON(`schema_version` 1, 값은 decimal 문자열) | DB가 아닌 파일로 둔다(의도된 결정). |
+| `config/telegram.json` | JSON(`bot_token`, `allowed_chat_ids`) | 사용자가 직접 만든다. muscle50은 만들지 않는다. |
+| `config/telegram_state.json` | versioned JSON(`schema_version` 1, bot id, 최근 처리한 update id 100개) | `telegram run`이 첫 허용 메시지 때 만든다. 원자적 쓰기. |
 | Garmin token | `auth/garmin/` 디렉터리 | garminconnect 라이브러리가 관리한다. |
 
 ### 5-2. 테이블 (migration별) [코드: `src/muscle50/infrastructure/sqlite/migrations/*.sql`]
@@ -236,6 +246,7 @@ muscle50
 ├─ recommend --date D [--focus push|pull|legs|shoulders] [--avoid MUSCLE ...] [--json]
 ├─ daily [--date D] [--focus F] [--avoid M ...] [--json] | --after-workout [--date D] [--json]
 ├─ inbody sync --file PATH [--show-values]
+├─ telegram check | run      # Telegram 명령어 bot v1(long polling, docs/telegram-bot.md)
 └─ nutrition
    ├─ food add --id --name [--alias ...] --per QTY UNIT --kcal --protein --carbs --fat --source --accuracy [--source-ref] [--json]
    ├─ food fact add <food_id> (같은 fact 플래그) [--json]

@@ -1,7 +1,7 @@
 ---
 id: telegram-bot
 title: Telegram Command Bot v1
-status: draft
+status: integrated
 migration: none
 output_change: additive
 user_gates: [design, integration, push]
@@ -74,7 +74,7 @@ Telegram에서 보내는 명령(합성 예시):
 ```text
 Recorded meal 2026-10-06-lunch-1.
 ...
-Undo: /void 2026-10-06-lunch-1
+취소: /void 2026-10-06-lunch-1
 ```
 
 허용되지 않은 chat에서 온 메시지에는 답하지 않는다. `telegram run` 콘솔에만 한 줄을 남긴다(합성 예시).
@@ -106,10 +106,11 @@ ignored message from chat 987654321 (not in allowed_chat_ids)
     - 음식은 Food Name Lookup v1 규칙(ID, 또는 정확히 같은 이름/alias)을 그대로 따른다.
     - 하나라도 틀리면 아무것도 쓰지 않는다(CLI와 같은 all-or-nothing).
     - 시간(`--time`)은 v1 문법에 없다. 쓸 수 있게 할지는 설계에서 정한다.
-  - `/log` 성공 답장 끝에 취소 명령 한 줄(`Undo: /void <meal_id>`)을 붙인다. 이것은 bot 답장에만 붙는다.
+  - `/log` 성공 답장 끝에 취소 명령 한 줄(`취소: /void <meal_id>`)을 붙인다. 이것은 bot 답장에만 붙는다.
   - 형식이 틀린 명령과 모르는 명령에는 그 명령의 사용법을 답하고 아무것도 쓰지 않는다. 비슷한 명령을 추측해 실행하지
     않는다.
-  - `/daily`는 Garmin 네트워크를 쓰므로 시작할 때 "running daily..." 같은 짧은 답을 먼저 보낸다. 결과는 끝난 뒤 보낸다.
+  - `/daily`는 Garmin 네트워크를 쓰므로 시작할 때 짧은 한국어 진행 답("daily 실행 중: 어제와 오늘의 Garmin 동기화 후 오늘
+    계획을 만듭니다. 끝나면 결과를 보냅니다.")을 먼저 보낸다. 결과는 끝난 뒤 보낸다.
     실행 중에 온 다른 메시지는 끝난 뒤 순서대로 처리한다.
 - 답장 형식:
   - CLI text를 그대로 보낸다. 줄 정렬이 유지되도록 고정폭 형식으로 보내는 것을 기본으로 하고, 방법(HTML `<pre>` +
@@ -122,8 +123,11 @@ ignored message from chat 987654321 (not in allowed_chat_ids)
     transaction 규칙에 따라 부분 기록이 남지 않는다.
   - Ctrl+C는 진행 중인 명령을 끝까지 처리하고 멈출지 바로 멈출지를 설계에서 정한다. exit 130이다.
 - 데이터 경로:
-  - bot은 CLI와 같은 `AppPaths`(production 또는 `MUSCLE50_HOME`)를 쓴다. 쓰기 명령은 CLI와 같은 migrate와
-    ensure_directories 경로를 탄다. 읽기 명령은 CLI의 read-only 규칙을 그대로 따른다.
+  - bot은 CLI와 같은 `AppPaths`(production 또는 `MUSCLE50_HOME`)를 쓴다. 각 명령은 CLI와 같은 migrate와
+    ensure_directories 경로를 탄다.
+  - CLI의 nutrition handler는 모든 nutrition 하위 명령에서 migrate를 부른다. 그래서 적용하지 않은 migration이 있으면
+    `/log`, `/void`, `/daily`뿐 아니라 `/status`, `/day`, `/show`도 실행하지 않고 `오류:`로 답한다(DB를 read-only로 열어
+    확인한다. bot은 migration을 적용하지 않는다). read-only라 이 검사가 없는 명령은 `/today`와 `/inbody`뿐이다.
 - 테스트:
   - 실제 Telegram이나 네트워크를 쓰지 않는다. Bot API client를 가짜로 바꿔 넣는다. 모든 데이터는 합성 값이다.
   - 실제 bot 확인은 통합 뒤 사용자가 자기 token으로 한다(아래 한계 참고).
@@ -133,7 +137,7 @@ ignored message from chat 987654321 (not in allowed_chat_ids)
 - [ ] AC1: 가짜 API로 허용 chat에서 온 `/today`, `/status`, `/day`, `/show`, `/inbody`의 답장 본문이 같은 날짜와
       데이터의 CLI stdout text와 byte 단위로 같다.
 - [ ] AC2: `/log lunch 닭가슴살 150 g, 햇반 1 pack`이 `nutrition log --meal lunch --item 닭가슴살 150 g --item 햇반 1 pack`과
-      같은 행을 저장하고, 같은 text에 `Undo: /void <meal_id>` 줄을 붙여 답한다. `lunch+`는 `--additional`과 같다.
+      같은 행을 저장하고, 같은 text에 `취소: /void <meal_id>` 줄을 붙여 답한다. `lunch+`는 `--additional`과 같다.
       item 하나가 틀리면(모르는 음식, 잘못된 수량) `오류:` 답과 함께 DB가 변하지 않는다.
 - [ ] AC3: `/void <meal_id> <reason>`이 `nutrition meal void`와 같은 결과를 저장하고 답한다. 없는 meal이나 이미 void된
       meal이면 `오류:` 답과 함께 DB가 변하지 않는다.
@@ -156,6 +160,17 @@ ignored message from chat 987654321 (not in allowed_chat_ids)
 - 이 PC에서 `telegram run`이 실행 중일 때만 답한다. PC가 꺼져 있거나 잠자기 상태면 답하지 않는다.
 - 실제 Telegram 동작(token, chat id, 휴대폰 표시)은 테스트가 아닌 사용자의 수동 확인이다. 통합 뒤
   `telegram check` → `telegram run` → 휴대폰에서 `/help`, `/status` 순서로 확인한다.
+- 구현·검증에서 확인한 한계(상세: `docs/telegram-bot.md` "Known issues / limitations"):
+  - Windows에서 Ctrl+C는 진행 중인 long poll(최대 약 10초)이나 긴 Garmin 호출이 끝날 때까지 늦게 반영될 수 있다.
+  - at-most-once의 대가: 명령 도중 꺼지거나 Ctrl+C면 답장이 없다. 그 뒤 `/log lunch+`를 다시 보내면 식사가 중복
+    기록된다(`/log lunch`는 기존 중복 거부가 막는다). 다시 보내기 전에 `/day`로 확인한다.
+  - Telegram bot 대화는 종단간 암호화가 아니다. 식사와 체성분 값이 Telegram 서버를 지난다. 허용 목록에는 개인 chat id만
+    넣는다(group id를 넣으면 그 group의 모든 사람이 명령할 수 있다).
+  - 쉼표가 들어가거나 `-`로 시작하는 음식 이름은 bot으로 기록할 수 없다(food ID를 쓴다). `-`로 시작하는 단어는 어떤
+    명령에서도 형식 오류이며, `/void` 사유도 마찬가지다(CLI flag 주입 방지).
+  - 새 migration을 통합한 뒤에는 백업하고 PC 터미널에서 먼저 적용한 다음 `telegram run`을 다시 시작한다. bot은
+    migration을 적용하지 않고, 그 전까지 migrate하는 명령을 거부한다.
+  - 실제 Telegram의 `<pre>` 표시와 Windows 콘솔의 한국어 줄 표시는 테스트가 아닌 수동 확인 대상이다.
 - 후속 후보:
   - v2: 자유 문장을 LLM(Claude API)으로 해석한다. 해석 결과를 "이렇게 기록할까요?"로 확인받은 뒤 위 명령을 부른다.
     숫자와 판단은 계속 muscle50 규칙이 한다.
