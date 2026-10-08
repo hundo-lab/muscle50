@@ -5,7 +5,8 @@ Spec: `docs/specs/telegram-bot.md`. Migration 없음(설정과 상태는 JSON �
 
 > v1.1(Telegram Mobile Replies, 아래 [v1.1](#v11-telegram-mobile-replies) 절)부터 `/today`, `/status`, `/daily`의 기본
 > 답장은 짧은 요약이다. 이 문서의 v1 절에 있는 이 세 명령의 CLI 명령과 답장 설명은 이제 `full`을 붙였을 때(`/today full`
-> 등)의 동작이다. `/unknown`, `/refresh`는 v1.1에서 추가됐다.
+> 등)의 동작이다. `/unknown`, `/refresh`는 v1.1에서 추가됐다. 인자 없는 `/refresh`(UNKNOWN 운동 모두 다시 받기)는
+> v1.2에서 추가됐다(아래 [v1.2](#v12-telegram-refresh-all-unknown) 절).
 
 ## 목적과 non-goal
 
@@ -303,8 +304,9 @@ bot 답장만 바뀐다: `/today`, `/status`, `/daily`의 기본 답장이 요�
 
 - `full`은 소문자 `full` 한 단어만 받는다. `/today 2026-10-05`, `/status now`, `/daily Full`, `/today full x`는 사용법 답장이다.
 - `/unknown`은 인자가 없다.
-- `/refresh`의 id는 ASCII 숫자 1~20자리이고 0으로 시작하지 않는다(`[1-9][0-9]{0,19}`). `/refresh`, `/refresh abc`,
-  `/refresh 0`, `/refresh 1 2`, `/refresh -5`, 다른 문자 체계의 숫자(예: `١٢٣`)는 모두 사용법 답장이다.
+- `/refresh`의 id는 ASCII 숫자 1~20자리이고 0으로 시작하지 않는다(`[1-9][0-9]{0,19}`). `/refresh abc`,
+  `/refresh 0`, `/refresh 1 2`, `/refresh -5`, 다른 문자 체계의 숫자(예: `١٢٣`)는 모두 사용법 답장이다. 인자 없는
+  `/refresh`는 v1.2부터 UNKNOWN 운동을 모두 다시 받는다(아래 v1.2 절).
 - `/refresh_<id>` 같은 한 번 탭 별칭은 없다(gate 1 결정). 요약의 `/refresh <id>`는 `<code>`로 보내므로 탭하면 복사되고,
   붙여 넣어 보낸다.
 - `/daily`는 `daily --json`을 **한 번** 실행한다. 한 메시지가 Garmin 동기화를 두 번 하는 일은 없다. `/daily full`은 따로 보내는
@@ -334,6 +336,7 @@ bot 답장만 바뀐다: `/today`, `/status`, `/daily`의 기본 답장이 요�
   고친 뒤: /refresh 24610155225                                                 (<code>, 탭하면 복사)
 • 10-02 근력 16세트: https://connect.garmin.com/modern/activity/24576105658
   고친 뒤: /refresh 24576105658
+모두 다시 받기: /refresh                                                        (v1.2, 탭하면 바로 보냄)
 기타 알림 6건 · 전체: /today full
 ```
 
@@ -422,6 +425,7 @@ kcal 845 / 목표 2200-2500 (below_range, 최소까지 1355)
   고친 뒤: /refresh 24610155225
 • ...
 Garmin Connect에서 운동 이름을 고친 뒤 /refresh로 다시 받습니다.
+모두 다시 받기: /refresh                                                        (v1.2)
 ```
 
 - 개수 제한 없이 모두 보인다. 없으면 `Garmin UNKNOWN 세트가 있는 운동 없음 (최근 14일, 오늘 운동 제외)`.
@@ -489,3 +493,171 @@ refresh 24610155225 완료: 10-05 근력, UNKNOWN 11 → 0세트
   `Recorded meal` 줄과 같은 종류의 결합이다.
 - `/daily`가 실패하면 요약에 계획이 없다. 저장된 데이터로 본 계획은 `/today`로 따로 본다.
 - 이 절의 답장 형식은 live 확인(통합 후 사용자 게이트) 전까지 실제 Telegram 앱에서 보이는 모양을 확인하지 않았다.
+
+# v1.2 Telegram Refresh All UNKNOWN
+
+Spec: `docs/specs/telegram-refresh-unknown.md`. Migration 없음. CLI 출력 변경 없음(`cli.py`는 바뀌지 않았고, 모든 CLI
+명령의 text와 JSON은 그대로다). bot 답장만 바뀐다.
+
+- 인자 없는 `/refresh`가 v1.1의 사용법 답장 대신 UNKNOWN 운동을 모두 다시 받는다.
+- `/refresh` 사용법 답장과 `/help`가 바뀐다.
+- `/today`, `/daily`는 UNKNOWN 알림이 있을 때, `/unknown`은 목록이 비어 있지 않을 때 `모두 다시 받기: /refresh` 한 줄이
+  붙는다.
+- 그대로인 것: `/refresh <id>`, 모든 `full` 답장, `/status`, `/day`, `/log`, `/void`, `/show`, `/inbody`, UNKNOWN 알림이 없는
+  `/today`와 `/daily`, 빈 `/unknown`.
+
+## 목적과 non-goal
+
+- Garmin Connect에서 여러 운동의 UNKNOWN 이름을 고친 뒤, 명령 하나로 모두 다시 받는다. v1.1에서는 운동마다
+  `/refresh <id>`를 복사해서 보내야 했다.
+- Non-goal: 자동 refresh(사용자가 보낼 때만 실행), 대상 확장(`/unknown` 목록만, UNKNOWN이 없는 운동과 수영은 대상이 아니다),
+  운동 이름 추측, 새 CLI 명령(`garmin refresh`를 하나씩 실행한다), migration, CLI 출력 변경.
+
+## 명령
+
+| bot 명령 | 실행되는 CLI 명령 | 답장 | migration 검사 | 진행 안내 |
+|---|---|---|---|---|
+| `/refresh` | `recommend --date <오늘> --json`(목록), 운동마다 `garmin refresh <id>`, 다시 `recommend --date <오늘> --json`(남은 수) | 결과 요약 하나 | 있음(시작 전 한 번) | `refresh 실행 중: ...` |
+| `/refresh <activity_id>` | `garmin refresh <activity_id>` | v1.1 그대로 | 있음 | v1.1 그대로 |
+
+- `/refresh@<bot>`도 같다. `/refresh_<id>` 별칭은 여전히 없다.
+- 사용법 답장:
+
+```text
+사용법: /refresh [activity_id]
+Garmin Connect에서 운동 이름을 고친 뒤 보냅니다. 인자가 없으면 UNKNOWN 세트가 있는 최근 운동을 모두(한 번에 10개까지), activity_id(숫자)를 주면 그 운동 하나만 다시 받습니다.
+예: /refresh 24610155225
+```
+
+- `/help`의 `/refresh` 줄은 두 줄이 된다: `/refresh - UNKNOWN 세트가 있는 최근 운동을 모두 다시 받기(한 번에 10개까지)`,
+  `/refresh <activity_id> - Garmin에서 고친 운동 하나를 다시 받기`.
+
+## 흐름
+
+1. 적용 안 된 migration을 확인한다(v1 규칙). 있으면 v1의 `오류: DB에 아직 적용하지 않은 migration ...`만 답하고 아무것도
+   실행하지 않는다. 목록도 읽지 않고 진행 안내도 없다.
+2. **대상 목록**: `recommend --date <오늘> --json`을 한 번 실행하고 `strength.unknown_notices`를 JSON 순서(최근 운동 먼저)대로
+   쓴다. `/unknown`과 같은 목록이다(오늘 전 14일, 오늘 운동 제외). 실행 중에 목록이 바뀌어도 다시 계산하지 않는다.
+   - 목록이 비어 있으면 `UNKNOWN 세트가 있는 운동이 없습니다 (최근 14일, 오늘 운동 제외). 다시 받을 것이 없습니다.`만
+     답한다. Garmin에 접속하지 않는다.
+   - 목록을 읽지 못하면 Garmin에 접속하지 않는다. stdout이 없으면 CLI의 `오류:` 줄 그대로(예: DB 없음), JSON이 아니면 text
+     그대로, JSON 모양이 다르면 `오류: UNKNOWN 목록을 읽지 못해 아무것도 다시 받지 않았습니다. 전체: /today full`.
+3. **상한**: 한 번에 최근 **10개**까지 받는다(`REFRESH_ALL_CAP`). 진행 안내를 먼저 보낸다:
+   - `refresh 실행 중: UNKNOWN이 있는 운동 3개를 Garmin에서 차례로 다시 받습니다. 끝나면 결과를 보냅니다.`
+   - 상한을 넘으면 `refresh 실행 중: UNKNOWN이 있는 운동 12개 중 최근 10개를 Garmin에서 차례로 다시 받습니다(한 번에 10개까지). 끝나면 결과를 보냅니다.`
+4. **운동마다**(차례로, 동시 실행 없음): v1.1 `/refresh <id>`와 같은 순서다. UNKNOWN 세트 수를 read-only로 읽고,
+   `garmin refresh <id>`를 in-process로 실행하고(`cli.main`), 성공하면 다시 센다. 운동 사이에 **2초** 쉰다(첫 운동 앞과
+   마지막 운동 뒤에는 쉬지 않는다).
+   - Garmin 로그인은 v1.1과 같이 운동마다 한 번이다(`garmin refresh`가 저장된 token으로 `authenticate`). 운동 하나에 Garmin
+     요청이 약 7번(profile 2번 + activity 5번)이므로 10개면 약 70번이다.
+   - CLI 오류(exit 1, 예: Garmin 조회 실패, 저장되지 않은 activity)는 그 운동을 `실패`로 표시하고 다음 운동으로 넘어간다.
+   - **연속 3번** 실패하면(`MAX_CONSECUTIVE_REFRESH_FAILURES`, `garmin recovery` 기간 동기화의 연속 실패 규칙과 같은 방식)
+     Garmin 쪽 제한이나 장애로 보고 멈춘다. 성공 한 번이면 연속 수가 0으로 돌아간다.
+   - **Garmin 로그인이 필요하면**(로그인 prompt가 bot의 빈 stdin에서 EOF) 바로 멈춘다. 그 운동은 아무것도 쓰지 않았으므로
+     `받지 않음`이다.
+   - **그 밖의 예상하지 못한 예외**가 나면 그 운동은 `실패`로 표시하고 멈춘다(같은 오류가 운동마다 되풀이될 수 있으므로).
+     traceback은 콘솔에 남는다.
+   - 멈추면 남은 운동은 모두 `받지 않음`이다.
+5. **남은 수**: 같은 `recommend --date <처음 날짜> --json`을 한 번 더 실행해 `unknown_notices` 수를 센다. 멈춘 경우에도
+   실행한다. 읽지 못하면 `알 수 없음`이다(0이 아니다).
+6. 결과 답장 하나를 보낸다.
+
+- 이 모든 단계가 **handled update 하나**다(v1 at-most-once). update id는 첫 CLI 실행 전에 저장된다.
+- **Ctrl+C**: v1과 같이 바로 멈추고 exit 130. 결과 답장은 없다. 이미 받은 운동은 저장된 채로 남고(운동마다 RAW + transaction),
+  다시 시작해도 다시 실행하지 않는다. 남은 것은 `/unknown`으로 보고 `/refresh`를 다시 보낸다.
+
+## 결과 답장(합성 값)
+
+```text
+<pre>refresh 완료: 3개 중 3개 받음
+• 10-05 24610155225: UNKNOWN 11 → 0세트
+• 10-02 24576105658: UNKNOWN 16 → 4세트 (아직 남음)
+  경고: original archive를 다운로드하지 못했습니다.
+• 09-23 24400000001: UNKNOWN 3 → 3세트 (변화 없음)</pre>
+남은 UNKNOWN: 2개 운동 · /unknown
+```
+
+멈춘 경우(연속 실패, 상한 초과):
+
+```text
+<pre>refresh 중단: 10개 중 1개 받음, 3개 실패, 6개 받지 않음 (연속 3번 실패)
+• 10-05 24610155225: UNKNOWN 2 → 0세트
+• 10-04 24600000002: 실패
+  오류: Garmin activity 원본 조회에 실패했습니다.
+• ...
+• 10-01 24600000005: 받지 않음
+...</pre>
+Garmin 쪽 제한이나 장애일 수 있습니다. 잠시 뒤 다시 받기: /refresh
+나머지 2개는 받지 않았습니다(한 번에 10개까지). 다시 받기: /refresh · 목록: /unknown
+남은 UNKNOWN: 11개 운동 · /unknown
+```
+
+- **머리줄**: `refresh 완료` 또는 `refresh 중단`, `: N개 중 K개 받음`, 그리고 0이 아닐 때만 `, F개 실패`, `, R개 받지 않음`.
+  멈췄으면 이유 `(연속 3번 실패)`, `(Garmin 로그인 필요)`, `(예상하지 못한 오류)`.
+- **운동 줄**: `• MM-DD <activity_id>: ` 뒤에(날짜는 목록 JSON의 `local_date`, 같은 날 운동이 둘이어도 구별되도록 id를 쓴다)
+  - 받음, 전후 수를 읽었고 근력 운동, 후 0: `UNKNOWN 11 → 0세트`
+  - 받음, 후 = 전 > 0: `UNKNOWN 3 → 3세트 (변화 없음)`. 같은 수라고 Garmin에서 고치지 않았다고 단정하지 않는다.
+  - 받음, 그 밖의 후 > 0: `UNKNOWN 16 → 4세트 (아직 남음)`
+  - 받음, 전후 수를 읽지 못했거나 근력 운동이 아님: CLI 결과 첫 줄 그대로(`Garmin activity refresh complete`, v1.1 규칙)
+  - 받음: CLI 결과의 `경고: ` 줄을 그 운동 밑에 두 칸 들여 그대로 붙인다.
+  - 실패: `실패`, 그 밑에 CLI 오류의 모든 줄을 두 칸 들여 그대로. 예상하지 못한 예외로 멈춘 운동은 `실패`만 쓴다.
+  - 받지 않음: `받지 않음`
+- **`<pre>` 끝**: 로그인으로 멈췄으면 v1.1과 같은
+  `오류: Garmin에 다시 로그인해야 합니다. PC 터미널에서 muscle50 garmin refresh <멈춘 id>를 한 번 실행하세요(로그인한 뒤 그대로 refresh됩니다).`,
+  예상하지 못한 예외면 `오류: 예상하지 못한 오류로 명령을 마치지 못했습니다 (<예외 종류>). telegram run 콘솔을 확인하세요.`
+- **`<pre>` 밖**(일반 text라 `/refresh`, `/unknown`을 탭하면 바로 보내진다), 이 순서로:
+  1. 연속 실패로 멈춤: `Garmin 쪽 제한이나 장애일 수 있습니다. 잠시 뒤 다시 받기: /refresh`. 로그인으로 멈춤:
+     `로그인한 뒤 나머지 다시 받기: /refresh`. 예상하지 못한 예외: 줄 없음.
+  2. 상한을 넘었으면 `나머지 N개는 받지 않았습니다(한 번에 10개까지). 다시 받기: /refresh · 목록: /unknown`
+  3. 항상 남은 수: `남은 UNKNOWN: M개 운동 · /unknown`, 0이면 `남은 UNKNOWN 운동 없음 (최근 14일, 오늘 운동 제외)`, 읽지
+     못하면 `남은 UNKNOWN: 알 수 없음 · /unknown`.
+- 메시지 나누기는 v1.1과 같다(손실 없는 4096 UTF-16 단위). 10개면 보통 메시지 하나다.
+- 같은 데이터면 답장은 byte 단위로 같다.
+
+## `모두 다시 받기` 줄
+
+- `/today`, `/daily`: UNKNOWN 알림이 있을 때만, 항목과 `외 N개 · /unknown` 뒤, 마지막 `기타 알림 N건 · 전체: /today full`
+  앞에 `모두 다시 받기: /refresh`.
+- `/unknown`: 목록이 비어 있지 않을 때만 `Garmin Connect에서 운동 이름을 고친 뒤 /refresh로 다시 받습니다.` 뒤에 붙는다.
+- `<code>`가 아니라 일반 text다. 탭하면 인자 없는 `/refresh`가 바로 보내진다.
+
+## 콘솔 줄(ASCII, 메시지 내용 없음)
+
+```text
+chat 111: /refresh targets -> exit 0
+chat 111: /refresh all: 3 activities (cap 10)                 (상한을 넘으면 10 of 12 activities, 없으면 no UNKNOWN activities)
+chat 111: /refresh all 1/3 -> exit 0                          (운동마다)
+chat 111: /refresh all stopped after 3 consecutive failures   (멈췄을 때, 또는 needs a Garmin login in a terminal,
+                                                               또는 failed with <예외 종류> + traceback)
+chat 111: /refresh remaining -> exit 0
+```
+
+- 남은 수를 읽지 못하면 `chat N: /refresh remaining count unknown (<이유>)` 또는
+  `chat N: /refresh remaining failed with <예외 종류>`. 전후 세트 수를 읽지 못하면 v1.1과 같은
+  `chat N: /refresh could not count UNKNOWN sets (<예외 종류>)`. Ctrl+C는 v1과 같은
+  `chat N: /refresh interrupted by Ctrl+C; it will not be run again`.
+
+## 코드 위치
+
+- 고정 문구, 상한 10, 인자 없는 `/refresh` 문법: `domain/telegram_commands.py`.
+- 실행 순서, 연속 실패 3번, 2초 간격: `application/telegram_bot.py`(`RunTelegramBot._refresh_all`).
+- 목록 읽기와 결과 답장 형식: `presentation/telegram_summary.py`(`refresh_targets`, `refresh_all_reply`).
+- 테스트: `tests/test_telegram_refresh_all.py`(가짜 Telegram API, 운동마다 가짜 Garmin connector, 임시 MUSCLE50_HOME),
+  `tests/test_telegram_summary.py`(답장 형식).
+
+## Known issues / limitations (v1.2)
+
+- **상한 10개, 최근 것부터.** Garmin에서 아직 고치지 않은 최근 운동이 10개 이상 남아 있으면 `/refresh`를 다시 보내도 같은
+  10개를 다시 받고, 더 오래된 운동에는 닿지 않는다. 그런 운동은 `/unknown`에서 `/refresh <id>`로 하나씩 받는다.
+- 고치지 않은 운동도 목록에 있으면 다시 받는다(요청은 쓰지만 결과는 `(변화 없음)`).
+- Garmin 요청은 운동마다 약 7번(로그인 확인 profile 2번 + activity 5번)이라 10개면 약 70번이다. v1.1 문서의 "운동마다 Garmin
+  요청 4~5번"은 activity 요청만 센 값이다. Garmin의 실제 제한은 문서화되어 있지 않다. 로그인 제한
+  (`Garmin 로그인 요청이 제한되었습니다`)은 운동마다 exit 1로 오므로 연속 3번에서 멈춘다.
+- 실행 중(10개면 약 1~2분, 쉬는 시간 약 18초 포함) bot은 다른 메시지를 처리하지 않는다. 그 메시지는 Telegram에 쌓였다가
+  끝난 뒤 처리된다(bot 시작 뒤에 보낸 것이므로 stale이 아니다). Windows에서 Garmin 요청 중의 Ctrl+C 지연은 v1과 같다.
+- Ctrl+C나 crash로 중간에 멈추면 결과 답장이 없다. 이미 받은 운동은 저장되어 있고, `/unknown`으로 남은 것을 본다.
+- 오늘 운동은 대상이 아니다(v1.1과 같은 목록). 오늘 운동은 `/refresh <id>`로 받는다.
+- 인자 없는 `/refresh`는 이제 탭 한 번으로 Garmin 요청을 시작한다. v1.1 `/unknown`의 `... /refresh로 다시 받습니다.` 줄의
+  `/refresh`도 탭하면 실행된다(v1.1에서는 사용법 답장이었다).
+- 운동 줄의 `경고: ` 줄과 CLI 첫 줄 fallback은 `garmin refresh` text 출력에 의존한다(v1.1과 같은 결합).
+- 이 절의 답장 형식은 live 확인(통합 후 사용자 게이트) 전까지 실제 Telegram 앱과 실제 Garmin에서 확인하지 않았다.

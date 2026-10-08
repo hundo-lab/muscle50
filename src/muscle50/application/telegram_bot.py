@@ -14,6 +14,11 @@ held here:
 - v1.1 summaries: `/today`, `/status`, `/daily` and `/unknown` run the CLI's `--json` form once and
   reply with a short summary of that document (`ReplySummaries`); `full` is the v1 text. `/refresh`
   runs `garmin refresh` and reports the activity's UNKNOWN set count read before and after it.
+- v1.2 bare `/refresh`: the `/unknown` list (read once), then `garmin refresh` for each entry in JSON
+  order, at most `REFRESH_ALL_CAP`, `REFRESH_ALL_PAUSE_S` apart; it stops on a Garmin login need, on
+  any unexpected exception and after `MAX_CONSECUTIVE_REFRESH_FAILURES` failures in a row. One result
+  reply with each activity's before/after count and how many still have UNKNOWN sets (a second read of
+  the same list; never 0 when it cannot be read). The whole run is one handled update.
 
 The Bot API token never reaches this module: the adapter holds it and redacts its messages.
 """
@@ -27,6 +32,7 @@ from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from enum import StrEnum
 from typing import Any, Protocol
 
 from muscle50.application.activity_unknown_sets import ActivityUnknownSets
@@ -34,6 +40,8 @@ from muscle50.domain.telegram_commands import (
     DAILY_PROGRESS_TEXT,
     GARMIN_LOGIN_TEXT,
     MIGRATION_STATUS_UNKNOWN_TEXT,
+    REFRESH_ALL_CAP,
+    REFRESH_ALL_TARGETS_FAILED_TEXT,
     CliInvocation,
     ReplyKind,
     UsageReason,
@@ -42,6 +50,8 @@ from muscle50.domain.telegram_commands import (
     empty_output_text,
     parse_bot_message,
     pending_migration_text,
+    refresh_all_empty_text,
+    refresh_all_progress_text,
     refresh_login_text,
     refresh_progress_text,
     stale_text,
@@ -56,6 +66,11 @@ STALE_MARGIN_S = 60
 POLL_TIMEOUT_S = 10
 SEND_ATTEMPTS = 3
 BACKOFF_S: tuple[float, ...] = (5, 10, 20, 40, 60)
+# v1.2 bare `/refresh`. The same rule as `sync_garmin_recovery.MAX_CONSECUTIVE_DATE_FAILURES`: this many
+# failed activities in a row look like a Garmin-side limit or outage, so the rest are not requested.
+MAX_CONSECUTIVE_REFRESH_FAILURES = 3
+REFRESH_ALL_PAUSE_S = 2
+"""Seconds between two activities of one bulk run (not before the first or after the last)."""
 
 # The `render_logged_meal` headline (`nutrition log` stdout line 1); the Undo line needs its meal ID.
 _RECORDED_MEAL = re.compile(r"Recorded meal (\S+)\.")
@@ -133,6 +148,54 @@ class BotStopped:
     chat_id: int | None
 
 
+class RefreshItemStatus(StrEnum):
+    DONE = "done"
+    FAILED = "failed"
+    NOT_RUN = "not_run"
+
+
+class RefreshStop(StrEnum):
+    CONSECUTIVE_FAILURES = "consecutive_failures"
+    GARMIN_LOGIN = "garmin_login"
+    UNEXPECTED_ERROR = "unexpected_error"
+
+
+@dataclass(frozen=True)
+class RefreshTarget:
+    """One `strength.unknown_notices` entry of `recommend --json`, as written there."""
+
+    source_activity_id: str
+    """Checked to be ASCII digits."""
+    local_date: str
+    """`YYYY-MM-DD`."""
+    unknown_set_count: int
+
+
+@dataclass(frozen=True)
+class RefreshItem:
+    target: RefreshTarget
+    status: RefreshItemStatus
+    before: ActivityUnknownSets | None = None
+    after: ActivityUnknownSets | None = None
+    cli_stdout: str = ""
+    """DONE: the `garmin refresh` stdout (headline fallback and `경고: ` lines)."""
+    error: str | None = None
+    """FAILED by a CLI error: its `오류:` text verbatim. None when an unexpected exception stopped the run."""
+
+
+@dataclass(frozen=True)
+class BulkRefreshResult:
+    items: tuple[RefreshItem, ...]
+    """The first `REFRESH_ALL_CAP` targets, in JSON order (newest first)."""
+    over_cap: int
+    """Targets not taken because of the cap."""
+    stopped: RefreshStop | None
+    stop_detail: str | None
+    """GARMIN_LOGIN: the activity id it stopped at; UNEXPECTED_ERROR: the exception type."""
+    remaining: int | None
+    """Activities that still have UNKNOWN sets after the run; None when that could not be read (never 0)."""
+
+
 class TelegramBotApi(Protocol):
     def get_me(self) -> BotIdentity: ...
 
@@ -166,6 +229,14 @@ class ReplySummaries(Protocol):
         cli_stdout: str,
     ) -> Sequence[str]:
         """HTML messages for a successful `garmin refresh`."""
+        ...
+
+    def refresh_targets(self, document: Any) -> tuple[RefreshTarget, ...]:
+        """The `strength.unknown_notices` of a `recommend --json` document; `SummaryUnavailableError` on shape."""
+        ...
+
+    def refresh_all(self, result: BulkRefreshResult) -> Sequence[str]:
+        """HTML messages for the result of a bare `/refresh`."""
         ...
 
 
@@ -309,6 +380,8 @@ class RunTelegramBot:
                 self._log(f"chat {chat_id}: /{name} not run (migration {numbers} not applied)")
                 self._reply(chat_id, pending_migration_text(pending))
                 return False
+        if invocation.reply is ReplyKind.REFRESH_ALL:
+            return self._refresh_all(chat_id, invocation)
         refresh_id = invocation.activity_id if invocation.reply is ReplyKind.REFRESH else None
         if invocation.is_daily:
             self._reply(chat_id, DAILY_PROGRESS_TEXT)
@@ -354,6 +427,119 @@ class RunTelegramBot:
                 text = f"{text}\n{undo_line(meal_id)}"
         self._reply(chat_id, text)
         return False
+
+    def _refresh_all(self, chat_id: int, invocation: CliInvocation) -> bool:
+        """v1.2 bare `/refresh` (the migration check has passed); True when the bot must stop (Ctrl+C).
+
+        `invocation.argv` is the read-only `recommend --json` of `/unknown`: it fixes the targets once,
+        and its second run after the refreshes gives the remaining count.
+        """
+        # Held for the whole run (both list reads, every refresh and the pauses): Ctrl+C anywhere stops the bot.
+        self._running = ("refresh", chat_id)
+        try:
+            outcome = self._commands.run(invocation.argv)
+        except Exception as exc:
+            self._running = None
+            self._log(f"chat {chat_id}: /refresh failed with {type(exc).__name__}")
+            self._log("".join(traceback.format_exception(exc)).rstrip("\n"))
+            self._reply(chat_id, unexpected_error_text(type(exc).__name__))
+            return False
+        if outcome.exit_code == 130:
+            return True
+        self._log(f"chat {chat_id}: /refresh targets -> exit {outcome.exit_code}")
+        targets, failure = self._refresh_targets(chat_id, outcome)
+        if targets is None:
+            self._running = None
+            self._reply(chat_id, failure)
+            return False
+        if not targets:
+            self._running = None
+            self._log(f"chat {chat_id}: /refresh all: no UNKNOWN activities")
+            self._reply(chat_id, refresh_all_empty_text())  # no Garmin call
+            return False
+        selected = targets[:REFRESH_ALL_CAP]
+        count = f"{len(selected)}" if len(selected) == len(targets) else f"{len(selected)} of {len(targets)}"
+        self._log(f"chat {chat_id}: /refresh all: {count} activities (cap {REFRESH_ALL_CAP})")
+        self._reply(chat_id, refresh_all_progress_text(len(selected), len(targets)))
+
+        items: list[RefreshItem] = []
+        stopped: RefreshStop | None = None
+        stop_detail: str | None = None
+        failures = 0
+        for index, target in enumerate(selected):
+            if stopped is not None:
+                items.append(RefreshItem(target, RefreshItemStatus.NOT_RUN))
+                continue
+            if index:
+                self._sleep(REFRESH_ALL_PAUSE_S)
+            activity_id = target.source_activity_id
+            before = self._count_unknown(chat_id, activity_id)  # read-only, before the refresh writes anything
+            try:
+                result = self._commands.run(("garmin", "refresh", activity_id))
+            except EOFError:
+                # The login prompt met the bot's empty stdin before anything was written: not fetched.
+                self._log(f"chat {chat_id}: /refresh all needs a Garmin login in a terminal")
+                stopped, stop_detail = RefreshStop.GARMIN_LOGIN, activity_id
+                items.append(RefreshItem(target, RefreshItemStatus.NOT_RUN))
+                continue
+            except Exception as exc:
+                # It did run, so it is a failure; the rest are not run (the error could repeat on each one).
+                self._log(f"chat {chat_id}: /refresh all failed with {type(exc).__name__}")
+                self._log("".join(traceback.format_exception(exc)).rstrip("\n"))
+                stopped, stop_detail = RefreshStop.UNEXPECTED_ERROR, type(exc).__name__
+                items.append(RefreshItem(target, RefreshItemStatus.FAILED, before))
+                continue
+            if result.exit_code == 130:
+                return True
+            self._log(f"chat {chat_id}: /refresh all {index + 1}/{len(selected)} -> exit {result.exit_code}")
+            if result.exit_code == 0:
+                failures = 0
+                after = self._count_unknown(chat_id, activity_id)
+                items.append(RefreshItem(target, RefreshItemStatus.DONE, before, after, result.stdout))
+                continue
+            failures += 1
+            items.append(RefreshItem(target, RefreshItemStatus.FAILED, before, error=_reply_text(result)))
+            if failures >= MAX_CONSECUTIVE_REFRESH_FAILURES:
+                self._log(f"chat {chat_id}: /refresh all stopped after {failures} consecutive failures")
+                stopped = RefreshStop.CONSECUTIVE_FAILURES
+
+        try:
+            final = self._commands.run(invocation.argv)
+        except Exception as exc:
+            self._log(f"chat {chat_id}: /refresh remaining failed with {type(exc).__name__}")
+            remaining = None
+        else:
+            if final.exit_code == 130:
+                return True
+            self._log(f"chat {chat_id}: /refresh remaining -> exit {final.exit_code}")
+            remaining = self._remaining(chat_id, final)
+        self._running = None
+        summary = BulkRefreshResult(tuple(items), len(targets) - len(selected), stopped, stop_detail, remaining)
+        self._send_all(chat_id, self._summaries.refresh_all(summary))
+        return False
+
+    def _refresh_targets(self, chat_id: int, outcome: CommandOutcome) -> tuple[tuple[RefreshTarget, ...] | None, str]:
+        """The `/unknown` list, or None and the reply that says why nothing was fetched."""
+        if not outcome.stdout:
+            return None, _reply_text(outcome)
+        try:
+            document = json.loads(outcome.stdout)
+        except ValueError:
+            self._log(f"chat {chat_id}: /refresh reply was not JSON; relayed as text")
+            return None, _reply_text(outcome)
+        try:
+            return self._summaries.refresh_targets(document), ""
+        except SummaryUnavailableError as exc:
+            self._log(f"chat {chat_id}: /refresh summary failed ({exc})")
+            return None, REFRESH_ALL_TARGETS_FAILED_TEXT
+
+    def _remaining(self, chat_id: int, outcome: CommandOutcome) -> int | None:
+        """How many activities the list holds after the run; None (shown as unknown, never 0) when unreadable."""
+        try:
+            return len(self._summaries.refresh_targets(json.loads(outcome.stdout)))
+        except (ValueError, SummaryUnavailableError) as exc:  # JSONDecodeError is a ValueError
+            self._log(f"chat {chat_id}: /refresh remaining count unknown ({type(exc).__name__})")
+            return None
 
     def _count_unknown(self, chat_id: int, activity_id: str) -> ActivityUnknownSets | None:
         """The read-only UNKNOWN count; any failure is None (the reply then falls back to the CLI headline)."""

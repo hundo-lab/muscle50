@@ -21,8 +21,15 @@ import pytest
 import sync_coverage_builders as builders
 
 from muscle50.application.activity_unknown_sets import ActivityUnknownSets
-from muscle50.application.telegram_bot import SummaryUnavailableError
-from muscle50.domain.telegram_commands import ReplyKind
+from muscle50.application.telegram_bot import (
+    BulkRefreshResult,
+    RefreshItem,
+    RefreshItemStatus,
+    RefreshStop,
+    RefreshTarget,
+    SummaryUnavailableError,
+)
+from muscle50.domain.telegram_commands import ReplyKind, refresh_login_text, unexpected_error_text
 from muscle50.presentation.telegram_format import (
     TELEGRAM_MESSAGE_LIMIT,
     BotReply,
@@ -35,7 +42,9 @@ from muscle50.presentation.telegram_format import (
 from muscle50.presentation.telegram_summary import (
     TelegramSummaries,
     daily_summary,
+    refresh_all_reply,
     refresh_reply,
+    refresh_targets,
     status_summary,
     today_summary,
     unknown_list,
@@ -121,6 +130,7 @@ def test_today_summary_of_the_recommend_golden_matches_its_json() -> None:
         "확인 필요: Garmin UNKNOWN 세트",
         f"• {notice['local_date'][5:]} 근력 {notice['unknown_set_count']}세트: {GARMIN}{notice['source_activity_id']}",
         f"  고친 뒤: /refresh {notice['source_activity_id']}",
+        "모두 다시 받기: /refresh",
         f"기타 알림 {_other_notices(document)}건 · 전체: /today full",
     ]
     activity_id = notice["source_activity_id"]
@@ -181,6 +191,7 @@ def test_unknown_list_of_the_recommend_golden_lists_every_set_sequence() -> None
         f"{GARMIN}{notice['source_activity_id']}",
         f"  고친 뒤: /refresh {notice['source_activity_id']}",
         "Garmin Connect에서 운동 이름을 고친 뒤 /refresh로 다시 받습니다.",
+        "모두 다시 받기: /refresh",
     ]
 
 
@@ -525,7 +536,7 @@ def test_more_than_three_are_folded_and_unknown_lists_all() -> None:
         f"• {notice['local_date'][5:]} 근력 {notice['unknown_set_count']}세트: {GARMIN}{notice['source_activity_id']}"
         for notice in notices[:3]
     ]
-    assert lines[-2:] == ["외 2개 · /unknown", "기타 알림 2건 · 전체: /today full"]
+    assert lines[-3:] == ["외 2개 · /unknown", "모두 다시 받기: /refresh", "기타 알림 2건 · 전체: /today full"]
     every = _lines(unknown_list(document))
     assert every[0] == "Garmin UNKNOWN 세트가 있는 운동 5개 (최근 14일, 오늘 운동 제외)"
     assert [line for line in every if line.startswith("  고친 뒤: ")] == [
@@ -711,6 +722,172 @@ def test_refresh_reply_without_both_counts_is_the_cli_headline(
     assert TelegramSummaries().refresh("222", before, after, CLI_REFRESH) == [
         "<pre>Garmin activity refresh complete\n경고: synthetic endpoint warning</pre>"
     ]
+
+
+# --- bare /refresh (v1.2) ------------------------------------------------------------------------------------
+
+TARGET = RefreshTarget("222", "2026-10-05", 11)
+
+
+def _done(
+    before: ActivityUnknownSets | None, after: ActivityUnknownSets | None, stdout: str = CLI_REFRESH
+) -> RefreshItem:
+    return RefreshItem(TARGET, RefreshItemStatus.DONE, before, after, stdout)
+
+
+def _result(
+    *items: RefreshItem,
+    over_cap: int = 0,
+    stopped: RefreshStop | None = None,
+    stop_detail: str | None = None,
+    remaining: int | None = 2,
+) -> BulkRefreshResult:
+    return BulkRefreshResult(tuple(items), over_cap, stopped, stop_detail, remaining)
+
+
+@pytest.mark.parametrize(
+    ("item", "lines"),
+    [
+        (_done(_counts(11), _counts(0)), ["• 10-05 222: UNKNOWN 11 → 0세트"]),
+        (_done(_counts(3), _counts(3)), ["• 10-05 222: UNKNOWN 3 → 3세트 (변화 없음)"]),
+        (_done(_counts(3), _counts(4)), ["• 10-05 222: UNKNOWN 3 → 4세트 (아직 남음)"]),
+        (_done(_counts(3), _counts(1)), ["• 10-05 222: UNKNOWN 3 → 1세트 (아직 남음)"]),
+        (_done(_counts(0), _counts(0)), ["• 10-05 222: UNKNOWN 0 → 0세트"]),
+        (_done(None, _counts(0)), ["• 10-05 222: Garmin activity refresh complete"]),
+        (_done(_counts(2), None), ["• 10-05 222: Garmin activity refresh complete"]),
+        (
+            _done(_counts(0, strength=False), _counts(0, strength=False)),
+            ["• 10-05 222: Garmin activity refresh complete"],
+        ),
+        (
+            RefreshItem(TARGET, RefreshItemStatus.FAILED, _counts(1), error="오류: first line\nsecond <line>"),
+            ["• 10-05 222: 실패", "  오류: first line", "  second <line>"],
+        ),
+        (RefreshItem(TARGET, RefreshItemStatus.FAILED, _counts(1)), ["• 10-05 222: 실패"]),
+        (RefreshItem(TARGET, RefreshItemStatus.NOT_RUN), ["• 10-05 222: 받지 않음"]),
+    ],
+    ids=[
+        "fixed",
+        "equal",
+        "more",
+        "fewer",
+        "zero",
+        "no-before",
+        "no-after",
+        "not-strength",
+        "failed",
+        "crashed",
+        "not-run",
+    ],
+)
+def test_refresh_all_item_lines(item: RefreshItem, lines: list[str]) -> None:
+    if item.status is RefreshItemStatus.DONE:
+        lines = [*lines, "  경고: synthetic endpoint warning"]  # each DONE item keeps its CLI warnings
+    reply = refresh_all_reply(_result(item))
+    assert _lines(reply)[1:-1] == lines
+
+
+def test_refresh_all_header_and_tail_by_stop_reason() -> None:
+    done = _done(_counts(2), _counts(0), "Garmin activity refresh complete\n")
+    failed = RefreshItem(TARGET, RefreshItemStatus.FAILED, error="오류: x")
+    not_run = RefreshItem(TARGET, RefreshItemStatus.NOT_RUN)
+    item = "• 10-05 222: "
+    assert _lines(refresh_all_reply(_result(done, done))) == [
+        "refresh 완료: 2개 중 2개 받음",
+        f"{item}UNKNOWN 2 → 0세트",
+        f"{item}UNKNOWN 2 → 0세트",
+        "남은 UNKNOWN: 2개 운동 · /unknown",
+    ]
+    stopped = _result(failed, failed, failed, not_run, stopped=RefreshStop.CONSECUTIVE_FAILURES, over_cap=3)
+    assert _lines(refresh_all_reply(stopped)) == [
+        "refresh 중단: 4개 중 0개 받음, 3개 실패, 1개 받지 않음 (연속 3번 실패)",
+        *[f"{item}실패", "  오류: x"] * 3,
+        f"{item}받지 않음",
+        "Garmin 쪽 제한이나 장애일 수 있습니다. 잠시 뒤 다시 받기: /refresh",
+        "나머지 3개는 받지 않았습니다(한 번에 10개까지). 다시 받기: /refresh · 목록: /unknown",
+        "남은 UNKNOWN: 2개 운동 · /unknown",
+    ]
+    login = _result(done, not_run, stopped=RefreshStop.GARMIN_LOGIN, stop_detail="333", remaining=5)
+    assert _lines(refresh_all_reply(login)) == [
+        "refresh 중단: 2개 중 1개 받음, 1개 받지 않음 (Garmin 로그인 필요)",
+        f"{item}UNKNOWN 2 → 0세트",
+        f"{item}받지 않음",
+        refresh_login_text("333"),
+        "로그인한 뒤 나머지 다시 받기: /refresh",
+        "남은 UNKNOWN: 5개 운동 · /unknown",
+    ]
+    crashed = RefreshItem(TARGET, RefreshItemStatus.FAILED)
+    unexpected = _result(crashed, not_run, stopped=RefreshStop.UNEXPECTED_ERROR, stop_detail="RuntimeError")
+    assert _lines(refresh_all_reply(unexpected)) == [
+        "refresh 중단: 2개 중 0개 받음, 1개 실패, 1개 받지 않음 (예상하지 못한 오류)",
+        f"{item}실패",
+        f"{item}받지 않음",
+        unexpected_error_text("RuntimeError"),
+        "남은 UNKNOWN: 2개 운동 · /unknown",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("remaining", "line"),
+    [
+        (None, "남은 UNKNOWN: 알 수 없음 · /unknown"),
+        (0, "남은 UNKNOWN 운동 없음 (최근 14일, 오늘 운동 제외)"),
+        (1, "남은 UNKNOWN: 1개 운동 · /unknown"),
+        (12, "남은 UNKNOWN: 12개 운동 · /unknown"),
+    ],
+)
+def test_refresh_all_remaining_line_is_never_a_guessed_zero(remaining: int | None, line: str) -> None:
+    messages = TelegramSummaries().refresh_all(_result(_done(_counts(1), _counts(0)), remaining=remaining))
+    assert len(messages) == 1
+    # The tail is plain text outside <pre>, so the bare commands can be tapped.
+    assert messages[0].endswith(f"</pre>\n{line}")
+    if remaining is None:
+        assert "0개" not in messages[0]
+
+
+def test_refresh_targets_are_the_unknown_notices_in_json_order() -> None:
+    document = _with_notices(5)
+    notices = document["strength"]["unknown_notices"]
+    expected = tuple(
+        RefreshTarget(notice["source_activity_id"], notice["local_date"], notice["unknown_set_count"])
+        for notice in notices
+    )
+    assert refresh_targets(document) == expected
+    assert TelegramSummaries().refresh_targets(document) == expected
+    assert refresh_targets(_with_notices(0)) == ()
+
+
+@pytest.mark.parametrize(
+    ("mutate", "error"),
+    [
+        (_without_strength, "KeyError"),
+        (_bool_count, "TypeError"),
+        (_string_count, "TypeError"),
+        (_arabic_indic_id, "ValueError"),
+        (_quote_in_id, "ValueError"),
+        (lambda document: document["strength"]["unknown_notices"][0].pop("local_date"), "KeyError"),
+        (lambda document: document["strength"]["unknown_notices"][0].update(local_date="10-05"), "ValueError"),
+    ],
+    ids=["no-strength", "bool-count", "string-count", "arabic-id", "quote-id", "no-date", "short-date"],
+)
+def test_refresh_targets_shape_errors_are_summary_errors(mutate: Any, error: str) -> None:
+    document = _recommend()
+    mutate(document)
+    with pytest.raises(SummaryUnavailableError) as raised:
+        TelegramSummaries().refresh_targets(document)
+    assert str(raised.value) == error
+
+
+def test_a_long_refresh_all_reply_is_packed_without_loss_and_is_deterministic() -> None:
+    error = "\n".join(f"오류: synthetic <line> {index} & " + "=" * 80 for index in range(40))
+    items = [RefreshItem(TARGET, RefreshItemStatus.FAILED, error=error) for _ in range(3)]
+    result = _result(*items, stopped=RefreshStop.CONSECUTIVE_FAILURES, over_cap=4, remaining=None)
+    messages = TelegramSummaries().refresh_all(result)
+    assert len(messages) > 1
+    for message in messages:
+        assert utf16_units(message) <= TELEGRAM_MESSAGE_LIMIT
+    assert _plain(messages) == refresh_all_reply(result).plain_text()
+    assert TelegramSummaries().refresh_all(copy.deepcopy(result)) == messages
 
 
 # --- AC7 and packing ---------------------------------------------------------------------------------------

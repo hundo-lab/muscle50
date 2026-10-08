@@ -214,6 +214,7 @@ def _parse(text: str) -> CliInvocation | UsageReply:
         (f"/unknown@{BOT}", ReplyKind.UNKNOWN_LIST, False, None),
         ("/refresh 24610155225", ReplyKind.REFRESH, False, "24610155225"),
         ("/refresh 99999999999999999999", ReplyKind.REFRESH, False, "99999999999999999999"),
+        ("/refresh", ReplyKind.REFRESH_ALL, False, None),
         ("/day", ReplyKind.TEXT, False, None),
         ("/inbody", ReplyKind.TEXT, False, None),
     ],
@@ -237,7 +238,6 @@ def test_reply_kind_of_each_command(text: str, reply: ReplyKind, is_daily: bool,
         ("/daily --json", "daily"),
         ("/unknown x", "unknown"),
         ("/unknown full", "unknown"),
-        ("/refresh", "refresh"),
         ("/refresh abc", "refresh"),
         ("/refresh 0", "refresh"),
         ("/refresh 0123", "refresh"),
@@ -274,8 +274,9 @@ def test_new_bot_texts_are_pinned() -> None:
     assert usage_text("daily") == "사용법: /daily [full]\n예: /daily"
     assert usage_text("unknown") == "사용법: /unknown\n예: /unknown"
     assert usage_text("refresh") == (
-        "사용법: /refresh <activity_id>\n"
-        "Garmin Connect에서 운동 이름을 고친 뒤 보냅니다. activity_id는 숫자입니다.\n"
+        "사용법: /refresh [activity_id]\n"
+        "Garmin Connect에서 운동 이름을 고친 뒤 보냅니다. 인자가 없으면 UNKNOWN 세트가 있는 최근 운동을 모두"
+        "(한 번에 10개까지), activity_id(숫자)를 주면 그 운동 하나만 다시 받습니다.\n"
         "예: /refresh 24610155225"
     )
     assert refresh_progress_text("24610155225") == (
@@ -328,11 +329,12 @@ def test_today_status_unknown_summaries_match_cli_json(
     )
     assert today[0] == "오늘 추천 10-07"
     assert "회복: normal (readiness MODERATE 60, HRV BALANCED, 오늘 수면 기록 없음)" in today
-    assert today[-4:-1] == [
+    assert today[-5:-2] == [
         "확인 필요: Garmin UNKNOWN 세트",
         f"• 10-05 근력 2세트: {GARMIN}{UNKNOWN_ID}",
         f"  고친 뒤: /refresh {UNKNOWN_ID}",
     ]
+    assert today[-2] == "모두 다시 받기: /refresh"
     assert f'<a href="{GARMIN}{UNKNOWN_ID}">{GARMIN}{UNKNOWN_ID}</a>' in sent[0]
     assert f"<code>/refresh {UNKNOWN_ID}</code>" in sent[0]
     protein = status["nutrients"]["protein_g"]
@@ -473,10 +475,11 @@ def test_daily_success_summary_has_the_unknown_items(
     assert len(sent) == 2
     lines = _plain(sent[1]).split("\n")
     assert lines[0] == "daily 10-07: 동기화 완료 (새 운동 0, 회복 2일 갱신)"
-    assert lines[-4:] == [
+    assert lines[-5:] == [
         "확인 필요: Garmin UNKNOWN 세트",
         f"• 10-05 근력 2세트: {GARMIN}{UNKNOWN_ID}",
         f"  고친 뒤: /refresh {UNKNOWN_ID}",
+        "모두 다시 받기: /refresh",
         lines[-1],
     ]
     assert lines[-1].startswith("기타 알림 ") and lines[-1].endswith("건 · 전체: /today full")
@@ -684,7 +687,7 @@ def test_refresh_without_counts_or_of_a_non_strength_activity_is_the_cli_headlin
     assert err.split("\n").count("chat 111: /refresh could not count UNKNOWN sets (RuntimeError)") == 2
 
 
-MALFORMED_REFRESH = ["/refresh", "/refresh abc", "/refresh 0", "/refresh 1 2", "/refresh -5", "/refresh ١٢٣"]
+MALFORMED_REFRESH = ["/refresh abc", "/refresh 0", "/refresh 1 2", "/refresh -5", "/refresh ١٢٣"]
 
 
 def test_malformed_refresh_gets_the_usage_and_touches_nothing(

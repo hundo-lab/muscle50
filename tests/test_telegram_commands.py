@@ -51,6 +51,7 @@ def parse(text: str | None) -> CliInvocation | UsageReply:
         ("/unknown", ("recommend", "--date", "2026-10-06", "--json"), False, False, False),
         ("/refresh 24610155225", ("garmin", "refresh", "24610155225"), True, False, False),
         ("/refresh 1", ("garmin", "refresh", "1"), True, False, False),
+        ("/refresh", ("recommend", "--date", "2026-10-06", "--json"), True, False, False),
         ("/day", ("nutrition", "day"), True, False, False),
         ("/day 2026-10-05", ("nutrition", "day", "--date", "2026-10-05"), True, False, False),
         ("/day 2026-13-40", ("nutrition", "day", "--date", "2026-13-40"), True, False, False),  # the CLI validates
@@ -193,6 +194,7 @@ HELP_LINES = [
     "/inbody - InBody 체성분 추세",
     "/daily [full] - Garmin 동기화 후 오늘 계획 요약(시간이 걸림, full: 전체 리포트)",
     "/unknown - Garmin UNKNOWN 세트가 있는 최근 운동(링크와 /refresh)",
+    "/refresh - UNKNOWN 세트가 있는 최근 운동을 모두 다시 받기(한 번에 10개까지)",
     "/refresh <activity_id> - Garmin에서 고친 운동 하나를 다시 받기",
     "/help - 이 목록",
 ]

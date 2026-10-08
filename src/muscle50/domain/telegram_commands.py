@@ -1,5 +1,7 @@
 """Telegram Command Bot v1 (+ v1.1 mobile replies): one chat message -> one muscle50 CLI argv, or a usage reply.
 
+v1.2 adds the bare `/refresh` (every activity of the `/unknown` list, `REFRESH_ALL_CAP` at most).
+
 Pure and deterministic: no I/O, no clock (today's date is passed in). The bot never guesses: a
 message that does not match the grammar exactly gets the help or that command's usage, and
 nothing runs. Every reply text the bot writes itself (as opposed to the CLI output it relays) is
@@ -15,6 +17,7 @@ from datetime import date, datetime
 from enum import StrEnum
 
 from muscle50.domain.nutrition import MealType
+from muscle50.domain.strength_recommendation import UNKNOWN_NOTICE_DAYS
 
 
 class ReplyKind(StrEnum):
@@ -27,6 +30,8 @@ class ReplyKind(StrEnum):
     STATUS_SUMMARY = "status_summary"
     UNKNOWN_LIST = "unknown_list"
     REFRESH = "refresh"
+    REFRESH_ALL = "refresh_all"
+    """v1.2 bare `/refresh`: `garmin refresh` of every `/unknown` activity in turn, then one result reply."""
 
 
 @dataclass(frozen=True)
@@ -36,13 +41,13 @@ class CliInvocation:
     command: str
     argv: tuple[str, ...]
     migrates: bool
-    """The CLI handler runs `migrate()` (all `nutrition` commands, `daily` and `garmin refresh`), so the bot
-    checks pending migrations."""
+    """The command runs a CLI handler that migrates (all `nutrition` commands, `daily` and `garmin refresh`,
+    including the bare `/refresh` bulk run), so the bot checks pending migrations."""
     is_daily: bool
     adds_undo: bool
     reply: ReplyKind = ReplyKind.TEXT
     activity_id: str | None = None
-    """`/refresh` only: the Garmin activity id (ASCII digits)."""
+    """`/refresh <id>` only: the Garmin activity id (ASCII digits)."""
 
 
 class UsageReason(StrEnum):
@@ -59,6 +64,9 @@ class UsageReply:
     """The command as typed (unknown command), the known command name (help/malformed), or None."""
 
 
+REFRESH_ALL_CAP = 10
+"""v1.2: activities one bare `/refresh` fetches again (about 7 Garmin requests each); the rest wait for the next."""
+
 # --- bot-own reply texts (Korean; command results are relayed unchanged) -------------------------
 
 HELP_TEXT = "\n".join(
@@ -74,6 +82,7 @@ HELP_TEXT = "\n".join(
         "/inbody - InBody 체성분 추세",
         "/daily [full] - Garmin 동기화 후 오늘 계획 요약(시간이 걸림, full: 전체 리포트)",
         "/unknown - Garmin UNKNOWN 세트가 있는 최근 운동(링크와 /refresh)",
+        f"/refresh - UNKNOWN 세트가 있는 최근 운동을 모두 다시 받기(한 번에 {REFRESH_ALL_CAP}개까지)",
         "/refresh <activity_id> - Garmin에서 고친 운동 하나를 다시 받기",
         "/help - 이 목록",
     ]
@@ -95,7 +104,8 @@ _USAGE: dict[str, tuple[str, str]] = {
     "daily": ("/daily [full]", "/daily"),
     "unknown": ("/unknown", "/unknown"),
     "refresh": (
-        "/refresh <activity_id>\nGarmin Connect에서 운동 이름을 고친 뒤 보냅니다. activity_id는 숫자입니다.",
+        "/refresh [activity_id]\nGarmin Connect에서 운동 이름을 고친 뒤 보냅니다. 인자가 없으면 UNKNOWN 세트가 있는 "
+        f"최근 운동을 모두(한 번에 {REFRESH_ALL_CAP}개까지), activity_id(숫자)를 주면 그 운동 하나만 다시 받습니다.",
         "/refresh 24610155225",
     ),
     "help": ("/help", "/help"),
@@ -124,6 +134,31 @@ def refresh_login_text(activity_id: str) -> str:
         "오류: Garmin에 다시 로그인해야 합니다. "
         f"PC 터미널에서 muscle50 garmin refresh {activity_id}를 한 번 실행하세요(로그인한 뒤 그대로 refresh됩니다)."
     )
+
+
+# --- v1.2 bare `/refresh` -------------------------------------------------------------------------
+
+REFRESH_ALL_LINE = "모두 다시 받기: /refresh"
+"""Plain text after `/today`, `/daily` and `/unknown` UNKNOWN items (not `<code>`): one tap sends it."""
+
+REFRESH_ALL_TARGETS_FAILED_TEXT = "오류: UNKNOWN 목록을 읽지 못해 아무것도 다시 받지 않았습니다. 전체: /today full"
+
+
+def refresh_all_empty_text() -> str:
+    return (
+        f"UNKNOWN 세트가 있는 운동이 없습니다 (최근 {UNKNOWN_NOTICE_DAYS}일, 오늘 운동 제외). 다시 받을 것이 없습니다."
+    )
+
+
+def refresh_all_progress_text(selected: int, total: int) -> str:
+    if selected == total:
+        what = f"UNKNOWN이 있는 운동 {selected}개를 Garmin에서 차례로 다시 받습니다."
+    else:
+        what = (
+            f"UNKNOWN이 있는 운동 {total}개 중 최근 {selected}개를 Garmin에서 차례로 다시 받습니다"
+            f"(한 번에 {REFRESH_ALL_CAP}개까지)."
+        )
+    return f"refresh 실행 중: {what} 끝나면 결과를 보냅니다."
 
 
 def summary_failed_text(command: str) -> str:
@@ -225,6 +260,10 @@ def parse_bot_message(text: str | None, *, bot_username: str, today: date) -> Cl
             return malformed
         return _full_command(command, today, full=bool(tokens))
     if command == "refresh":
+        if not tokens:
+            # v1.2: the same read-only list as `/unknown`; the bot then runs `garmin refresh` for each entry.
+            argv = ("recommend", "--date", today.isoformat(), "--json")
+            return CliInvocation(command, argv, True, False, False, ReplyKind.REFRESH_ALL)
         if len(tokens) != 1 or _ACTIVITY_ID.fullmatch(tokens[0]) is None:
             return malformed
         activity_id = tokens[0]

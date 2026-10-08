@@ -18,7 +18,15 @@ from collections.abc import Callable
 from typing import Any
 
 from muscle50.application.activity_unknown_sets import ActivityUnknownSets
-from muscle50.application.telegram_bot import SummaryUnavailableError
+from muscle50.application.telegram_bot import (
+    MAX_CONSECUTIVE_REFRESH_FAILURES,
+    BulkRefreshResult,
+    RefreshItem,
+    RefreshItemStatus,
+    RefreshStop,
+    RefreshTarget,
+    SummaryUnavailableError,
+)
 from muscle50.domain.nutrition import NutrientField
 from muscle50.domain.nutrition_guidance import NutritionAvailability
 from muscle50.domain.nutrition_targets import TargetStatus
@@ -30,7 +38,13 @@ from muscle50.domain.strength_recommendation import (
     kg_text,
 )
 from muscle50.domain.swim_recommendation import SWIM_HISTORY_DAYS
-from muscle50.domain.telegram_commands import ReplyKind
+from muscle50.domain.telegram_commands import (
+    REFRESH_ALL_CAP,
+    REFRESH_ALL_LINE,
+    ReplyKind,
+    refresh_login_text,
+    unexpected_error_text,
+)
 from muscle50.presentation.telegram_format import BotReply, Code, Link, RichLine, reply_messages
 from muscle50.presentation.terminal import _duration, _fixed
 
@@ -73,6 +87,15 @@ class TelegramSummaries:
         cli_stdout: str,
     ) -> list[str]:
         return reply_messages(refresh_reply(activity_id, before, after, cli_stdout))
+
+    def refresh_targets(self, document: Any) -> tuple[RefreshTarget, ...]:
+        try:
+            return refresh_targets(document)
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
+            raise SummaryUnavailableError(type(exc).__name__) from exc
+
+    def refresh_all(self, result: BulkRefreshResult) -> list[str]:
+        return reply_messages(refresh_all_reply(result))
 
 
 # --- /today and /daily -------------------------------------------------------------------------------
@@ -261,6 +284,7 @@ def _plan_tail(recommendation: dict[str, Any]) -> RichGroups:
         hidden = len(notices) - UNKNOWN_SUMMARY_CAP
         if hidden > 0:
             groups.append(((f"외 {hidden}개 · /unknown",),))
+        groups.append(((REFRESH_ALL_LINE,),))
     other = sum(
         1 for notice in _list(recommendation["notices"]) if _text(_object(notice)["code"]) not in SHOWN_NOTICE_CODES
     )
@@ -293,6 +317,7 @@ def unknown_list(document: Any) -> BotReply:
         return BotReply(f"Garmin UNKNOWN 세트가 있는 운동 없음 ({window})")
     groups = _unknown_groups(notices, with_sequences=True)
     groups.append((("Garmin Connect에서 운동 이름을 고친 뒤 /refresh로 다시 받습니다.",),))
+    groups.append(((REFRESH_ALL_LINE,),))
     return BotReply(f"Garmin UNKNOWN 세트가 있는 운동 {len(notices)}개 ({window})", tuple(groups))
 
 
@@ -377,6 +402,96 @@ def refresh_reply(
     # Garmin endpoint warnings of `render_refresh_result` (it has no --json), verbatim.
     lines.extend(line for line in cli_stdout.split("\n") if line.startswith("경고: "))
     return BotReply("\n".join(lines))
+
+
+# --- bare /refresh (v1.2) ------------------------------------------------------------------------------
+
+_STOP_REASONS = {
+    RefreshStop.CONSECUTIVE_FAILURES: f"연속 {MAX_CONSECUTIVE_REFRESH_FAILURES}번 실패",
+    RefreshStop.GARMIN_LOGIN: "Garmin 로그인 필요",
+    RefreshStop.UNEXPECTED_ERROR: "예상하지 못한 오류",
+}
+
+
+def refresh_targets(document: Any) -> tuple[RefreshTarget, ...]:
+    """The `/unknown` list of a `recommend --json` document, in JSON order (newest first)."""
+    targets = []
+    for entry in _list(_object(_object(document)["strength"])["unknown_notices"]):
+        notice = _object(entry)
+        local_date = _text(notice["local_date"])
+        _month_day(local_date)
+        targets.append(
+            RefreshTarget(_activity_id(notice["source_activity_id"]), local_date, _int(notice["unknown_set_count"]))
+        )
+    return tuple(targets)
+
+
+def refresh_all_reply(result: BulkRefreshResult) -> BotReply:
+    """One line per activity (before/after, failure verbatim, or not run), then what to do next."""
+    statuses = [item.status for item in result.items]
+    header = (
+        f"refresh {'완료' if result.stopped is None else '중단'}: "
+        f"{len(result.items)}개 중 {statuses.count(RefreshItemStatus.DONE)}개 받음"
+    )
+    failed = statuses.count(RefreshItemStatus.FAILED)
+    if failed:
+        header += f", {failed}개 실패"
+    not_run = statuses.count(RefreshItemStatus.NOT_RUN)
+    if not_run:
+        header += f", {not_run}개 받지 않음"
+    if result.stopped is not None:
+        header += f" ({_STOP_REASONS[result.stopped]})"
+    lines = [header]
+    for item in result.items:
+        lines.extend(_refresh_item_lines(item))
+    if result.stop_detail is not None:
+        if result.stopped is RefreshStop.GARMIN_LOGIN:
+            lines.append(refresh_login_text(result.stop_detail))
+        elif result.stopped is RefreshStop.UNEXPECTED_ERROR:
+            lines.append(unexpected_error_text(result.stop_detail))
+    tail: list[tuple[RichLine, ...]] = []
+    if result.stopped is RefreshStop.CONSECUTIVE_FAILURES:
+        tail.append((("Garmin 쪽 제한이나 장애일 수 있습니다. 잠시 뒤 다시 받기: /refresh",),))
+    elif result.stopped is RefreshStop.GARMIN_LOGIN:
+        tail.append((("로그인한 뒤 나머지 다시 받기: /refresh",),))
+    if result.over_cap > 0:
+        tail.append(
+            (
+                (
+                    f"나머지 {result.over_cap}개는 받지 않았습니다(한 번에 {REFRESH_ALL_CAP}개까지). "
+                    "다시 받기: /refresh · 목록: /unknown",
+                ),
+            )
+        )
+    if result.remaining is None:
+        remaining = f"남은 UNKNOWN: {UNKNOWN} · /unknown"  # never 0 for a count that could not be read
+    elif result.remaining == 0:
+        remaining = f"남은 UNKNOWN 운동 없음 (최근 {UNKNOWN_NOTICE_DAYS}일, 오늘 운동 제외)"
+    else:
+        remaining = f"남은 UNKNOWN: {result.remaining}개 운동 · /unknown"
+    tail.append(((remaining,),))
+    return BotReply("\n".join(lines), tuple(tail))
+
+
+def _refresh_item_lines(item: RefreshItem) -> list[str]:
+    target = item.target
+    head = f"• {_month_day(target.local_date)} {target.source_activity_id}: "
+    if item.status is RefreshItemStatus.NOT_RUN:
+        return [f"{head}받지 않음"]
+    if item.status is RefreshItemStatus.FAILED:
+        errors = item.error.split("\n") if item.error is not None else []
+        return [f"{head}실패", *(f"  {line}" for line in errors)]
+    before, after = item.before, item.after
+    if before is not None and after is not None and before.is_strength and after.is_strength:
+        old, new = before.unknown_set_count, after.unknown_set_count
+        text = f"UNKNOWN {old} → {new}세트"
+        if new > 0:
+            # An equal count does not prove that Garmin was not changed, so it is not called "not fixed yet".
+            text += " (변화 없음)" if new == old else " (아직 남음)"
+    else:
+        text = item.cli_stdout.split("\n", 1)[0]  # no count to compare: the CLI headline, as `/refresh <id>`
+    warnings = [f"  {line}" for line in item.cli_stdout.split("\n") if line.startswith("경고: ")]
+    return [f"{head}{text}", *warnings]
 
 
 _BUILDERS: dict[ReplyKind, Callable[[Any], BotReply]] = {
