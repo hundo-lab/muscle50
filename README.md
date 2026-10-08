@@ -303,7 +303,7 @@ DB가 없으면 만들지 않음) 값은 0.1 단위로 반올림합니다. 없�
 뺍니다. 사용자가 직접 실행하는 명령이라 수치를 출력하며, `inbody sync`의 값 숨김 정책과 다른 명령의 출력은 그대로입니다.
 상세: `docs/inbody-trend.md`.
 
-## Telegram bot (v1.1, 명령어형)
+## Telegram bot (v1.2, 명령어형)
 
 휴대폰 Telegram에서 정해진 명령으로 muscle50을 씁니다. 각 bot 명령은 해당 CLI 명령을 같은 코드로 실행합니다.
 `/today`, `/status`, `/daily`는 그 CLI의 JSON 결과로 만든 짧은 요약을 답하고, 뒤에 `full`을 붙이면 CLI text 전체를
@@ -338,7 +338,8 @@ muscle50 telegram run      # long polling 시작. Ctrl+C로 종료(exit 130)
 | `/show <meal_id>` | `nutrition meal show <meal_id>` |
 | `/inbody` | `inbody trend` |
 | `/daily [full]` | `daily` (Garmin 동기화 포함, 진행 답을 먼저 보냄. 기본은 요약, `full`은 CLI text) |
-| `/unknown` | `recommend --date <오늘>`의 UNKNOWN notice (최근 14일, 오늘 운동 제외. 운동마다 Garmin Connect 링크와 `/refresh <id>`) |
+| `/unknown` | `recommend --date <오늘>`의 UNKNOWN notice (최근 14일, 오늘 운동 제외. 운동마다 Garmin Connect 링크와 `/refresh <id>`, 목록 끝에 `모두 다시 받기: /refresh`) |
+| `/refresh` | UNKNOWN 운동 모두 다시 받기, 한 번에 10개 (`/unknown` 목록을 차례로 `garmin refresh`. 진행 답을 먼저 보내고, 운동마다 전후 UNKNOWN 세트 수와 남은 UNKNOWN 운동 수를 답함) |
 | `/refresh <activity_id>` | `garmin refresh <activity_id>` (진행 답을 먼저 보내고, 전후 UNKNOWN 세트 수를 답함) |
 | `/help`, `/start` | 명령 목록 |
 

@@ -173,7 +173,7 @@ muscle50/
 
 | 기능 | 관련 파일 / 명령 | 완성도 | 비고 |
 |---|---|---|---|
-| Telegram 명령어 bot v1.1 | `telegram check\|run` / `application/telegram_bot.py`, `application/activity_unknown_sets.py`, `domain/telegram_commands.py`, `infrastructure/telegram/`, `presentation/telegram_format.py`, `presentation/telegram_summary.py` | 부분 | 고정 명령(`/today` `/status` `/day` `/log` `/void` `/show` `/inbody` `/daily` `/unknown` `/refresh`)을 `cli.main`으로 실행한다. `/today` `/status` `/daily`는 같은 명령의 JSON으로 만든 짧은 요약을 답하고(`full`이면 CLI text), 나머지는 CLI text를 답한다. `/unknown`과 요약 끝의 UNKNOWN 알림은 Garmin Connect 링크와 `/refresh <id>`(=`garmin refresh`)를 준다. 자동 refresh 없음, CLI 출력 변경 없음. stdlib `urllib` long polling, 허용 chat 목록, token 비출력, migration 없음. LLM 자유 문장은 v2. 실제 Telegram 확인은 사용자 수동 단계다. 상세: `docs/telegram-bot.md`. |
+| Telegram 명령어 bot v1.2 | `telegram check\|run` / `application/telegram_bot.py`, `application/activity_unknown_sets.py`, `domain/telegram_commands.py`, `infrastructure/telegram/`, `presentation/telegram_format.py`, `presentation/telegram_summary.py` | 부분 | 고정 명령(`/today` `/status` `/day` `/log` `/void` `/show` `/inbody` `/daily` `/unknown` `/refresh`)을 `cli.main`으로 실행한다. `/today` `/status` `/daily`는 같은 명령의 JSON으로 만든 짧은 요약을 답하고(`full`이면 CLI text), 나머지는 CLI text를 답한다. `/unknown`과 요약 끝의 UNKNOWN 알림은 Garmin Connect 링크와 `/refresh <id>`(=`garmin refresh`)를 준다. 인자 없는 `/refresh`(v1.2)는 `/unknown` 목록을 차례로 다시 받는다(한 번에 10개, 운동 사이 2초, 연속 3번 실패하면 멈춤, 남은 UNKNOWN 수를 답함). 자동 refresh 없음, CLI 출력 변경 없음. stdlib `urllib` long polling, 허용 chat 목록, token 비출력, migration 없음. LLM 자유 문장은 v2. 실제 Telegram 확인은 사용자 수동 단계다. 상세: `docs/telegram-bot.md`. |
 
 ---
 
