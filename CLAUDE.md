@@ -43,7 +43,10 @@ LF, and reports in a fixed table. Never run `ruff format .` or `ruff format src`
 2. **Integration approval**: after the verifier's PASS, before the feature is rebased and fast-forwarded into local main.
 3. **Production migration**: applying a new migration to `%LOCALAPPDATA%\muscle50` (back up, apply, verify).
 4. **Live Garmin verification** of a feature that changes Garmin sync.
-5. **Push**: the user runs `git push`.
+
+Push is not a human gate (user decision 2026-10-08). Right after each integration the orchestrator runs
+`git push origin main`, a plain fast-forward. If origin rejects it (origin moved), report and stop: never
+force, delete or rewrite remote history. Implementers, verifiers and integrators do not push.
 
 ## Running muscle50 and safety hooks (`.claude/settings.json`)
 
@@ -51,7 +54,8 @@ LF, and reports in a fixed table. Never run `ruff format .` or `ruff format src`
   `recommend` or `nutrition log` when the user asks. Feature worktrees, tests and smoke runs use a temporary
   `MUSCLE50_HOME="$TEMP/muscle50-<name>"`.
 - PreToolUse (`.claude/hooks/pre_bash_guard.py`) blocks:
-  - `git push`;
+  - unsafe `git push`: force (`-f`, `--force*`, `+refspec`), delete (`-d`, `--delete`, `:refspec`), `--mirror`,
+    `--prune`. A plain `git push` is allowed;
   - direct writes or deletes under `%LOCALAPPDATA%\muscle50`;
   - `muscle50` against production from non-main code, or while a migration in main is not yet applied
     to production (that is gate 3).

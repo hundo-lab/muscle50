@@ -8,8 +8,9 @@ status: draft
 migration: none
 # none | additive | breaking. 기존 text/JSON 출력이 바뀌는 정도. additive는 JSON 끝에 key 추가, 새 명령 등이다.
 output_change: none
-# 이 기능에 필요한 사람 게이트: design(항상) / integration(항상) / prod-migration / live-garmin / push(항상)
-user_gates: [design, integration, push]
+# 이 기능에 필요한 사람 게이트: design(항상) / integration(항상) / prod-migration / live-garmin.
+# push는 게이트가 아니다: 통합 직후 orchestrator가 git push origin main을 한다.
+user_gates: [design, integration]
 ---
 
 # <title>

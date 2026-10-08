@@ -105,6 +105,11 @@ branch, `<worktree>`, the spec path, the approved plan, and the implementer's an
 takes the lock, rebases onto local main, re-runs the gate, commits the README and final spec frontmatter,
 fast-forwards main, and releases the lock. It never pushes.
 
+- **Push** (not a human gate): when the integrator reports success, run `git push origin main` from the main
+  checkout. Only a plain fast-forward push; the hook blocks force, delete and mirror. If origin rejects it
+  (origin moved), stop and report: never force or rewrite. With several features in one run you may push
+  once after the last integration.
+
 - **Rebase conflict** (the integrator aborted the rebase): send it to the implementer with the instruction
   "rebase feature/<id> onto local main, resolve the conflicts preserving both features' behaviour, re-run
   the gate". Then verify again (step 4) and ask for integration approval again (step 5): the content changed.
@@ -117,6 +122,7 @@ Per feature: status, branch, commits on main (`<old>..<new>`), gate results, fil
 / docs). Then a **remaining human gates** checklist with exact steps:
 - [ ] production migration NNN (if any): back up, apply, verify (`add-migration` section 6)
 - [ ] live Garmin verification (if the feature touches Garmin sync): commands and expected result
-- [ ] push: `git push origin main` (run by the user; agents are blocked from pushing)
+
+Report the push as done (`origin/main` sha) or, if origin rejected it, the error and what the user should do.
 
 Also report blocked features with their reasons, and the recommended next action.

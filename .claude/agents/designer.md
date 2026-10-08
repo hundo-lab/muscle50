@@ -59,7 +59,7 @@ file path (and a symbol or section).
 9. **Acceptance criteria mapping**: each acceptance criterion in the spec -> the test or smoke step that
    proves it.
 10. **Risks and open questions**: things the spec does not decide.
-11. **User gates this feature will need**: prod migration / live Garmin / push.
+11. **User gates this feature will need**: prod migration / live Garmin (push is done by the orchestrator, not a gate).
 
 ## When the spec is ambiguous or conflicts with a principle
 

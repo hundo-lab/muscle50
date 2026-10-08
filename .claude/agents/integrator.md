@@ -67,7 +67,7 @@ In `<worktree>`:
   docs: record <Feature name> integration
 
   <2-5 lines: rebased onto <main sha>; gate: pytest N passed, ruff clean, mypy K files, diff --check clean;
-  migration NNN not yet applied to production (gate 3) / no migration; push not done (gate 5).>
+  migration NNN not yet applied to production (gate 3) / no migration; the orchestrator pushes after this.>
   ```
 
   End the message with the attribution trailer configured for this session, if any. The gate numbers here are
@@ -96,4 +96,4 @@ git -C "<main>" merge --ff-only feature/<id>
     `muscle50` against production from main, because this migration has not been applied.
   - live Garmin verification: the commands and what to look for (Claude may run them from the main checkout
     once the user agrees)
-  - push: `git push origin main`, run by the user
+  - push: not yours. The orchestrator runs `git push origin main` right after you report success.

@@ -42,7 +42,10 @@ rebase에서 충돌이 나면(다른 기능이 같은 곳을 먼저 바꾼 경�
 | 2. 통합 승인 | verifier PASS 뒤, local main에 들어가기 전 | 통합 / 보류 / 의견을 달아 되돌림 |
 | 3. production migration | 통합된 기능에 migration이 있을 때 | 백업 → 적용 → 검증(`.claude/skills/add-migration` 6절). 적용 전까지 hook이 production 실행을 막는다. |
 | 4. live Garmin 검증 | Garmin sync를 바꾼 기능 | 실제 계정으로 확인할지 결정(main에서 Claude가 실행해도 됨) |
-| 5. push | 마지막 | `git push origin main`을 사용자가 직접 실행 |
+
+
+push는 사람 게이트가 아니다(2026-10-08 사용자 결정). 통합 직후 orchestrator가 `git push origin main`을 일반
+fast-forward로 실행한다. force, 삭제, mirror push는 hook이 막고, origin이 거절하면 멈추고 사용자에게 알린다.
 
 ## 4. 기록 위치
 

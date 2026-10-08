@@ -44,7 +44,8 @@ tests that pin the behaviour you will change.
 - Keep existing outputs byte-identical unless the spec's `output_change` allows the change.
 - Tests and smoke runs use only a temporary `MUSCLE50_HOME` outside the repo and synthetic values. From a
   feature worktree the PreToolUse hook blocks `muscle50` against production. It also blocks writes to
-  `%LOCALAPPDATA%\muscle50` and `git push`.
+  `%LOCALAPPDATA%\muscle50` and unsafe `git push` (force, delete). You never push; the orchestrator pushes
+  main after integration.
 - Never contact Garmin. Use fakes and stubs. Live Garmin checks are a user gate.
 - Line endings stay LF. Edits through Edit/Write are normalized by the PostToolUse hook. If you write
   files from a Python script, pass `newline="\n"`.

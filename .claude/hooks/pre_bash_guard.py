@@ -4,7 +4,9 @@ Claude Code passes the hook input as JSON on stdin. Exit code 2 blocks the tool 
 stderr text is shown to Claude as the reason; exit code 0 lets the normal permission flow run.
 
 Blocked (see CLAUDE.md "Human gates" and docs/specs/README.md):
-1. `git push`: push is a human gate; the user runs it.
+1. Unsafe `git push`: force (`-f`, `--force`, `--force-with-lease`, `--force-if-includes`, a `+refspec`),
+   delete (`-d`, `--delete`, a `:refspec`), `--mirror` and `--prune`. A plain push is allowed: Claude
+   fast-forwards origin after an integration (CLAUDE.md).
 2. Direct write/delete commands aimed at the production data directory (%LOCALAPPDATA%\\muscle50):
    rm/mv/cp-into/redirects/sqlite3 without -readonly, and `python`/`uv run python` one-liners that
    name it without `mode=ro`. Production data changes only through the muscle50 CLI.
@@ -50,6 +52,10 @@ _WRITE_VERBS = {
 }  # fmt: skip
 # Copy commands write only to their destination (the last path argument).
 _COPY_VERBS = {"cp", "copy", "copy-item", "cpi", "xcopy", "robocopy", "rsync"}
+# `git push` options that rewrite or delete remote history; the plain push stays allowed.
+_UNSAFE_PUSH_OPTIONS = {
+    "--force", "--force-with-lease", "--force-if-includes", "--delete", "--mirror", "--prune",
+}  # fmt: skip
 # git global options that take a separate value.
 _GIT_VALUE_OPTIONS = {"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
 # `uv run` options that take a separate value.
@@ -183,15 +189,28 @@ def _verb(token: str) -> str:
     return name[:-4] if name.endswith(".exe") else name
 
 
-def _runs_git_push(segment: str) -> bool:
+def _unsafe_git_push(segment: str) -> str | None:
+    """Why this `git push` is unsafe (force, delete, mirror, prune), or None for a plain push."""
     tokens = _shell_tokens(segment)
     index = _command_index(tokens)
     if index >= len(tokens) or _verb(tokens[index]) != "git":
-        return False
+        return None
     rest = tokens[index + 1 :]
     while rest and rest[0].startswith("-"):
         rest = rest[2:] if rest[0] in _GIT_VALUE_OPTIONS else rest[1:]
-    return bool(rest) and rest[0].lower() == "push"
+    if not rest or rest[0].lower() != "push":
+        return None
+    for arg in rest[1:]:
+        option = arg.split("=", 1)[0].lower()
+        if option in _UNSAFE_PUSH_OPTIONS:
+            return f"`{option}` rewrites or deletes remote history"
+        if arg.startswith("-") and not arg.startswith("--") and set(arg[1:]) & {"f", "d"}:
+            return f"`{arg}` forces or deletes"
+        if arg.startswith("+"):
+            return f"refspec `{arg}` forces the update"
+        if arg.startswith(":"):
+            return f"refspec `{arg}` deletes a remote branch"
+    return None
 
 
 def _is_windows_switch(verb: str, arg: str) -> bool:
@@ -384,11 +403,13 @@ def _muscle50_problem(segments: list[str], cwd: str | None) -> str | None:
 def check(command: str, tool_name: str = "Bash", cwd: str | None = None) -> str | None:
     """Return the reason to block `command`, or None to allow it."""
     segments = _all_segments(command, bash=tool_name != "PowerShell")
-    if any(_runs_git_push(segment) for segment in segments):
-        return (
-            "git push is blocked: pushing is a human gate in muscle50 (CLAUDE.md). "
-            "Report the branch and commits and let the user run the push."
-        )
+    for segment in segments:
+        unsafe = _unsafe_git_push(segment)
+        if unsafe:
+            return (
+                f"unsafe git push is blocked: {unsafe}. muscle50 only fast-forwards origin (CLAUDE.md); "
+                "never force, delete or mirror. If the remote rejects the push, report it to the user."
+            )
     if any(_writes_to_production(segment) for segment in segments):
         return (
             "Write/delete aimed at the production data directory (%LOCALAPPDATA%\\muscle50) is blocked. "
