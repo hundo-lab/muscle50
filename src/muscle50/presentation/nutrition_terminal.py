@@ -2,7 +2,8 @@
 
 Text rounds to 0.1 for display only. JSON carries the exact Decimal values as canonical
 strings, lists nutrient sets in NutrientField order, and is byte-stable for identical data.
-Text stays ASCII apart from user-entered food names (cp949 consoles cannot print dashes/arrows).
+Text stays ASCII apart from user-entered food names and general meal memos, and the general
+meal's Korean label (cp949 consoles cannot print dashes/arrows).
 """
 
 from __future__ import annotations
@@ -225,7 +226,13 @@ def _meal_lines(intake: MealIntake, *, facts: bool = False) -> list[str]:
     )
     lines = [f"[{meal.meal_type.value}] {meal.meal_id} ({when})"]
     for item in intake.items:
-        lines.append(f"  {item.item.sequence}. {_item_name(item)} {_quantity(item)}: {_item_values(item)}")
+        if item.item.is_general:
+            # A general meal has no menu or amount: only its memo, and every nutrient is unknown.
+            note = item.item.serving_description
+            detail = "general meal" if note is None else f"general meal; note: {note}"
+            lines.append(f"  {item.item.sequence}. {item.item.food_name} ({detail}): nutrition unknown")
+        else:
+            lines.append(f"  {item.item.sequence}. {_item_name(item)} {_quantity(item)}: {_item_values(item)}")
         lines.append(f"     source: {_item_sources(item)}")
         if facts:
             lines.append(f"     facts: {_item_fact_versions(item)}")
@@ -636,7 +643,7 @@ def _item_payload(item: ItemIntake) -> dict[str, Any]:
                 "accuracy": selection.provenance.accuracy.value,
             }
         )
-    return {
+    payload: dict[str, Any] = {
         "sequence": item.item.sequence,
         "food_id": item.item.food_profile_id,
         "food_name": item.item.food_name,
@@ -646,6 +653,11 @@ def _item_payload(item: ItemIntake) -> dict[str, Any]:
         "missing_fields": [nutrient.value for nutrient in item.missing_fields],
         "facts": [_fact_payload(fact) for fact in item.item.nutrition_facts],
     }
+    if item.item.is_general:
+        # Only general meal items carry these keys; every other item keeps its exact document.
+        payload["general_meal"] = True
+        payload["note"] = item.item.serving_description
+    return payload
 
 
 def _meal_payload(intake: MealIntake) -> dict[str, Any]:

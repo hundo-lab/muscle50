@@ -7,6 +7,7 @@ arithmetic and deterministic source selection.
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime, tzinfo
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
@@ -63,6 +64,14 @@ SOURCE_PRIORITY: dict[NutritionSourceType, int] = {
 
 NUTRITION_DECIMAL_PRECISION = 28
 _NUTRITION_CONTEXT = Context(prec=NUTRITION_DECIMAL_PRECISION, rounding=ROUND_HALF_EVEN)
+
+# General meal (Nutrition General Meal v1): "I ate a meal whose menu and numbers I do not know".
+# It is a reserved system profile with no facts and no aliases; a general item points to it and has
+# no quantity, no unit and no facts, so every nutrient of that item is unknown (never 0).
+GENERAL_MEAL_FOOD_ID = "general-meal"
+GENERAL_MEAL_NAME = "일반식"
+GENERAL_MEAL_NOTE_MAX_LENGTH = 100
+_RESERVED_FOOD_REFERENCES = frozenset({GENERAL_MEAL_FOOD_ID, GENERAL_MEAL_NAME})
 
 
 @dataclass(frozen=True)
@@ -304,6 +313,20 @@ class MealItem:
             _validate_positive_decimal(self.quantity, "quantity")
         _validate_fact_history(self.nutrition_facts)
 
+    @property
+    def is_general(self) -> bool:
+        """A general meal item: the reserved profile with no quantity, no unit and no facts.
+
+        The reserved profile ID is required: an item without a quantity that points to any other
+        food (for example one written by a future parser) is not a general meal.
+        """
+        return (
+            self.food_profile_id == GENERAL_MEAL_FOOD_ID
+            and self.quantity is None
+            and self.quantity_unit is None
+            and not self.nutrition_facts
+        )
+
     def preferred_fact(self, nutrient: NutrientField | None = None) -> NutritionFact | None:
         if self.quantity_unit is None:
             return None
@@ -380,6 +403,29 @@ class DailyNutritionSummary:
     timezone_name: str
     meals: tuple[MealNutritionSummary, ...]
     nutrition: NutritionAggregate
+
+
+def normalize_general_meal_note(text: str | None) -> str | None:
+    """The general meal memo as stored: surrounding whitespace stripped, empty meaning no memo.
+
+    Raises ValueError when the memo is longer than GENERAL_MEAL_NOTE_MAX_LENGTH characters or is
+    not a single line of text (it contains a control character such as a line break or a tab).
+    """
+    if text is None:
+        return None
+    note = text.strip()
+    if not note:
+        return None
+    if len(note) > GENERAL_MEAL_NOTE_MAX_LENGTH:
+        raise ValueError(f"must be at most {GENERAL_MEAL_NOTE_MAX_LENGTH} characters (got {len(note)})")
+    if any(unicodedata.category(character) == "Cc" for character in note):
+        raise ValueError("must be a single line of text")
+    return note
+
+
+def is_reserved_food_reference(text: str) -> bool:
+    """True when ``text`` names the general meal (its ID or name, whitespace and case ignored)."""
+    return text.strip().lower() in _RESERVED_FOOD_REFERENCES
 
 
 def select_preferred_fact(

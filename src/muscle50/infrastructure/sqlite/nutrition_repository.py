@@ -12,6 +12,8 @@ from pathlib import Path
 
 from muscle50.domain.meal_history import MealHistory, MealMerge, MealRevision, MealVoid, MergedItem
 from muscle50.domain.nutrition import (
+    GENERAL_MEAL_FOOD_ID,
+    GENERAL_MEAL_NAME,
     Accuracy,
     FoodNutritionProfile,
     Meal,
@@ -62,7 +64,10 @@ class SqliteMealRepository:
 
     Any item's ``food_profile_id`` must already exist in nutrition_food_profiles
     (insert the profile via SqliteFoodNutritionRepository first); otherwise
-    ``save`` raises a raw ``sqlite3.IntegrityError`` from the foreign key.
+    ``save`` raises a raw ``sqlite3.IntegrityError`` from the foreign key. The one exception
+    is a general meal item (``MealItem.is_general``): every write that inserts one also inserts
+    the reserved ``general-meal`` profile (no facts, no aliases) with ``INSERT OR IGNORE`` in the
+    same transaction, and refuses with ``ValueError`` when that ID holds anything else.
     """
 
     def __init__(self, database_path: Path) -> None:
@@ -518,6 +523,9 @@ def _insert_new_items(connection: sqlite3.Connection, meal_id: str, items: tuple
 
 
 def _insert_item(connection: sqlite3.Connection, item: MealItem) -> None:
+    if item.is_general:
+        # In the caller's transaction, before the item row that references it (a failed write drops both).
+        _ensure_general_meal_profile(connection)
     connection.execute(
         """
         INSERT INTO nutrition_meal_items (
@@ -538,6 +546,32 @@ def _insert_item(connection: sqlite3.Connection, item: MealItem) -> None:
     _insert_facts_in_dependency_order(
         connection, item.nutrition_facts, meal_id=item.meal_id, item_sequence=item.sequence, profile_id=None
     )
+
+
+def _ensure_general_meal_profile(connection: sqlite3.Connection) -> None:
+    """Create the general meal's system profile if missing, then check it is exactly that profile.
+
+    Inserted once (``INSERT OR IGNORE``), never updated. A pre-existing row with that ID that has
+    another name, nutrition facts or aliases is a user food, not the general meal: refused.
+    """
+    connection.execute(
+        "INSERT OR IGNORE INTO nutrition_food_profiles (profile_id, name) VALUES (?, ?)",
+        (GENERAL_MEAL_FOOD_ID, GENERAL_MEAL_NAME),
+    )
+    name = connection.execute(
+        "SELECT name FROM nutrition_food_profiles WHERE profile_id = ?", (GENERAL_MEAL_FOOD_ID,)
+    ).fetchone()["name"]
+    has_facts = connection.execute(
+        "SELECT 1 FROM nutrition_facts WHERE profile_id = ? LIMIT 1", (GENERAL_MEAL_FOOD_ID,)
+    ).fetchone() is not None
+    has_aliases = connection.execute(
+        "SELECT 1 FROM nutrition_food_profile_aliases WHERE profile_id = ? LIMIT 1", (GENERAL_MEAL_FOOD_ID,)
+    ).fetchone() is not None
+    if name != GENERAL_MEAL_NAME or has_facts or has_aliases:
+        raise ValueError(
+            f"food {GENERAL_MEAL_FOOD_ID!r} in the catalog is not the general meal (it has nutrition facts, "
+            "aliases or another name); general meals cannot be recorded. Nothing was changed."
+        )
 
 
 def _insert_removal(

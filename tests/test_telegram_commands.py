@@ -189,6 +189,7 @@ HELP_LINES = [
     "/day [YYYY-MM-DD] - 그날 식사와 합계(기본: 오늘)",
     "/log <meal>[+] <food> <qty> <unit>[, <food> <qty> <unit> ...] - 식사 기록",
     "     meal: breakfast, lunch, dinner, snack, other. 끝에 +를 붙이면 같은 종류 식사를 하나 더 기록",
+    "     메뉴·영양값을 모르는 식사: <food> <qty> <unit> 대신 일반식 [메모] (예: /log lunch 일반식 구내식당)",
     "/void <meal_id> [이유] - 기록한 식사 취소(void)",
     "/show <meal_id> - 기록한 식사 하나 보기",
     "/inbody - InBody 체성분 추세",
@@ -211,7 +212,8 @@ def test_bot_reply_texts_are_pinned() -> None:
     assert usage_text("log") == (
         "사용법: /log <meal>[+] <food> <qty> <unit>[, <food> <qty> <unit> ...]\n"
         "meal은 breakfast, lunch, dinner, snack, other 중 하나이고, 끝에 +를 붙이면 같은 종류 식사를 하나 더 "
-        "기록합니다. 각 item은 쉼표로 나누고, 마지막 두 단어가 수량과 단위입니다.\n"
+        "기록합니다. 각 item은 쉼표로 나누고, 마지막 두 단어가 수량과 단위입니다. "
+        "메뉴·영양값을 모르는 식사는 item 자리에 일반식 [메모]를 씁니다(수량·단위 없음, 영양값은 unknown).\n"
         "예: /log lunch 닭가슴살 150 g, 햇반 1 pack"
     )
     assert usage_text("show") == "사용법: /show <meal_id>\n예: /show 2026-10-06-lunch-1"

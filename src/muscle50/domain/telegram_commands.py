@@ -1,6 +1,7 @@
 """Telegram Command Bot v1 (+ v1.1 mobile replies): one chat message -> one muscle50 CLI argv, or a usage reply.
 
 v1.2 adds the bare `/refresh` (every activity of the `/unknown` list, `REFRESH_ALL_CAP` at most).
+General Meal v1 adds the `/log` item `일반식 [메모]` (a general meal: `--general [--general-note=<memo>]`).
 
 Pure and deterministic: no I/O, no clock (today's date is passed in). The bot never guesses: a
 message that does not match the grammar exactly gets the help or that command's usage, and
@@ -16,7 +17,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from enum import StrEnum
 
-from muscle50.domain.nutrition import MealType
+from muscle50.domain.nutrition import GENERAL_MEAL_NAME, MealType, QuantityUnit
 from muscle50.domain.strength_recommendation import UNKNOWN_NOTICE_DAYS
 
 
@@ -77,6 +78,7 @@ HELP_TEXT = "\n".join(
         "/day [YYYY-MM-DD] - 그날 식사와 합계(기본: 오늘)",
         "/log <meal>[+] <food> <qty> <unit>[, <food> <qty> <unit> ...] - 식사 기록",
         "     meal: breakfast, lunch, dinner, snack, other. 끝에 +를 붙이면 같은 종류 식사를 하나 더 기록",
+        "     메뉴·영양값을 모르는 식사: <food> <qty> <unit> 대신 일반식 [메모] (예: /log lunch 일반식 구내식당)",
         "/void <meal_id> [이유] - 기록한 식사 취소(void)",
         "/show <meal_id> - 기록한 식사 하나 보기",
         "/inbody - InBody 체성분 추세",
@@ -95,7 +97,8 @@ _USAGE: dict[str, tuple[str, str]] = {
     "log": (
         "/log <meal>[+] <food> <qty> <unit>[, <food> <qty> <unit> ...]\n"
         "meal은 breakfast, lunch, dinner, snack, other 중 하나이고, 끝에 +를 붙이면 같은 종류 식사를 하나 더 "
-        "기록합니다. 각 item은 쉼표로 나누고, 마지막 두 단어가 수량과 단위입니다.",
+        "기록합니다. 각 item은 쉼표로 나누고, 마지막 두 단어가 수량과 단위입니다. "
+        "메뉴·영양값을 모르는 식사는 item 자리에 일반식 [메모]를 씁니다(수량·단위 없음, 영양값은 unknown).",
         "/log lunch 닭가슴살 150 g, 햇반 1 pack",
     ),
     "void": ("/void <meal_id> [이유]", "/void 2026-10-06-snack-1 중복 기록"),
@@ -228,6 +231,9 @@ KNOWN_COMMANDS = frozenset(_USAGE)
 # Explicit ASCII digits: `\d` (and `int`) also accept other scripts' digits, such as Arabic-Indic ones.
 _ACTIVITY_ID = re.compile(r"[1-9][0-9]{0,19}")
 _MEAL_TOKEN = re.compile(rf"({'|'.join(meal.value for meal in MealType)})(\+)?")
+# `일반식 1 serving`: a plain number and a unit where a catalog item has its quantity (refused, never guessed).
+_PLAIN_NUMBER = re.compile(r"[0-9]+(\.[0-9]+)?")
+_UNITS = frozenset(unit.value for unit in QuantityUnit)
 
 
 def parse_bot_message(text: str | None, *, bot_username: str, today: date) -> CliInvocation | UsageReply:
@@ -316,7 +322,11 @@ def _full_command(command: str, today: date, *, full: bool) -> CliInvocation:
 
 
 def _log_command(rest: str) -> CliInvocation | UsageReply:
-    """`/log <meal>[+] <food> <qty> <unit>[, ...]`: the last two words of an item are quantity and unit."""
+    """`/log <meal>[+] <food> <qty> <unit>[, ...]`: the last two words of an item are quantity and unit.
+
+    An item whose first word is exactly `일반식` is a general meal; its other words are the memo, up
+    to the comma. It is refused when it ends like a catalog item (`일반식 1 serving`), which is ambiguous.
+    """
     malformed = UsageReply(UsageReason.MALFORMED, "log")
     meal_token, items_text = _split_first_token(rest)
     match = _MEAL_TOKEN.fullmatch(meal_token)
@@ -325,6 +335,13 @@ def _log_command(rest: str) -> CliInvocation | UsageReply:
     argv: list[str] = ["nutrition", "log", "--meal", match.group(1)]
     for item in items_text.split(","):
         words = item.split()
+        if words and words[0] == GENERAL_MEAL_NAME:
+            memo = words[1:]
+            if len(memo) >= 2 and _PLAIN_NUMBER.fullmatch(memo[-2]) is not None and memo[-1] in _UNITS:
+                return malformed
+            # The `=` form keeps the memo one argv item whatever it contains.
+            argv.extend(["--general", *((f"--general-note={' '.join(memo)}",) if memo else ())])
+            continue
         if len(words) < 3:
             return malformed
         argv.extend(["--item", " ".join(words[:-2]), words[-2], words[-1]])

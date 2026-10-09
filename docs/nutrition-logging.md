@@ -160,6 +160,20 @@ muscle50 nutrition log --meal snack --additional --item banana 1 piece
 - The command prints the stored meal (re-read from the database) with per-item nutrients and
   the meal total; `--json` prints the same as JSON.
 
+#### General meal
+
+A meal whose menu and numbers are unknown (canteen, delivery) is logged with `--general`, optionally
+followed by `--general-note TEXT`, alone or mixed with `--item` in any order:
+
+```powershell
+muscle50 nutrition log --meal lunch --general --general-note 구내식당
+muscle50 nutrition log --meal dinner --general --item chicken-breast 100 g
+```
+
+The general item has no quantity, unit or facts, so every total it is part of is incomplete (the
+catalog items stay in the known subtotal), never 0. `meal add-item` and `meal replace-item` accept
+`--general` too. Rules, output and limits: [nutrition-general-meal.md](nutrition-general-meal.md).
+
 ### Edit a logged meal's items
 
 When a meal is incomplete or has a wrong item, fix the existing meal rather than adding an
@@ -339,6 +353,8 @@ only.
 - Without `--time` a meal is stored at local 00:00; `--time 00:00` is displayed the same way.
 - The day boundary uses this computer's current UTC offset rules; meals logged under a
   different offset are still found by their absolute time.
+- A general meal (`--general`) records only that a meal was eaten: no estimate from its memo, no
+  portion size. Days with one have incomplete totals (`nutrition-general-meal.md`).
 - No meal or menu recommendations, weekly analytics, parser, Telegram, external databases. Targets
   and remaining amounts are in `muscle50 nutrition status` (`nutrition-targets.md`), not in `day`;
   `recommend`/`daily` show that status with short below-target actions (`nutrition-recommendation.md`).

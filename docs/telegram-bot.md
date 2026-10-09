@@ -661,3 +661,61 @@ chat 111: /refresh remaining -> exit 0
   `/refresh`도 탭하면 실행된다(v1.1에서는 사용법 답장이었다).
 - 운동 줄의 `경고: ` 줄과 CLI 첫 줄 fallback은 `garmin refresh` text 출력에 의존한다(v1.1과 같은 결합).
 - 이 절의 답장 형식은 live 확인(통합 후 사용자 게이트) 전까지 실제 Telegram 앱과 실제 Garmin에서 확인하지 않았다.
+
+# Nutrition General Meal v1: `/log 일반식`
+
+메뉴나 영양값을 모르는 식사(구내식당, 배달, 집밥 반찬)를 "일반식을 먹었다"는 기록만으로 남긴다. CLI의
+`nutrition log --general [--general-note TEXT]`와 같다. 규칙과 출력은 [nutrition-general-meal.md](nutrition-general-meal.md).
+
+## 문법
+
+`/log <meal>[+] <item>[, <item> ...]`의 각 item 자리에 `일반식 [메모]`를 쓸 수 있다.
+
+```text
+/log lunch 일반식                       -> nutrition log --meal lunch --general
+/log lunch 일반식 구내식당              -> ... --general --general-note=구내식당
+/log dinner 일반식, 닭가슴살 100 g      -> ... --general --item 닭가슴살 100 g
+/log lunch+ 일반식 구내식당, 일반식 배달 -> 일반식 두 개(메모 각각), 그리고 --additional
+```
+
+- item의 첫 단어가 정확히 `일반식`이면 일반식이다. 나머지 단어(공백 하나로 다시 이음)가 메모이고, 메모는 쉼표에서 끝난다.
+- 메모는 `--general-note=<메모>` 한 argv로 넘긴다(`/void`의 `--reason=`과 같다). 메모 검사(100자 이하, 한 줄)는 CLI가 하고,
+  어기면 CLI의 `오류:` 줄이 그대로 답으로 온다. 아무것도 저장되지 않는다.
+- **거부(사용법 답장):** 메모의 마지막 두 단어가 숫자(`1`, `1.5`)와 단위(`g`, `ml`, `count`, `pack`, `piece`, `animal`,
+  `serving`)이면 거부한다. 예: `일반식 1 serving`, `일반식 제육 2 pack`. 카탈로그 음식 "일반식"의 수량으로도 읽히기 때문이다.
+  메모로 바꾸거나 무시하지 않는다.
+- 비슷한 말(`일반`, `일반식사`, `밥`, `식사`, 붙여 쓴 `일반식구내식당`)은 일반식으로 추측하지 않는다. 기존 item 규칙(3단어
+  이상, 마지막 두 단어가 수량과 단위)을 따르고, 그렇지 않으면 사용법 답장이다.
+- `-`로 시작하는 단어는 메모에서도 형식 오류다(기존 규칙).
+- 답장은 `nutrition log` stdout 그대로이고, 끝에 `취소: /void <meal_id>` 줄이 붙는다(변경 없음).
+
+답장 예(합성 값):
+
+```text
+Recorded meal 2026-10-08-lunch-1.
+
+[lunch] 2026-10-08-lunch-1 (2026-10-08, time not recorded)
+  1. 일반식 (general meal; note: 구내식당): nutrition unknown
+     source: no nutrition facts
+     missing: kcal, protein, carbohydrate, fat
+  Meal total: kcal incomplete (no item has a value) | P incomplete (no item has a value) | ...
+
+Whole day: muscle50 nutrition day --date 2026-10-08
+취소: /void 2026-10-08-lunch-1
+```
+
+## 요약
+
+`/status`, `/today`, `/daily` 요약은 바뀌지 않았다. 일반식만 있는 날은 `kcal 알 수 없음 / 목표 2200-2500 (indeterminate)`,
+카탈로그 음식과 섞인 날은 `단백질 23 g 이상 (값 없는 항목 1개) / 목표 120 g (indeterminate)`처럼 나온다. 남은 양(`남음`)이나
+행동 안내는 나오지 않는다.
+
+`/help` 목록의 `meal:` 줄 아래와 `/log` 사용법 답장에 `일반식 [메모]` 설명이 한 줄씩 추가되었다.
+
+## Known issues / limitations (General Meal v1)
+
+- 메모에는 쉼표를 쓸 수 없다(쉼표가 item을 나눈다). `-`로 시작하는 단어도 쓸 수 없다.
+- 전에는 `/log lunch 일반식 도시락 1 pack`이 "일반식 도시락"이라는 카탈로그 음식으로 기록되었다. 이제는 거부된다(위 규칙).
+  이름이 `일반식`으로 시작하는 음식은 food ID로 기록한다. (2026-10-08 production 카탈로그에는 그런 음식이 없다.)
+- 일반식이 있는 날은 영양 판단이 "알 수 없음"으로 남는다. 의도된 동작이다. 요약에 "일반식 N끼"는 아직 없다(후속 후보).
+- 이 절의 답장은 live 확인(통합 후 `telegram run` 재시작, 사용자 게이트) 전까지 실제 Telegram 앱에서 확인하지 않았다.

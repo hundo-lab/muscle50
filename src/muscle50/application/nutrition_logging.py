@@ -21,6 +21,8 @@ from typing import Literal
 from muscle50.application.nutrition import FoodNutritionRepository, MealReader, MealRepository
 from muscle50.domain.meal_history import MealHistory, timestamp_text
 from muscle50.domain.nutrition import (
+    GENERAL_MEAL_FOOD_ID,
+    GENERAL_MEAL_NAME,
     Accuracy,
     CalculatedNutrition,
     DailyNutritionSummary,
@@ -37,6 +39,8 @@ from muscle50.domain.nutrition import (
     QuantityUnit,
     aggregate_day,
     aggregate_meal,
+    is_reserved_food_reference,
+    normalize_general_meal_note,
     select_preferred_fact,
 )
 
@@ -108,6 +112,16 @@ class MealEntryItem:
 
 
 @dataclass(frozen=True)
+class GeneralMealEntry:
+    """A general meal (`--general`): eaten, but its menu and nutrition are unknown; the note is only a memo."""
+
+    note: str | None = None
+
+
+MealEntry = MealEntryItem | GeneralMealEntry
+
+
+@dataclass(frozen=True)
 class ItemIntake:
     item: MealItem
     calculated: CalculatedNutrition | None
@@ -166,9 +180,21 @@ class AddFood:
         if not name:
             raise NutritionLoggingError("food name must not be blank")
         _check_catalog_fact(food.source_type, food.values)
+        aliases = tuple(alias.strip() for alias in food.aliases)
+        # The general meal's ID and name are reserved, whether or not its profile row exists yet.
+        if is_reserved_food_reference(food.food_id):
+            raise NutritionLoggingError(
+                f"food id {food.food_id!r} is reserved for the general meal "
+                "(record one with nutrition log --general); nothing was changed"
+            )
+        for label in (name, *aliases):
+            if is_reserved_food_reference(label):
+                raise NutritionLoggingError(
+                    f"name or alias {label!r} is reserved for the general meal "
+                    "(record one with nutrition log --general); nothing was changed"
+                )
         if self._repository.get(food.food_id) is not None:
             raise NutritionLoggingError(f"food id {food.food_id!r} already exists; nothing was changed")
-        aliases = tuple(alias.strip() for alias in food.aliases)
         for label in (name, *aliases):
             clashes = self._repository.search(label)
             if clashes:
@@ -216,6 +242,7 @@ class AddFoodFact:
 
     def execute(self, new: NewFoodFact) -> AddedFoodFact:
         _check_catalog_fact(new.source_type, new.values)
+        _refuse_general_meal_food(new.food_id)
         profile = self._repository.get(new.food_id)
         if profile is None:
             raise NutritionLoggingError(
@@ -303,7 +330,8 @@ class ListFoods:
         self._repository = repository
 
     def execute(self) -> tuple[FoodNutritionProfile, ...]:
-        return self._repository.list_all()
+        # The general meal's system profile is not a food you can log with --item.
+        return tuple(profile for profile in self._repository.list_all() if not is_general_meal_profile(profile))
 
 
 class ShowFood:
@@ -311,6 +339,7 @@ class ShowFood:
         self._repository = repository
 
     def execute(self, food_id: str) -> FoodNutritionProfile:
+        _refuse_general_meal_food(food_id)
         profile = self._repository.get(food_id)
         if profile is None:
             raise NutritionLoggingError(f"no food with id {food_id!r}")
@@ -326,7 +355,7 @@ class LogMeal:
         self,
         day: date,
         meal_type: MealType,
-        items: tuple[MealEntryItem, ...],
+        items: tuple[MealEntry, ...],
         *,
         timezone: tzinfo,
         eaten_time: time | None = None,
@@ -348,7 +377,7 @@ class LogMeal:
             )
         meal_id = self._next_meal_id(day, meal_type)
         meal_items = tuple(
-            snapshot_item(self._foods, meal_id, sequence, entry, label=f"item {sequence}")
+            entry_item(self._foods, meal_id, sequence, entry, label=f"item {sequence}")
             for sequence, entry in enumerate(items, start=1)
         )
         # Without --time the meal is dated, not timed: it is stored at local 00:00 of the day.
@@ -383,7 +412,8 @@ class RepeatMeal:
     """Log a new meal with the same foods, quantities and units as an already logged meal.
 
     Only the source's active items are repeated (removed items are skipped, replacement items
-    included), and only their food ID, quantity and unit are reused: the new meal is logged by
+    included), and only their food ID, quantity and unit are reused (a general meal item is
+    repeated as a general meal with the same memo): the new meal is logged by
     `LogMeal`, so every item snapshots the catalog facts as they are now (a newer fact version
     is used, never the source's snapshot), and the duplicate-meal guard applies unchanged. The
     source meal is only read.
@@ -404,8 +434,12 @@ class RepeatMeal:
         additional: bool = False,
     ) -> RepeatedMeal:
         source = active_meal(self._meals, source_meal_id, action="repeated")
-        entries: list[MealEntryItem] = []
+        entries: list[MealEntry] = []
         for item in source.items:
+            if item.is_general:
+                # A general meal is repeated as a general meal, memo included; it has no amount or facts.
+                entries.append(GeneralMealEntry(item.serving_description))
+                continue
             if item.food_profile_id is None or item.quantity is None or item.quantity_unit is None:
                 raise NutritionLoggingError(
                     f"item {item.sequence} of meal {source.meal_id} ({item.food_name}) has no catalog food and "
@@ -448,7 +482,7 @@ class ShowMeal:
 
 
 class AddMealItems:
-    """Add catalog foods to an already logged meal; the meal ID and its other items are unchanged.
+    """Add catalog foods (or general meals) to a logged meal; the meal ID and its other items are unchanged.
 
     Each new item snapshots the food's facts exactly as `LogMeal` does, at the time it is added:
     an item added after a new fact version uses that version, while items already in the meal
@@ -459,14 +493,14 @@ class AddMealItems:
         self._meals = meals
         self._foods = foods
 
-    def execute(self, meal_id: str, items: tuple[MealEntryItem, ...]) -> MealIntake:
+    def execute(self, meal_id: str, items: tuple[MealEntry, ...]) -> MealIntake:
         if not items:
             raise NutritionLoggingError("give at least one --item to add. Nothing was changed.")
         active_meal(self._meals, meal_id)
         first = self._meals.next_item_sequence(meal_id)
         try:
             new_items = tuple(
-                snapshot_item(self._foods, meal_id, first + index - 1, entry, label=f"--item {index}")
+                entry_item(self._foods, meal_id, first + index - 1, entry, label=_entry_label(entry, index))
                 for index, entry in enumerate(items, start=1)
             )
             meal = self._meals.add_items(meal_id, new_items)
@@ -501,7 +535,7 @@ class RemoveMealItem:
 
 
 class ReplaceMealItem:
-    """Replace one item of a logged meal with a new catalog item, atomically.
+    """Replace one item of a logged meal with a new catalog item (or a general meal), atomically.
 
     The new item gets the next item number (numbers are never reused) and a fresh fact snapshot;
     the old item is removed in the same transaction, so either both happen or nothing does.
@@ -512,12 +546,16 @@ class ReplaceMealItem:
         self._foods = foods
         self._clock = clock
 
-    def execute(self, meal_id: str, item_number: int, entry: MealEntryItem) -> MealIntake:
+    def execute(self, meal_id: str, item_number: int, entry: MealEntry) -> MealIntake:
         meal = active_meal(self._meals, meal_id)
         _require_item(meal, item_number)
         try:
-            new_item = snapshot_item(
-                self._foods, meal_id, self._meals.next_item_sequence(meal_id), entry, label="--item"
+            new_item = entry_item(
+                self._foods,
+                meal_id,
+                self._meals.next_item_sequence(meal_id),
+                entry,
+                label="--item" if isinstance(entry, MealEntryItem) else "--general",
             )
             stored = self._meals.replace_item(meal_id, item_number, new_item, self._clock())
         except ValueError as exc:
@@ -525,10 +563,59 @@ class ReplaceMealItem:
         return meal_intake(stored)
 
 
+def entry_item(
+    foods: FoodNutritionRepository, meal_id: str, sequence: int, entry: MealEntry, *, label: str
+) -> MealItem:
+    """The meal item for one entry: a catalog food snapshot, or a general meal item."""
+    if isinstance(entry, GeneralMealEntry):
+        return general_meal_item(meal_id, sequence, entry.note, label=label)
+    return snapshot_item(foods, meal_id, sequence, entry, label=label)
+
+
+def general_meal_item(meal_id: str, sequence: int, note: str | None, *, label: str) -> MealItem:
+    """A general meal item: the reserved profile, no quantity, no unit, no facts; the memo is kept as text.
+
+    The repository creates the reserved profile row in the same transaction as the item.
+    """
+    try:
+        memo = normalize_general_meal_note(note)
+    except ValueError as exc:
+        raise NutritionLoggingError(f"{label}: --general-note {exc}. Nothing was changed.") from exc
+    return MealItem(
+        meal_id=meal_id,
+        sequence=sequence,
+        food_name=GENERAL_MEAL_NAME,
+        quantity=None,
+        quantity_unit=None,
+        food_profile_id=GENERAL_MEAL_FOOD_ID,
+        serving_description=memo,
+    )
+
+
+def is_general_meal_profile(profile: FoodNutritionProfile) -> bool:
+    """The general meal's system profile exactly as the repository creates it (no facts, no aliases)."""
+    return (
+        profile.profile_id == GENERAL_MEAL_FOOD_ID
+        and profile.name == GENERAL_MEAL_NAME
+        and not profile.facts
+        and not profile.aliases
+    )
+
+
+def general_meal_item_refusal(label: str, reference: str) -> str:
+    """An `--item` that names the general meal, which is recorded with --general instead."""
+    return (
+        f"{label} {reference!r} is the general meal, not a catalog food; record it with --general "
+        "(no quantity or unit). Nothing was changed."
+    )
+
+
 def snapshot_item(
     foods: FoodNutritionRepository, meal_id: str, sequence: int, entry: MealEntryItem, *, label: str
 ) -> MealItem:
     """A meal item for `entry` carrying a snapshot of the food's current fact history in its unit."""
+    if is_reserved_food_reference(entry.food_id):
+        raise NutritionLoggingError(general_meal_item_refusal(label, entry.food_id))
     profile = foods.get(entry.food_id)
     if profile is None:
         raise NutritionLoggingError(f"{label}: no food with id {entry.food_id!r} (see `muscle50 nutrition food list`)")
@@ -622,6 +709,18 @@ def offset_name(timezone: tzinfo, day: date) -> str:
     return f"{sign}{hours:02d}:{rest:02d}"
 
 
+def _refuse_general_meal_food(food_id: str) -> None:
+    if food_id == GENERAL_MEAL_FOOD_ID:
+        raise NutritionLoggingError(
+            f"{GENERAL_MEAL_FOOD_ID!r} is the general meal ({GENERAL_MEAL_NAME}), not a catalog food: it has no "
+            "nutrition facts and none can be added. Nothing was changed."
+        )
+
+
+def _entry_label(entry: MealEntry, index: int) -> str:
+    return f"--item {index}" if isinstance(entry, MealEntryItem) else f"item {index}"
+
+
 def _check_catalog_fact(source_type: NutritionSourceType, values: NutritionValue) -> None:
     if source_type not in CATALOG_SOURCE_TYPES:
         raise NutritionLoggingError(f"source {source_type.value!r} cannot be entered into the food catalog")
@@ -683,7 +782,14 @@ def _item_intake(item: MealItem) -> ItemIntake:
     return ItemIntake(item, calculated, missing)
 
 
-def _structured_text(meal_type: MealType, day: date, eaten_time: time | None, items: tuple[MealEntryItem, ...]) -> str:
+def _structured_text(meal_type: MealType, day: date, eaten_time: time | None, items: tuple[MealEntry, ...]) -> str:
     when = day.isoformat() + (f" {eaten_time.strftime('%H:%M')}" if eaten_time is not None else "")
-    entries = "; ".join(f"{item.food_id} {item.quantity} {item.unit.value}" for item in items)
+    entries = "; ".join(_entry_text(item) for item in items)
     return f"structured entry {meal_type.value} {when}: {entries}"
+
+
+def _entry_text(item: MealEntry) -> str:
+    if isinstance(item, GeneralMealEntry):
+        note = normalize_general_meal_note(item.note)
+        return "general meal" if note is None else f"general meal (note: {note})"
+    return f"{item.food_id} {item.quantity} {item.unit.value}"

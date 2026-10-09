@@ -10,7 +10,8 @@ caller can hand it on unchanged and the existing unknown-food refusal keeps its 
 from __future__ import annotations
 
 from muscle50.application.nutrition import FoodNutritionRepository
-from muscle50.application.nutrition_logging import NutritionLoggingError
+from muscle50.application.nutrition_logging import NutritionLoggingError, general_meal_item_refusal
+from muscle50.domain.nutrition import is_reserved_food_reference
 
 
 class ResolveFoodReference:
@@ -22,8 +23,11 @@ class ResolveFoodReference:
     def execute(self, reference: str, *, label: str) -> str | None:
         """The ID of the one food `reference` names; None when no food has it as ID, name or alias.
 
-        Raises NutritionLoggingError when the reference names more than one food.
+        Raises NutritionLoggingError when the reference names more than one food, or names the general
+        meal (its ID or name), which is recorded with --general and is refused before any lookup.
         """
+        if is_reserved_food_reference(reference):
+            raise NutritionLoggingError(general_meal_item_refusal(label, reference))
         by_id = self._foods.get(reference)
         text = reference.strip()
         if not text:

@@ -10,7 +10,7 @@ from datetime import UTC, date, datetime, time, timezone, tzinfo
 from decimal import Decimal
 from pathlib import Path
 from time import sleep
-from typing import Literal
+from typing import Any, Literal
 
 from muscle50.application.activity_unknown_sets import ActivityUnknownSets, CountActivityUnknownSets
 from muscle50.application.backfill_activity_load_metrics import BackfillActivityLoadMetrics
@@ -27,8 +27,10 @@ from muscle50.application.nutrition_logging import (
     AddFood,
     AddFoodFact,
     AddMealItems,
+    GeneralMealEntry,
     ListFoods,
     LogMeal,
+    MealEntry,
     MealEntryItem,
     NewFood,
     NewFoodFact,
@@ -92,7 +94,15 @@ from muscle50.domain.body_composition_trend import (
 from muscle50.domain.exercise_taxonomy import MuscleGroup
 from muscle50.domain.inbody_normalization import InBodyNormalizationError
 from muscle50.domain.normalization import NormalizationError, activity_id_from
-from muscle50.domain.nutrition import Accuracy, MealType, NutrientField, NutritionValue, QuantityUnit
+from muscle50.domain.nutrition import (
+    GENERAL_MEAL_NOTE_MAX_LENGTH,
+    Accuracy,
+    MealType,
+    NutrientField,
+    NutritionValue,
+    QuantityUnit,
+    normalize_general_meal_note,
+)
 from muscle50.domain.nutrition_targets import ExactTarget, NutrientTarget, NutritionTargetError, RangeTarget
 from muscle50.domain.recovery_normalization import RecoveryNormalizationError, validate_calendar_date
 from muscle50.domain.strength_recommendation import StrengthFocus
@@ -362,17 +372,13 @@ def _add_nutrition_parser(commands: argparse._SubParsersAction[argparse.Argument
     show = food_commands.add_parser("show", help="Show one food with its full nutrition fact history")
     show.add_argument("food_id", help="food ID")
     show.add_argument("--json", action="store_true", help="print as JSON")
-    log = nutrition_commands.add_parser("log", help="Record one meal made of catalog foods")
+    log = nutrition_commands.add_parser("log", help="Record one meal made of catalog foods and/or general meals")
     log.add_argument("--meal", required=True, choices=[meal.value for meal in MealType], help="meal type")
     log.add_argument("--date", dest="as_of", metavar="YYYY-MM-DD", help="meal date (default: today on this computer)")
     log.add_argument("--time", dest="eaten_time", metavar="HH:MM", help="local time eaten (optional)")
-    log.add_argument(
-        "--item",
-        nargs=3,
-        action="append",
-        required=True,
-        metavar=("FOOD", "QTY", "UNIT"),
-        help=(
+    _add_meal_entry_arguments(
+        log,
+        (
             "one catalog food (its food ID, or its exact name or alias; quote names that contain spaces) "
             "and the amount eaten, in a unit the food has nutrition for; repeatable"
         ),
@@ -413,17 +419,12 @@ def _add_nutrition_parser(commands: argparse._SubParsersAction[argparse.Argument
     meal_show.add_argument("--json", action="store_true", help="print as JSON with exact decimal strings")
     add_item = meal_commands.add_parser(
         "add-item",
-        help="Add catalog foods to a logged meal, with the foods' current nutrition facts (all or nothing)",
+        help=(
+            "Add catalog foods (with their current nutrition facts) or general meals to a logged meal (all or nothing)"
+        ),
     )
     add_item.add_argument("meal_id", help="meal ID, e.g. 2026-10-02-breakfast-1")
-    add_item.add_argument(
-        "--item",
-        nargs=3,
-        action="append",
-        required=True,
-        metavar=("FOOD", "QTY", "UNIT"),
-        help="one catalog food and the amount eaten, as in `nutrition log`; repeatable",
-    )
+    _add_meal_entry_arguments(add_item, "one catalog food and the amount eaten, as in `nutrition log`; repeatable")
     add_item.add_argument("--json", action="store_true", help="print the edited meal as JSON")
     remove_item = meal_commands.add_parser(
         "remove-item", help="Remove one item from a logged meal (the last item cannot be removed)"
@@ -433,18 +434,35 @@ def _add_nutrition_parser(commands: argparse._SubParsersAction[argparse.Argument
     remove_item.add_argument("--json", action="store_true", help="print the edited meal as JSON")
     replace_item = meal_commands.add_parser(
         "replace-item",
-        help="Replace one item of a logged meal with a new catalog item in one step (both happen or neither)",
+        help=(
+            "Replace one item of a logged meal with a new catalog item or a general meal in one step "
+            "(both happen or neither)"
+        ),
     )
     replace_item.add_argument("meal_id", help="meal ID, e.g. 2026-10-02-breakfast-1")
     _add_item_number_argument(replace_item, "item to replace")
-    replace_item.add_argument(
+    replacement = replace_item.add_mutually_exclusive_group(required=True)
+    replacement.add_argument(
         "--item",
         nargs=3,
-        required=True,
         metavar=("FOOD", "QTY", "UNIT"),
         help="the catalog food and amount that replace it, as in `nutrition log`",
     )
+    replacement.add_argument(
+        "--general",
+        action="store_true",
+        help="a general meal replaces it (no quantity or unit; every nutrient stays unknown, never 0)",
+    )
+    replace_item.add_argument(
+        "--general-note",
+        metavar="TEXT",
+        help=(
+            f"memo for the --general (optional; one line, at most {GENERAL_MEAL_NOTE_MAX_LENGTH} characters; "
+            "never used for nutrition)"
+        ),
+    )
     replace_item.add_argument("--json", action="store_true", help="print the edited meal as JSON")
+    replace_item.set_defaults(meal_entry_usage_error=replace_item.error)
     _add_meal_correction_parsers(meal_commands)
     day = nutrition_commands.add_parser("day", help="Meals, per-meal totals and daily consumed totals for a date")
     day.add_argument("--date", dest="as_of", metavar="YYYY-MM-DD", help="date (default: today on this computer)")
@@ -469,6 +487,74 @@ def _add_nutrition_parser(commands: argparse._SubParsersAction[argparse.Argument
     )
     status.add_argument("--date", dest="as_of", metavar="YYYY-MM-DD", help="date (default: today on this computer)")
     status.add_argument("--json", action="store_true", help="print as JSON with exact decimal strings")
+
+
+_GENERAL_HELP = (
+    "a general meal: eaten, but its menu and nutrition are unknown (no quantity or unit; every nutrient "
+    "stays unknown, never 0); repeatable, kept in order with --item"
+)
+_GENERAL_NOTE_HELP = (
+    f"memo for the --general just before it (optional; one line, at most {GENERAL_MEAL_NOTE_MAX_LENGTH} "
+    "characters; never used for nutrition)"
+)
+
+
+class _MealEntryAction(argparse.Action):
+    """`--item FOOD QTY UNIT` and `--general` share one list, so the items keep the command-line order."""
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: str | Sequence[Any] | None,
+        option_string: str | None = None,
+    ) -> None:
+        entries = list(getattr(namespace, self.dest, None) or [])
+        # A general entry starts without a note; `--general-note` right after it sets one.
+        entries.append(GeneralMealEntry() if self.nargs == 0 else list(values or ()))
+        setattr(namespace, self.dest, entries)
+
+
+class _GeneralNoteAction(argparse.Action):
+    """`--general-note TEXT`: the memo of the `--general` directly before it (the text is checked later)."""
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: str | Sequence[Any] | None,
+        option_string: str | None = None,
+    ) -> None:
+        entries = list(getattr(namespace, self.dest, None) or [])
+        if not entries or entries[-1] != GeneralMealEntry() or not isinstance(values, str):
+            raise argparse.ArgumentError(self, "must directly follow the --general it describes")
+        entries[-1] = GeneralMealEntry(values)
+        setattr(namespace, self.dest, entries)
+
+
+def _add_meal_entry_arguments(parser: argparse.ArgumentParser, item_help: str) -> None:
+    """`--item` and `--general [--general-note TEXT]` of `nutrition log` and `meal add-item`, in one ordered list."""
+    parser.add_argument(
+        "--item", dest="entries", nargs=3, action=_MealEntryAction, metavar=("FOOD", "QTY", "UNIT"), help=item_help
+    )
+    parser.add_argument("--general", dest="entries", nargs=0, action=_MealEntryAction, help=_GENERAL_HELP)
+    parser.add_argument(
+        "--general-note", dest="entries", action=_GeneralNoteAction, metavar="TEXT", help=_GENERAL_NOTE_HELP
+    )
+    # At least one --item or --general is required; main() checks it after parsing (argparse exit 2).
+    parser.set_defaults(meal_entry_usage_error=parser.error)
+
+
+def _check_meal_entry_arguments(args: argparse.Namespace) -> None:
+    """Usage rules argparse cannot express for --item/--general; a violation exits 2 before anything runs."""
+    usage_error = getattr(args, "meal_entry_usage_error", None)
+    if usage_error is None:
+        return
+    if hasattr(args, "entries"):
+        if not args.entries:
+            usage_error("one of the arguments --item --general is required")
+    elif args.general_note is not None and not args.general:
+        usage_error("argument --general-note: requires --general")
 
 
 def _add_item_number_argument(parser: argparse.ArgumentParser, what: str) -> None:
@@ -559,6 +645,7 @@ def _add_fact_arguments(parser: argparse.ArgumentParser, command: str) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    _check_meal_entry_arguments(args)
     if args.command == "garmin" and args.garmin_command == "latest":
         return _garmin_latest()
     if args.command == "garmin" and args.garmin_command == "activities":
@@ -1079,7 +1166,7 @@ def _nutrition(args: argparse.Namespace) -> int:
             return 0
         if args.nutrition_command == "log":
             day = _nutrition_date(args.as_of)
-            entries = tuple(_meal_entry(index, raw) for index, raw in enumerate(args.item, start=1))
+            entries = _meal_entries(args.entries)
             eaten_time = _eaten_time(args.eaten_time)
             meal = LogMeal(meals, foods).execute(
                 day,
@@ -1148,7 +1235,7 @@ def _nutrition_meal(args: argparse.Namespace, meals: SqliteMealRepository, foods
         print(render_logged_meal_json(intake) if args.json else render_meal(intake))
         return 0
     if args.meal_command == "add-item":
-        entries = tuple(_meal_entry(index, raw) for index, raw in enumerate(args.item, start=1))
+        entries = _meal_entries(args.entries)
         intake = AddMealItems(meals, foods).execute(args.meal_id, _resolve_entries(foods, entries, numbered=True))
         added = intake.meal.items[-len(entries) :]
         word = "item" if len(added) == 1 else "items"
@@ -1159,8 +1246,13 @@ def _nutrition_meal(args: argparse.Namespace, meals: SqliteMealRepository, foods
         )
         headline = f"Removed item {args.item_number} from meal {intake.meal.meal_id}."
     elif args.meal_command == "replace-item":
+        replacement = (
+            _general_entry(args.general_note, label="")
+            if args.general
+            else _resolve_entries(foods, (_meal_entry(1, args.item),), numbered=False)[0]
+        )
         intake = ReplaceMealItem(meals, foods, clock=lambda: datetime.now().astimezone()).execute(
-            args.meal_id, args.item_number, _resolve_entries(foods, (_meal_entry(1, args.item),), numbered=False)[0]
+            args.meal_id, args.item_number, replacement
         )
         new_number = intake.meal.items[-1].sequence
         headline = f"Replaced item {args.item_number} of meal {intake.meal.meal_id} with item {new_number}."
@@ -1301,17 +1393,38 @@ def _meal_entry(index: int, raw: list[str]) -> MealEntryItem:
     return MealEntryItem(food_id, _positive_quantity(quantity_text, f"{what} quantity"), _unit(unit_text, what))
 
 
+def _meal_entries(raw_entries: Sequence[list[str] | GeneralMealEntry]) -> tuple[MealEntry, ...]:
+    """The parsed `--item`/`--general` entries in command-line order; item N is the N-th entry of either kind."""
+    return tuple(
+        _general_entry(raw.note, label=f"item {index}: ")
+        if isinstance(raw, GeneralMealEntry)
+        else _meal_entry(index, raw)
+        for index, raw in enumerate(raw_entries, start=1)
+    )
+
+
+def _general_entry(note: str | None, *, label: str) -> GeneralMealEntry:
+    """A `--general` entry with its memo checked and normalized before anything is read or written."""
+    try:
+        return GeneralMealEntry(normalize_general_meal_note(note))
+    except ValueError as exc:
+        raise NutritionLoggingError(f"{label}--general-note {exc}. Nothing was changed.") from exc
+
+
 def _resolve_entries(
-    foods: SqliteFoodNutritionRepository, entries: Sequence[MealEntryItem], *, numbered: bool
-) -> tuple[MealEntryItem, ...]:
+    foods: SqliteFoodNutritionRepository, entries: Sequence[MealEntry], *, numbered: bool
+) -> tuple[MealEntry, ...]:
     """Turn each already-parsed `--item` food (ID, name or alias) into a food ID.
 
     A token that matches no food is passed on unchanged, so the use case reports it as an
-    unknown food with today's text and at today's point.
+    unknown food with today's text and at today's point. General meal entries name no food.
     """
     resolver = ResolveFoodReference(foods)
-    resolved: list[MealEntryItem] = []
+    resolved: list[MealEntry] = []
     for index, entry in enumerate(entries, start=1):
+        if isinstance(entry, GeneralMealEntry):
+            resolved.append(entry)
+            continue
         food_id = resolver.execute(entry.food_id, label=f"--item {index}" if numbered else "--item")
         resolved.append(entry if food_id is None else MealEntryItem(food_id, entry.quantity, entry.unit))
     return tuple(resolved)
