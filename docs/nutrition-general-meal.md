@@ -29,7 +29,8 @@ muscle50 nutrition meal replace-item 2026-10-08-dinner-1 --item-number 2 --gener
   `--item chicken-breast 100 g --general --general-note 구내식당 --general` gives item 1 chicken,
   item 2 a general meal with the memo "구내식당", item 3 a general meal without a memo.
 - `--general-note TEXT` is optional and must come directly after the `--general` it belongs to
-  (one memo per `--general`). Otherwise argparse exits 2 with
+  (one memo per `--general`): no `--item` or other `--general` may come in between, while other
+  flags such as `--json` may. Otherwise argparse exits 2 with
   `argument --general-note: must directly follow the --general it describes`.
 - `nutrition log` and `meal add-item` need at least one `--item` or `--general` (exit 2,
   `one of the arguments --item --general is required`).

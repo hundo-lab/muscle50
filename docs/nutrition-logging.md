@@ -191,7 +191,8 @@ muscle50 nutrition meal replace-item 2026-10-02-breakfast-1 --item-number 2 --it
   reused: new items get the next number after every item the meal ever had, including removed
   ones. After removing item 2 of 1, 2, 3, the meal has items 1 and 3, and the next added item
   is 4.
-- **`add-item`** accepts `--item FOOD_ID QTY UNIT` as in `nutrition log`, and it can be repeated.
+- **`add-item`** accepts `--item FOOD_ID QTY UNIT` (and `--general`, see "General meal") as in
+  `nutrition log`, and it can be repeated.
   Several items are added together or not at all. Each new item is snapshotted exactly like a
   logged item (see "Snapshot at log time") from the catalog **as it is now**. If the food got a
   new fact version after the meal was logged, the new item uses the new version. Items already in
@@ -206,7 +207,8 @@ muscle50 nutrition meal replace-item 2026-10-02-breakfast-1 --item-number 2 --it
   `nutrition-meal-corrections.md`).
 - **`replace-item`** adds the new item, with a fresh snapshot and the next number, and removes
   the old one in a single transaction, so either both happen or neither does. It also works on
-  a one-item meal.
+  a one-item meal. The new item is `--item FOOD QTY UNIT` or `--general [--general-note TEXT]`
+  (exactly one of them).
 - Errors change nothing. A missing meal, unknown or removed item number, unknown food, a unit
   the food has no nutrition for, a bad quantity, or a storage failure leaves the meal exactly as
   it was. Errors print `오류: ...` and exit 1. A storage error (`sqlite3.Error`) is rolled back but,
