@@ -154,9 +154,9 @@ muscle50/
 | Nutrition Core (domain, port, JSON schema) | `domain/nutrition.py`, `application/nutrition.py`, `schemas/nutrition_meal_v1.schema.json`, migration 003 | 완료 | append-only fact, supersession |
 | Food catalog | `nutrition food add\|list\|show` | 완료 | source 4종만 허용하고 추정 source는 거부한다. |
 | Food fact versioning | `nutrition food fact add` | 완료 | 같은 unit의 새 버전만 만든다. unit 변환은 없다. |
-| 식사 기록 | `nutrition log --meal --item FOOD QTY UNIT ... [--additional]` | 부분 | `FOOD`는 food ID, 또는 정확히 같은 이름/alias다(Food Name Lookup v1, 부분 일치·추측 없음). 자유 문장 parser(`MealParser`는 Protocol만 있음), 외부 food DB는 없다. |
+| 식사 기록 | `nutrition log --meal --item FOOD QTY UNIT ... [--general [--general-note TEXT]] [--additional]` | 부분 | `FOOD`는 food ID, 또는 정확히 같은 이름/alias다(Food Name Lookup v1, 부분 일치·추측 없음). `--general`은 메뉴·영양값을 모르는 일반식(영양값 unknown, 메모 선택, 예약 profile `general-meal`, General Meal v1)이다. 자유 문장 parser(`MealParser`는 Protocol만 있음), 외부 food DB는 없다. |
 | 하루 섭취 | `nutrition day [--date] [--json]` | 완료 | |
-| Meal edit | `nutrition meal show\|add-item\|remove-item\|replace-item\|void\|edit\|merge`, migration 008, 009 | 부분 | void(집계 제외), 날짜·종류·시간 수정, 같은 날짜 두 식사 병합은 append-only 기록으로 한다(Meal Void, Edit and Merge v1). void·edit·item 제거 취소, 세 개 이상 병합, 메모 수정은 없다. |
+| Meal edit | `nutrition meal show\|add-item\|remove-item\|replace-item\|void\|edit\|merge`, migration 008, 009 | 부분 | void(집계 제외), 날짜·종류·시간 수정, 같은 날짜 두 식사 병합은 append-only 기록으로 한다(Meal Void, Edit and Merge v1). `add-item`/`replace-item`은 `--general`도 받는다. void·edit·item 제거 취소, 세 개 이상 병합, 메모 수정은 없다. |
 | Meal repeat | `nutrition repeat <meal_id>` | 완료 | 양 조절과 template은 없다. |
 | 영양 목표 + status | `nutrition target set\|show`, `nutrition status` / `domain/nutrition_targets.py`, `infrastructure/nutrition_target_store.py` | 부분 | 목표 history와 요일별 목표가 없다. 자동 계산도 없다(의도된 설계). |
 

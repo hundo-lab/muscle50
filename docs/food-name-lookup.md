@@ -65,7 +65,9 @@ Refusals (stderr, exit 1, stdout empty, nothing written; all-or-nothing across s
 오류: item 1: no food with id '닭가슴' (see `muscle50 nutrition food list`)
 ```
 
-Labels: `--item N` for `log` and `add-item`, `--item` for `replace-item`. The unknown-food line
+Labels: `--item N` for `log` and `add-item`, `--item` for `replace-item`. Since General Meal v1, `N`
+counts `--item` and `--general` entries together in command-line order (in `--general --item egg 1 count`
+the egg is entry 2; `nutrition-general-meal.md`). The unknown-food line
 keeps the existing labels (`item N` for `log`; `--item N`/`--item` plus "Nothing was changed."
 for the edit commands).
 

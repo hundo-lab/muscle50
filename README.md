@@ -205,6 +205,9 @@ muscle50 nutrition food fact add chicken-breast --per 100 g `
 muscle50 nutrition log --meal breakfast --item chicken-breast 200 g --item egg 2 count
 # food ID 대신 음식 이름이나 alias를 정확히 써도 됨(공백이 있으면 따옴표). log/meal add-item/meal replace-item 공통
 muscle50 nutrition log --meal lunch --item 닭가슴살 150 g --item 계란 1 count
+# 메뉴·영양값을 모르는 일반식(영양값 unknown, 메모는 선택). --item과 섞을 수 있고 명령줄 순서대로 item이 됨
+muscle50 nutrition log --meal lunch --general --general-note 구내식당
+muscle50 nutrition log --meal dinner --general --item chicken-breast 100 g
 muscle50 nutrition day                      # 오늘 섭취량 (--date YYYY-MM-DD, --json)
 # 이전 식사를 그대로 다시 기록(같은 음식/양/단위, 영양 값은 지금 catalog의 fact로 새로 snapshot)
 muscle50 nutrition repeat 2026-10-02-breakfast-1                       # 오늘, 같은 식사 종류, 시간 없음
@@ -235,6 +238,10 @@ source의 item을 원래 snapshot 그대로 target에 붙이고 source를 void�
 정확히 같을 때(대소문자 무시는 ASCII만)만 찾습니다. 부분 일치·추측은 하지 않고, 한 음식의 ID가 다른 음식의 이름/alias와 겹치면
 거부합니다(아무것도 기록하지 않음). 상세: `docs/nutrition-logging.md`, `docs/food-name-lookup.md`,
 `docs/nutrition-meal-corrections.md`.
+`--general [--general-note TEXT]`은 "일반식을 먹었다"는 기록만 남깁니다(`log`/`meal add-item`/`meal replace-item` 공통,
+여러 번 쓸 수 있고 메모는 그 `--general` 바로 뒤, 최대 100자 한 줄). 영양값을 추정하지 않으므로 일반식이 있는 날의 합계는
+incomplete이고 부족 판단이나 행동 안내가 나오지 않습니다. `일반식`/`general-meal`은 예약 이름이라 `food add`로 만들 수
+없습니다(migration 없음). 상세: `docs/nutrition-general-meal.md`.
 
 ## Nutrition targets + daily status (v1)
 
@@ -334,6 +341,7 @@ muscle50 telegram run      # long polling 시작. Ctrl+C로 종료(exit 130)
 | `/status [full]` | `nutrition status` (기본은 요약, `full`은 CLI text) |
 | `/day [YYYY-MM-DD]` | `nutrition day [--date ...]` |
 | `/log <meal>[+] <food> <qty> <unit>[, ...]` | `nutrition log --meal <meal> --item ... [--additional]` (`+`는 `--additional`) |
+| `/log <meal>[+] 일반식 [메모][, ...]` | `nutrition log --meal <meal> --general [--general-note=<메모>] ...` (메뉴·영양값을 모르는 식사. 카탈로그 음식과 쉼표로 섞음. `일반식 1 serving`처럼 수량·단위를 붙이면 거부) |
 | `/void <meal_id> [이유]` | `nutrition meal void <meal_id> [--reason ...]` |
 | `/show <meal_id>` | `nutrition meal show <meal_id>` |
 | `/inbody` | `inbody trend` |

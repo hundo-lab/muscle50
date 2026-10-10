@@ -357,6 +357,7 @@ only.
   different offset are still found by their absolute time.
 - A general meal (`--general`) records only that a meal was eaten: no estimate from its memo, no
   portion size. Days with one have incomplete totals (`nutrition-general-meal.md`).
-- No meal or menu recommendations, weekly analytics, parser, Telegram, external databases. Targets
+- No meal or menu recommendations, weekly analytics, free-text parser, external databases (Telegram
+  `/log` is command-style only, `telegram-bot.md`). Targets
   and remaining amounts are in `muscle50 nutrition status` (`nutrition-targets.md`), not in `day`;
   `recommend`/`daily` show that status with short below-target actions (`nutrition-recommendation.md`).
