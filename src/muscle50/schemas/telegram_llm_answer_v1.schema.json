@@ -1,0 +1,17 @@
+{
+  "title": "telegram_llm_answer_v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "answer",
+    "memory_summary"
+  ],
+  "properties": {
+    "answer": {
+      "type": "string"
+    },
+    "memory_summary": {
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,117 @@
+{
+  "title": "telegram_llm_suggest_v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "lead",
+    "suggestions",
+    "memory_summary"
+  ],
+  "properties": {
+    "lead": {
+      "type": "string"
+    },
+    "suggestions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "category",
+          "description",
+          "estimate",
+          "note"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "eating_out",
+              "delivery",
+              "convenience_store",
+              "home"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "estimate": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kcal_min",
+              "kcal_max",
+              "protein_min",
+              "protein_max",
+              "carbs_min",
+              "carbs_max",
+              "fat_min",
+              "fat_max"
+            ],
+            "properties": {
+              "kcal_min": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "kcal_max": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "protein_min": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "protein_max": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "carbs_min": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "carbs_max": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "fat_min": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "fat_max": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "description": "estimated ranges for the whole dish or meal; null when not estimated"
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "memory_summary": {
+      "type": "string"
+    }
+  }
+}

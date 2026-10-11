@@ -43,6 +43,32 @@ class AppPaths:
         # Created only by `telegram run` when it handles its first allowed message (not by ensure_directories).
         return self.root / "config" / "telegram_state.json"
 
+    # Telegram LLM v2. None of these is created by ensure_directories: the user writes the config and the
+    # coach guide; `telegram run` creates the state, memory, history and photo files when it first needs them.
+    @property
+    def telegram_llm_config_path(self) -> Path:
+        return self.root / "config" / "telegram_llm.json"
+
+    @property
+    def telegram_llm_state_path(self) -> Path:
+        return self.root / "config" / "telegram_llm_state.json"
+
+    @property
+    def telegram_llm_memory_path(self) -> Path:
+        return self.root / "config" / "telegram_llm_memory.json"
+
+    @property
+    def telegram_llm_coach_path(self) -> Path:
+        return self.root / "config" / "telegram_llm_coach.md"
+
+    @property
+    def telegram_history_dir(self) -> Path:
+        return self.root / "telegram" / "history"
+
+    @property
+    def telegram_photos_dir(self) -> Path:
+        return self.root / "telegram" / "photos"
+
     @classmethod
     def from_environment(cls) -> AppPaths:
         override = os.environ.get("MUSCLE50_HOME")

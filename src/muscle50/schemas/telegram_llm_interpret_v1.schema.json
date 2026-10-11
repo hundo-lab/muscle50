@@ -1,0 +1,430 @@
+{
+  "title": "telegram_llm_interpret_v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "intent",
+    "photo_kind",
+    "meal_type",
+    "date_expression",
+    "tense",
+    "items",
+    "question_topics",
+    "menu",
+    "edit",
+    "reply",
+    "memory_summary"
+  ],
+  "properties": {
+    "intent": {
+      "type": "string",
+      "enum": [
+        "meal_log",
+        "question",
+        "menu",
+        "menu_suggest",
+        "meal_edit",
+        "chat",
+        "unclear"
+      ]
+    },
+    "photo_kind": {
+      "type": "string",
+      "enum": [
+        "meal_photo",
+        "menu_capture",
+        "unclear",
+        "none"
+      ]
+    },
+    "meal_type": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "breakfast",
+        "lunch",
+        "dinner",
+        "snack",
+        "other",
+        null
+      ]
+    },
+    "date_expression": {
+      "type": "string",
+      "enum": [
+        "none",
+        "today",
+        "yesterday",
+        "other"
+      ]
+    },
+    "tense": {
+      "type": "string",
+      "enum": [
+        "eaten",
+        "planned",
+        "none"
+      ]
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "food_text",
+          "quantity",
+          "unit",
+          "quantity_estimated",
+          "memo",
+          "estimate"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "catalog",
+              "general"
+            ]
+          },
+          "food_text": {
+            "type": "string",
+            "description": "the food words exactly as the user wrote them"
+          },
+          "quantity": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "g",
+              "ml",
+              "count",
+              "pack",
+              "piece",
+              "animal",
+              "serving",
+              null
+            ]
+          },
+          "quantity_estimated": {
+            "type": "boolean"
+          },
+          "memo": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "estimate": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kcal_min",
+              "kcal_max",
+              "protein_min",
+              "protein_max",
+              "carbs_min",
+              "carbs_max",
+              "fat_min",
+              "fat_max"
+            ],
+            "properties": {
+              "kcal_min": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "kcal_max": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "protein_min": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "protein_max": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "carbs_min": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "carbs_max": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "fat_min": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "fat_max": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "description": "estimated ranges for the whole dish or meal; null when not estimated"
+          }
+        }
+      }
+    },
+    "question_topics": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "training",
+          "nutrition",
+          "body"
+        ]
+      }
+    },
+    "menu": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slots_visible",
+        "items"
+      ],
+      "properties": {
+        "slots_visible": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "breakfast",
+              "lunch",
+              "dinner"
+            ]
+          }
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "slot",
+              "corner",
+              "name",
+              "printed_kcal",
+              "printed_protein_g",
+              "estimate"
+            ],
+            "properties": {
+              "slot": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "breakfast",
+                  "lunch",
+                  "dinner",
+                  null
+                ]
+              },
+              "corner": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "printed_kcal": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "printed_protein_g": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "estimate": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kcal_min",
+                  "kcal_max",
+                  "protein_min",
+                  "protein_max",
+                  "carbs_min",
+                  "carbs_max",
+                  "fat_min",
+                  "fat_max"
+                ],
+                "properties": {
+                  "kcal_min": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "kcal_max": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "protein_min": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "protein_max": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "carbs_min": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "carbs_max": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "fat_min": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "fat_max": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "description": "estimated ranges for the whole dish or meal; null when not estimated"
+              }
+            }
+          }
+        }
+      }
+    },
+    "edit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "target_food_text",
+        "new_food_text",
+        "new_quantity",
+        "new_unit",
+        "new_meal_type"
+      ],
+      "properties": {
+        "action": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "change_quantity",
+            "replace_food",
+            "remove_item",
+            "add_item",
+            "void_meal",
+            "change_meal_type",
+            null
+          ]
+        },
+        "target_food_text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "new_food_text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "new_quantity": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "new_unit": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "g",
+            "ml",
+            "count",
+            "pack",
+            "piece",
+            "animal",
+            "serving",
+            null
+          ]
+        },
+        "new_meal_type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "breakfast",
+            "lunch",
+            "dinner",
+            "snack",
+            "other",
+            null
+          ]
+        }
+      }
+    },
+    "reply": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "memory_summary": {
+      "type": "string"
+    }
+  }
+}

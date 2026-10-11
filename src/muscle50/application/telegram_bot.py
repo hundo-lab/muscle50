@@ -62,6 +62,7 @@ from muscle50.domain.telegram_commands import (
 )
 
 MAX_HANDLED_UPDATES = 100
+PHOTO_MAX_BYTES = 4_000_000
 STALE_MARGIN_S = 60
 POLL_TIMEOUT_S = 10
 SEND_ATTEMPTS = 3
@@ -111,6 +112,14 @@ class IncomingMessage:
     text: str | None
     """None for a message without text (photo, sticker, ...)."""
     sent_at_unix: int
+    photo_file_id: str | None = None
+    """Telegram LLM v2: the largest size of a photo message within `PHOTO_MAX_BYTES`."""
+    photo_size: int | None = None
+    caption: str | None = None
+    photo_too_large: bool = False
+    """A photo message whose every size is over `PHOTO_MAX_BYTES`."""
+    document_image: bool = False
+    """An image sent as a file (document) instead of a photo."""
 
 
 @dataclass(frozen=True)

@@ -9,15 +9,24 @@ caller can hand it on unchanged and the existing unknown-food refusal keeps its 
 
 from __future__ import annotations
 
-from muscle50.application.nutrition import FoodNutritionRepository
+from typing import Protocol
+
 from muscle50.application.nutrition_logging import NutritionLoggingError, general_meal_item_refusal
-from muscle50.domain.nutrition import is_reserved_food_reference
+from muscle50.domain.nutrition import FoodNutritionProfile, is_reserved_food_reference
+
+
+class FoodLookup(Protocol):
+    """The two catalog reads a lookup needs (the repository, or the read-only catalog reader)."""
+
+    def get(self, profile_id: str) -> FoodNutritionProfile | None: ...
+
+    def search(self, name_or_alias: str) -> tuple[FoodNutritionProfile, ...]: ...
 
 
 class ResolveFoodReference:
     """Map what the user typed after --item to one catalog food ID, without guessing."""
 
-    def __init__(self, foods: FoodNutritionRepository) -> None:
+    def __init__(self, foods: FoodLookup) -> None:
         self._foods = foods
 
     def execute(self, reference: str, *, label: str) -> str | None:

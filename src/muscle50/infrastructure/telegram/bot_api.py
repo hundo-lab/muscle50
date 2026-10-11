@@ -16,6 +16,7 @@ import urllib.request
 from typing import Any
 
 from muscle50.application.telegram_bot import (
+    PHOTO_MAX_BYTES,
     BotIdentity,
     IncomingMessage,
     IncomingUpdate,
@@ -80,6 +81,34 @@ class UrllibTelegramBotApi:
             payload["link_preview_options"] = {"is_disabled": True}
         self._call("sendMessage", payload, REQUEST_TIMEOUT_S)
 
+    def download_photo(self, file_id: str, max_bytes: int) -> bytes:
+        """Telegram LLM v2: getFile, then the file itself. The file URL holds the token: it is never logged,
+        and every failure is a redacted `TelegramUnavailableError` without a chained exception."""
+        result = self._call("getFile", {"file_id": file_id}, REQUEST_TIMEOUT_S)
+        file_path = result.get("file_path") if isinstance(result, dict) else None
+        file_size = result.get("file_size") if isinstance(result, dict) else None
+        if not isinstance(file_path, str) or not file_path:
+            raise TelegramUnavailableError("unexpected getFile response")
+        if type(file_size) is int and file_size > max_bytes:
+            raise TelegramUnavailableError("photo too large")
+        request = urllib.request.Request(
+            f"{API_BASE_URL}/file/bot{self._token}/{urllib.parse.quote(file_path)}", method="GET"
+        )
+        failure: TelegramUnavailableError | None = None
+        data = b""
+        try:
+            with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_S) as response:
+                data = response.read(max_bytes + 1)
+        except urllib.error.HTTPError as exc:
+            failure = TelegramUnavailableError(self._clean(f"file download error {exc.code}"), status=exc.code)
+        except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as exc:
+            failure = TelegramUnavailableError(self._clean(f"network error ({type(exc).__name__})"))
+        if failure is not None:
+            raise failure
+        if len(data) > max_bytes:
+            raise TelegramUnavailableError("photo too large")
+        return data
+
     def _call(self, method: str, payload: dict[str, Any], timeout_s: float) -> Any:
         request = urllib.request.Request(
             f"{API_BASE_URL}/bot{self._token}/{method}",
@@ -138,4 +167,43 @@ def _update(item: Any) -> IncomingUpdate:
     if type(chat_id) is not int or type(sent_at) is not int:
         return IncomingUpdate(item["update_id"], None)
     text = message.get("text")
-    return IncomingUpdate(item["update_id"], IncomingMessage(chat_id, text if isinstance(text, str) else None, sent_at))
+    caption = message.get("caption")
+    photo_id, photo_size, too_large = _photo(message.get("photo"))
+    document = message.get("document")
+    mime = document.get("mime_type") if isinstance(document, dict) else None
+    return IncomingUpdate(
+        item["update_id"],
+        IncomingMessage(
+            chat_id,
+            text if isinstance(text, str) else None,
+            sent_at,
+            photo_file_id=photo_id,
+            photo_size=photo_size,
+            caption=caption if isinstance(caption, str) else None,
+            photo_too_large=too_large,
+            document_image=isinstance(mime, str) and mime.startswith("image/"),
+        ),
+    )
+
+
+def _photo(sizes: Any) -> tuple[str | None, int | None, bool]:
+    """The largest PhotoSize within `PHOTO_MAX_BYTES` (file_id, size); too_large when every size is over it."""
+    if not isinstance(sizes, list) or not sizes:
+        return None, None, False
+    candidates = []
+    over_cap = False
+    for size in sizes:
+        if not isinstance(size, dict) or not isinstance(size.get("file_id"), str):
+            continue
+        file_size = size.get("file_size")
+        known = file_size if type(file_size) is int else None
+        if known is not None and known > PHOTO_MAX_BYTES:
+            over_cap = True
+            continue
+        width, height = size.get("width"), size.get("height")
+        area = width * height if type(width) is int and type(height) is int else 0
+        candidates.append((known or 0, area, size["file_id"], known))
+    if not candidates:
+        return None, None, over_cap
+    best = max(candidates, key=lambda candidate: (candidate[0], candidate[1]))
+    return best[2], best[3], False
