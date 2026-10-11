@@ -6,6 +6,7 @@ import argparse
 import re
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timezone, tzinfo
 from decimal import Decimal
 from pathlib import Path
@@ -24,6 +25,8 @@ from muscle50.application.ingest_activity_range import IngestGarminActivityRange
 from muscle50.application.meal_corrections import EditMeal, MergeMeals, VoidMeal
 from muscle50.application.nutrition_logging import (
     CATALOG_SOURCE_TYPES,
+    GENERAL_ESTIMATE_REFERENCE_DEFAULT,
+    GENERAL_ESTIMATE_REFERENCE_MAX_LENGTH,
     AddFood,
     AddFoodFact,
     AddMealItems,
@@ -42,6 +45,7 @@ from muscle50.application.nutrition_logging import (
     ShowFood,
     ShowMeal,
     offset_name,
+    parse_general_estimate,
 )
 from muscle50.application.nutrition_recommendation import BuildNutritionContext
 from muscle50.application.nutrition_targets import (
@@ -366,6 +370,14 @@ def _add_nutrition_parser(commands: argparse._SubParsersAction[argparse.Argument
     )
     fact_add.add_argument("food_id", help="existing food ID, e.g. chicken-breast")
     _add_fact_arguments(fact_add, "food fact add")
+    fact_add.add_argument(
+        "--new-unit",
+        action="store_true",
+        help=(
+            "add the first fact for a unit the food has no fact for yet (for example 1 pack next to 100 g); "
+            "the facts in its other units are unchanged and units are never converted"
+        ),
+    )
     fact_add.add_argument("--json", action="store_true", help="print the stored food as JSON")
     food_list = food_commands.add_parser("list", help="List catalog foods and their active nutrition facts")
     food_list.add_argument("--json", action="store_true", help="print as JSON")
@@ -497,6 +509,24 @@ _GENERAL_NOTE_HELP = (
     f"memo for the --general just before it (optional; one line, at most {GENERAL_MEAL_NOTE_MAX_LENGTH} "
     "characters; never used for nutrition)"
 )
+_GENERAL_ESTIMATE_HELP = (
+    "estimated ranges for the --general (or its --general-note) just before it, e.g. "
+    "visual_estimate:kcal=700-950,protein=30-45 (source visual_estimate or language_estimate; nutrients kcal, "
+    "protein, carbs, fat). Stored as ranges marked estimated; the values stay unknown, never 0"
+)
+_GENERAL_ESTIMATE_REF_HELP = (
+    "where the --general-estimate just before it came from (optional; one line, at most "
+    f"{GENERAL_ESTIMATE_REFERENCE_MAX_LENGTH} characters; default '{GENERAL_ESTIMATE_REFERENCE_DEFAULT}')"
+)
+
+
+@dataclass(frozen=True)
+class _GeneralRaw:
+    """A parsed `--general` with its optional note and estimate texts (all checked after parsing)."""
+
+    note: str | None = None
+    estimate: str | None = None
+    estimate_ref: str | None = None
 
 
 class _MealEntryAction(argparse.Action):
@@ -511,7 +541,7 @@ class _MealEntryAction(argparse.Action):
     ) -> None:
         entries = list(getattr(namespace, self.dest, None) or [])
         # A general entry starts without a note; `--general-note` right after it sets one.
-        entries.append(GeneralMealEntry() if self.nargs == 0 else list(values or ()))
+        entries.append(_GeneralRaw() if self.nargs == 0 else list(values or ()))
         setattr(namespace, self.dest, entries)
 
 
@@ -526,20 +556,60 @@ class _GeneralNoteAction(argparse.Action):
         option_string: str | None = None,
     ) -> None:
         entries = list(getattr(namespace, self.dest, None) or [])
-        if not entries or entries[-1] != GeneralMealEntry() or not isinstance(values, str):
+        if not entries or entries[-1] != _GeneralRaw() or not isinstance(values, str):
             raise argparse.ArgumentError(self, "must directly follow the --general it describes")
-        entries[-1] = GeneralMealEntry(values)
+        entries[-1] = _GeneralRaw(values)
+        setattr(namespace, self.dest, entries)
+
+
+class _GeneralEstimateAction(argparse.Action):
+    """`--general-estimate SPEC` right after its `--general` (or that one's note); `--general-estimate-ref TEXT`
+    right after its `--general-estimate`. The texts are checked after parsing."""
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: str | Sequence[Any] | None,
+        option_string: str | None = None,
+    ) -> None:
+        entries = list(getattr(namespace, self.dest, None) or [])
+        last = entries[-1] if entries else None
+        text = values if isinstance(values, str) else None
+        if text is None or not isinstance(last, _GeneralRaw):
+            last = None
+        if self.metavar == "SPEC":
+            if last is None or last.estimate is not None:
+                raise argparse.ArgumentError(
+                    self, "must directly follow the --general (or --general-note) it describes"
+                )
+            entries[-1] = _GeneralRaw(last.note, text)
+        else:
+            if last is None or last.estimate is None or last.estimate_ref is not None:
+                raise argparse.ArgumentError(self, "must directly follow the --general-estimate it describes")
+            entries[-1] = _GeneralRaw(last.note, last.estimate, text)
         setattr(namespace, self.dest, entries)
 
 
 def _add_meal_entry_arguments(parser: argparse.ArgumentParser, item_help: str) -> None:
-    """`--item` and `--general [--general-note TEXT]` of `nutrition log` and `meal add-item`, in one ordered list."""
+    """`--item` and `--general [--general-note TEXT] [--general-estimate SPEC [--general-estimate-ref TEXT]]` of
+    `nutrition log` and `meal add-item`, in one ordered list."""
     parser.add_argument(
         "--item", dest="entries", nargs=3, action=_MealEntryAction, metavar=("FOOD", "QTY", "UNIT"), help=item_help
     )
     parser.add_argument("--general", dest="entries", nargs=0, action=_MealEntryAction, help=_GENERAL_HELP)
     parser.add_argument(
         "--general-note", dest="entries", action=_GeneralNoteAction, metavar="TEXT", help=_GENERAL_NOTE_HELP
+    )
+    parser.add_argument(
+        "--general-estimate", dest="entries", action=_GeneralEstimateAction, metavar="SPEC", help=_GENERAL_ESTIMATE_HELP
+    )
+    parser.add_argument(
+        "--general-estimate-ref",
+        dest="entries",
+        action=_GeneralEstimateAction,
+        metavar="TEXT",
+        help=_GENERAL_ESTIMATE_REF_HELP,
     )
     # At least one --item or --general is required; main() checks it after parsing (argparse exit 2).
     parser.set_defaults(meal_entry_usage_error=parser.error)
@@ -1144,17 +1214,24 @@ def _nutrition(args: argparse.Namespace) -> int:
             )
             return 0
         if args.nutrition_command == "food" and args.food_command == "fact" and args.fact_command == "add":
-            added = AddFoodFact(foods, clock=lambda: datetime.now().astimezone()).execute(_new_food_fact(args))
-            print(
-                render_food_json(added.profile)
-                if args.json
-                else (
+            added = AddFoodFact(foods, clock=lambda: datetime.now().astimezone()).execute(
+                _new_food_fact(args), new_unit=args.new_unit
+            )
+            if args.json:
+                print(render_food_json(added.profile))
+            elif added.superseded_fact_id is None:
+                print(
+                    f"Added fact {added.fact.fact_id} to {added.profile.profile_id} as its first fact per "
+                    f"{added.fact.basis_unit.value}; facts per other units are unchanged.\n"
+                    f"{render_food(added.profile)}"
+                )
+            else:
+                print(
                     f"Added fact {added.fact.fact_id} to {added.profile.profile_id}; it replaces "
                     f"{added.superseded_fact_id} for meals logged from now on.\n"
                     "Meals already logged keep the facts they were logged with.\n"
                     f"{render_food(added.profile)}"
                 )
-            )
             return 0
         if args.nutrition_command == "food" and args.food_command == "list":
             profiles = ListFoods(foods).execute()
@@ -1393,22 +1470,27 @@ def _meal_entry(index: int, raw: list[str]) -> MealEntryItem:
     return MealEntryItem(food_id, _positive_quantity(quantity_text, f"{what} quantity"), _unit(unit_text, what))
 
 
-def _meal_entries(raw_entries: Sequence[list[str] | GeneralMealEntry]) -> tuple[MealEntry, ...]:
+def _meal_entries(raw_entries: Sequence[list[str] | _GeneralRaw]) -> tuple[MealEntry, ...]:
     """The parsed `--item`/`--general` entries in command-line order; item N is the N-th entry of either kind."""
     return tuple(
-        _general_entry(raw.note, label=f"item {index}: ")
-        if isinstance(raw, GeneralMealEntry)
+        _general_entry(raw.note, label=f"item {index}: ", estimate=raw.estimate, estimate_ref=raw.estimate_ref)
+        if isinstance(raw, _GeneralRaw)
         else _meal_entry(index, raw)
         for index, raw in enumerate(raw_entries, start=1)
     )
 
 
-def _general_entry(note: str | None, *, label: str) -> GeneralMealEntry:
-    """A `--general` entry with its memo checked and normalized before anything is read or written."""
+def _general_entry(
+    note: str | None, *, label: str, estimate: str | None = None, estimate_ref: str | None = None
+) -> GeneralMealEntry:
+    """A `--general` entry with its memo (and estimate) checked and normalized before anything is read or written."""
     try:
-        return GeneralMealEntry(normalize_general_meal_note(note))
+        memo = normalize_general_meal_note(note)
     except ValueError as exc:
         raise NutritionLoggingError(f"{label}--general-note {exc}. Nothing was changed.") from exc
+    if estimate is None:
+        return GeneralMealEntry(memo)
+    return GeneralMealEntry(memo, parse_general_estimate(estimate, estimate_ref, _now(), label=label))
 
 
 def _resolve_entries(

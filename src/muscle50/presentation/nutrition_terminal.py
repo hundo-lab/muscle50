@@ -230,7 +230,8 @@ def _meal_lines(intake: MealIntake, *, facts: bool = False) -> list[str]:
             # A general meal has no menu or amount: only its memo, and every nutrient is unknown.
             note = item.item.serving_description
             detail = "general meal" if note is None else f"general meal; note: {note}"
-            lines.append(f"  {item.item.sequence}. {item.item.food_name} ({detail}): nutrition unknown")
+            values = "nutrition unknown" if item.item.general_estimate is None else _estimate_ranges(item)
+            lines.append(f"  {item.item.sequence}. {item.item.food_name} ({detail}): {values}")
         else:
             lines.append(f"  {item.item.sequence}. {_item_name(item)} {_quantity(item)}: {_item_values(item)}")
         lines.append(f"     source: {_item_sources(item)}")
@@ -313,6 +314,20 @@ def _item_values(item: ItemIntake) -> str:
         # Exact/estimated is shown once per item on its "source:" line.
         parts.append(f"{_SHORT[nutrient]} {_amount(selection.value, nutrient)}")
     return " | ".join(parts)
+
+
+def _estimate_ranges(item: ItemIntake) -> str:
+    """An estimated general meal: its ranges only (it has no values), e.g. `estimated kcal 700-950 | P 30-45 g`."""
+    parts = []
+    for nutrient in NutrientField:
+        selection = item.calculated.get(nutrient) if item.calculated is not None else None
+        if selection is None or selection.minimum is None or selection.maximum is None:
+            parts.append(f"{_SHORT[nutrient]} unknown")
+            continue
+        low, high = _amount(selection.minimum, nutrient), _amount(selection.maximum, nutrient)
+        unit = "" if nutrient is NutrientField.CALORIES_KCAL else " g"
+        parts.append(f"{_SHORT[nutrient]} {low.removesuffix(unit)}-{high}")
+    return "estimated " + " | ".join(parts)
 
 
 def _item_sources(item: ItemIntake) -> str:

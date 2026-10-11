@@ -12,6 +12,7 @@ No targets, remaining amounts or recommendations live here; this is intake only.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, tzinfo
@@ -21,6 +22,9 @@ from typing import Literal
 from muscle50.application.nutrition import FoodNutritionRepository, MealReader, MealRepository
 from muscle50.domain.meal_history import MealHistory, timestamp_text
 from muscle50.domain.nutrition import (
+    GENERAL_ESTIMATE_BASIS_QUANTITY,
+    GENERAL_ESTIMATE_BASIS_UNIT,
+    GENERAL_ESTIMATE_SOURCE_TYPES,
     GENERAL_MEAL_FOOD_ID,
     GENERAL_MEAL_NAME,
     Accuracy,
@@ -34,6 +38,7 @@ from muscle50.domain.nutrition import (
     NutrientField,
     NutritionFact,
     NutritionProvenance,
+    NutritionRange,
     NutritionSourceType,
     NutritionValue,
     QuantityUnit,
@@ -101,7 +106,8 @@ class NewFoodFact:
 class AddedFoodFact:
     profile: FoodNutritionProfile
     fact: NutritionFact
-    superseded_fact_id: str
+    superseded_fact_id: str | None
+    """None when the fact is the first one in its unit (`food fact add --new-unit`)."""
 
 
 @dataclass(frozen=True)
@@ -112,10 +118,26 @@ class MealEntryItem:
 
 
 @dataclass(frozen=True)
+class GeneralMealEstimate:
+    """`--general-estimate`: estimated ranges for a whole general meal (no point values, never exact)."""
+
+    source_type: NutritionSourceType
+    ranges: tuple[tuple[NutrientField, Decimal, Decimal], ...]
+    """(nutrient, minimum, maximum) in NutrientField order; nutrients not listed stay unknown."""
+    source_reference: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
 class GeneralMealEntry:
-    """A general meal (`--general`): eaten, but its menu and nutrition are unknown; the note is only a memo."""
+    """A general meal (`--general`): eaten, but its menu and nutrition are unknown; the note is only a memo.
+
+    With an `estimate` (Telegram LLM v2) the item also carries one estimate-only fact; its values stay
+    unknown and only the ranges are recorded.
+    """
 
     note: str | None = None
+    estimate: GeneralMealEstimate | None = None
 
 
 MealEntry = MealEntryItem | GeneralMealEntry
@@ -240,7 +262,9 @@ class AddFoodFact:
         self._repository = repository
         self._clock = clock
 
-    def execute(self, new: NewFoodFact) -> AddedFoodFact:
+    def execute(self, new: NewFoodFact, *, new_unit: bool = False) -> AddedFoodFact:
+        """With ``new_unit`` the fact is the food's first fact in a unit it has no fact for yet
+        (it supersedes nothing; the facts in other units are untouched)."""
         _check_catalog_fact(new.source_type, new.values)
         _refuse_general_meal_food(new.food_id)
         profile = self._repository.get(new.food_id)
@@ -250,6 +274,8 @@ class AddFoodFact:
                 "Nothing was changed."
             )
         unit = new.basis_unit
+        if new_unit:
+            return self._first_fact_in_unit(profile, new)
         if not any(fact.basis_unit is unit for fact in profile.facts):
             units = ", ".join(sorted({fact.basis_unit.value for fact in profile.facts}))
             raise NutritionLoggingError(
@@ -323,6 +349,35 @@ class AddFoodFact:
         except ValueError as exc:
             raise NutritionLoggingError(str(exc)) from exc
         return AddedFoodFact(stored, fact, previous.fact_id)
+
+    def _first_fact_in_unit(self, profile: FoodNutritionProfile, new: NewFoodFact) -> AddedFoodFact:
+        unit = new.basis_unit
+        if any(fact.basis_unit is unit for fact in profile.facts):
+            raise NutritionLoggingError(
+                f"food {profile.profile_id!r} already has nutrition per {unit.value}; run without --new-unit "
+                "to add a new version. Nothing was changed."
+            )
+        ids = {fact.fact_id for fact in profile.facts}
+        number = len(profile.facts) + 1
+        while f"food:{profile.profile_id}:{number}" in ids:
+            number += 1
+        try:
+            fact = NutritionFact(
+                fact_id=f"food:{profile.profile_id}:{number}",
+                values=new.values,
+                basis_quantity=new.basis_quantity,
+                basis_unit=unit,
+                provenance=NutritionProvenance(
+                    source_type=new.source_type,
+                    accuracy=new.accuracy,
+                    source_reference=new.source_reference,
+                    created_at=self._clock(),
+                ),
+            )
+            stored = self._repository.append_nutrition_fact(profile.profile_id, fact)
+        except ValueError as exc:
+            raise NutritionLoggingError(str(exc)) from exc
+        return AddedFoodFact(stored, fact, None)
 
 
 class ListFoods:
@@ -438,6 +493,7 @@ class RepeatMeal:
         for item in source.items:
             if item.is_general:
                 # A general meal is repeated as a general meal, memo included; it has no amount or facts.
+                # An estimated one is repeated without its estimate (a guess about another meal; gate 1 D-J).
                 entries.append(GeneralMealEntry(item.serving_description))
                 continue
             if item.food_profile_id is None or item.quantity is None or item.quantity_unit is None:
@@ -458,6 +514,8 @@ class RepeatMeal:
         changes = []
         # LogMeal numbers the items 1..n in entry order, so they pair with the source items in order.
         for old, new in zip(meal_intake(source).items, intake.items, strict=True):
+            if old.item.is_general:
+                continue  # no catalog facts; an estimated one's estimate is deliberately not repeated
             old_versions, new_versions = catalog_fact_versions(old), catalog_fact_versions(new)
             if old_versions != new_versions:
                 changes.append(
@@ -568,19 +626,26 @@ def entry_item(
 ) -> MealItem:
     """The meal item for one entry: a catalog food snapshot, or a general meal item."""
     if isinstance(entry, GeneralMealEntry):
-        return general_meal_item(meal_id, sequence, entry.note, label=label)
+        return general_meal_item(meal_id, sequence, entry.note, label=label, estimate=entry.estimate)
     return snapshot_item(foods, meal_id, sequence, entry, label=label)
 
 
-def general_meal_item(meal_id: str, sequence: int, note: str | None, *, label: str) -> MealItem:
+def general_meal_item(
+    meal_id: str, sequence: int, note: str | None, *, label: str, estimate: GeneralMealEstimate | None = None
+) -> MealItem:
     """A general meal item: the reserved profile, no quantity, no unit, no facts; the memo is kept as text.
 
+    With an estimate it gets one item-owned fact, `<meal_id>:<sequence>:estimate`: basis 1 serving (the
+    whole meal), every value unknown, a range per estimated nutrient, the estimate source, `estimated`.
     The repository creates the reserved profile row in the same transaction as the item.
     """
     try:
         memo = normalize_general_meal_note(note)
     except ValueError as exc:
         raise NutritionLoggingError(f"{label}: --general-note {exc}. Nothing was changed.") from exc
+    facts: tuple[NutritionFact, ...] = ()
+    if estimate is not None:
+        facts = (_general_estimate_fact(f"{meal_id}:{sequence}:estimate", estimate, label=label),)
     return MealItem(
         meal_id=meal_id,
         sequence=sequence,
@@ -589,7 +654,115 @@ def general_meal_item(meal_id: str, sequence: int, note: str | None, *, label: s
         quantity_unit=None,
         food_profile_id=GENERAL_MEAL_FOOD_ID,
         serving_description=memo,
+        nutrition_facts=facts,
     )
+
+
+def _general_estimate_fact(fact_id: str, estimate: GeneralMealEstimate, *, label: str) -> NutritionFact:
+    def refused(reason: str) -> NutritionLoggingError:
+        return NutritionLoggingError(f"{label}: --general-estimate {reason}. Nothing was changed.")
+
+    if estimate.source_type not in GENERAL_ESTIMATE_SOURCE_TYPES:
+        raise refused(f"source must be visual_estimate or language_estimate, not {estimate.source_type.value!r}")
+    if not estimate.ranges:
+        raise refused("needs at least one nutrient range")
+    try:
+        reference = _general_estimate_reference(estimate.source_reference)
+    except ValueError as exc:
+        raise NutritionLoggingError(f"{label}: --general-estimate-ref {exc}. Nothing was changed.") from exc
+    minimums: dict[str, Decimal] = {}
+    maximums: dict[str, Decimal] = {}
+    for nutrient, minimum, maximum in estimate.ranges:
+        if nutrient.value in minimums:
+            raise refused(f"lists {_FLAG_NAMES[nutrient]} twice")
+        if minimum > maximum:
+            raise refused(f"{_FLAG_NAMES[nutrient]} minimum is above its maximum")
+        minimums[nutrient.value], maximums[nutrient.value] = minimum, maximum
+    try:
+        return NutritionFact(
+            fact_id=fact_id,
+            values=NutritionValue(),
+            basis_quantity=GENERAL_ESTIMATE_BASIS_QUANTITY,
+            basis_unit=GENERAL_ESTIMATE_BASIS_UNIT,
+            provenance=NutritionProvenance(
+                source_type=estimate.source_type,
+                accuracy=Accuracy.ESTIMATED,
+                source_reference=reference,
+                created_at=estimate.created_at,
+            ),
+            value_range=NutritionRange(NutritionValue(**minimums), NutritionValue(**maximums)),
+        )
+    except ValueError as exc:
+        raise refused(str(exc)) from exc
+
+
+GENERAL_ESTIMATE_REFERENCE_DEFAULT = "nutrition log --general-estimate"
+GENERAL_ESTIMATE_REFERENCE_MAX_LENGTH = 100
+_ESTIMATE_NUMBER = re.compile(r"[0-9]+(\.[0-9]+)?\Z")
+_ESTIMATE_SOURCES = {source.value: source for source in GENERAL_ESTIMATE_SOURCE_TYPES}
+_ESTIMATE_NUTRIENTS = {name: nutrient for nutrient, name in _FLAG_NAMES.items()}
+
+
+def _general_estimate_reference(text: str) -> str:
+    reference = text.strip()
+    if not reference:
+        raise ValueError("must not be blank")
+    if len(reference) > GENERAL_ESTIMATE_REFERENCE_MAX_LENGTH:
+        raise ValueError(f"must be at most {GENERAL_ESTIMATE_REFERENCE_MAX_LENGTH} characters (got {len(reference)})")
+    if any(unicodedata.category(character) == "Cc" for character in reference):
+        raise ValueError("must be a single line of text")
+    return reference
+
+
+def parse_general_estimate(
+    spec: str, reference: str | None, created_at: datetime, *, label: str
+) -> GeneralMealEstimate:
+    """`--general-estimate SPEC [--general-estimate-ref TEXT]`, SPEC being
+    ``<visual_estimate|language_estimate>:<kcal|protein|carbs|fat>=<min>-<max>[,...]``.
+
+    Nothing is guessed: a malformed SPEC, an unknown source or nutrient, or min > max is refused.
+    """
+
+    def refused(reason: str) -> NutritionLoggingError:
+        return NutritionLoggingError(f"{label}--general-estimate {reason}. Nothing was changed.")
+
+    source_text, colon, ranges_text = spec.partition(":")
+    if not colon:
+        raise refused(f"must look like visual_estimate:kcal=700-950,protein=30-45, got {spec!r}")
+    source = _ESTIMATE_SOURCES.get(source_text.strip())
+    if source is None:
+        raise refused(f"source must be visual_estimate or language_estimate, not {source_text.strip()!r}")
+    ranges: list[tuple[NutrientField, Decimal, Decimal]] = []
+    for part in ranges_text.split(","):
+        name, equals, bounds = part.strip().partition("=")
+        nutrient = _ESTIMATE_NUTRIENTS.get(name.strip())
+        minimum_text, dash, maximum_text = bounds.strip().partition("-")
+        if not equals or nutrient is None or not dash:
+            raise refused(f"each range must be <kcal|protein|carbs|fat>=<min>-<max>, got {part.strip()!r}")
+        if _ESTIMATE_NUMBER.match(minimum_text) is None or _ESTIMATE_NUMBER.match(maximum_text) is None:
+            raise refused(f"{name.strip()} bounds must be plain non-negative numbers, got {bounds.strip()!r}")
+        minimum, maximum = Decimal(minimum_text), Decimal(maximum_text)
+        if minimum > maximum:
+            raise refused(f"{name.strip()} minimum {minimum_text} is above its maximum {maximum_text}")
+        if any(existing is nutrient for existing, _, _ in ranges):
+            raise refused(f"lists {name.strip()} twice")
+        ranges.append((nutrient, minimum, maximum))
+    ranges.sort(key=lambda item: list(NutrientField).index(item[0]))
+    try:
+        checked = _general_estimate_reference(
+            reference if reference is not None else GENERAL_ESTIMATE_REFERENCE_DEFAULT
+        )
+    except ValueError as exc:
+        raise NutritionLoggingError(f"{label}--general-estimate-ref {exc}. Nothing was changed.") from exc
+    return GeneralMealEstimate(source, tuple(ranges), checked, created_at)
+
+
+def format_general_estimate(
+    source_type: NutritionSourceType, ranges: tuple[tuple[NutrientField, Decimal, Decimal], ...]
+) -> str:
+    """The SPEC `parse_general_estimate` reads back to the same source and ranges."""
+    parts = ",".join(f"{_FLAG_NAMES[nutrient]}={minimum:f}-{maximum:f}" for nutrient, minimum, maximum in ranges)
+    return f"{source_type.value}:{parts}"
 
 
 def is_general_meal_profile(profile: FoodNutritionProfile) -> bool:
@@ -791,5 +964,8 @@ def _structured_text(meal_type: MealType, day: date, eaten_time: time | None, it
 def _entry_text(item: MealEntry) -> str:
     if isinstance(item, GeneralMealEntry):
         note = normalize_general_meal_note(item.note)
-        return "general meal" if note is None else f"general meal (note: {note})"
+        text = "general meal" if note is None else f"general meal (note: {note})"
+        if item.estimate is not None:
+            text += f" estimated {format_general_estimate(item.estimate.source_type, item.estimate.ranges)}"
+        return text
     return f"{item.food_id} {item.quantity} {item.unit.value}"

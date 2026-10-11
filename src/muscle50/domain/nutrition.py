@@ -72,6 +72,12 @@ GENERAL_MEAL_FOOD_ID = "general-meal"
 GENERAL_MEAL_NAME = "일반식"
 GENERAL_MEAL_NOTE_MAX_LENGTH = 100
 _RESERVED_FOOD_REFERENCES = frozenset({GENERAL_MEAL_FOOD_ID, GENERAL_MEAL_NAME})
+# Estimated general meal (Telegram LLM v2, `--general-estimate`): one item-owned fact with ranges only.
+GENERAL_ESTIMATE_SOURCE_TYPES = frozenset(
+    {NutritionSourceType.VISUAL_ESTIMATE, NutritionSourceType.LANGUAGE_ESTIMATE}
+)
+GENERAL_ESTIMATE_BASIS_QUANTITY = Decimal(1)
+GENERAL_ESTIMATE_BASIS_UNIT = QuantityUnit.SERVING
 
 
 @dataclass(frozen=True)
@@ -318,21 +324,39 @@ class MealItem:
         """A general meal item: the reserved profile with no quantity, no unit and no facts.
 
         The reserved profile ID is required: an item without a quantity that points to any other
-        food (for example one written by a future parser) is not a general meal.
+        food (for example one written by a future parser) is not a general meal. Telegram LLM v2
+        adds the estimated general meal: the same item plus exactly one estimate-only fact
+        (`is_general_estimate_fact`); any other fact makes the item not a general meal.
         """
         return (
             self.food_profile_id == GENERAL_MEAL_FOOD_ID
             and self.quantity is None
             and self.quantity_unit is None
-            and not self.nutrition_facts
+            and len(self.nutrition_facts) <= 1
+            and all(is_general_estimate_fact(fact) for fact in self.nutrition_facts)
         )
 
+    @property
+    def general_estimate(self) -> NutritionFact | None:
+        """The estimate fact of an estimated general meal item; None for every other item."""
+        if not self.is_general or not self.nutrition_facts:
+            return None
+        return self.nutrition_facts[0]
+
     def preferred_fact(self, nutrient: NutrientField | None = None) -> NutritionFact | None:
+        estimate = self.general_estimate
+        if estimate is not None:
+            return select_preferred_fact(self.nutrition_facts, estimate.basis_unit, nutrient)
         if self.quantity_unit is None:
             return None
         return select_preferred_fact(self.nutrition_facts, self.quantity_unit, nutrient)
 
     def calculated_nutrition(self) -> CalculatedNutrition | None:
+        estimate = self.general_estimate
+        if estimate is not None:
+            # The estimate describes the whole general meal (its basis, 1 serving): ranges only, no values.
+            calculated = estimate.calculate(estimate.basis_quantity, estimate.basis_unit)
+            return calculated if calculated.nutrients else None
         if self.quantity is None or self.quantity_unit is None:
             return None
         nutrients: list[CalculatedNutrient] = []
@@ -421,6 +445,21 @@ def normalize_general_meal_note(text: str | None) -> str | None:
     if any(unicodedata.category(character) == "Cc" for character in note):
         raise ValueError("must be a single line of text")
     return note
+
+
+def is_general_estimate_fact(fact: NutritionFact) -> bool:
+    """An estimated general meal's fact: an estimate source, marked estimated, ranges only (no point
+    value), on the basis of 1 serving (the whole meal), and superseding nothing."""
+    return (
+        fact.provenance.source_type in GENERAL_ESTIMATE_SOURCE_TYPES
+        and fact.provenance.accuracy is Accuracy.ESTIMATED
+        and not fact.values.has_any_value
+        and fact.value_range is not None
+        and fact.value_range.has_any_value
+        and fact.basis_quantity == GENERAL_ESTIMATE_BASIS_QUANTITY
+        and fact.basis_unit is GENERAL_ESTIMATE_BASIS_UNIT
+        and fact.supersedes_fact_id is None
+    )
 
 
 def is_reserved_food_reference(text: str) -> bool:
