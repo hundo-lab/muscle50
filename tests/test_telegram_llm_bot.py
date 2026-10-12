@@ -520,7 +520,7 @@ def test_answer_with_only_data_numbers_is_sent_else_existing_reply(
 ) -> None:
     v1._seed_reads(capsys, home)
     _llm_config(home)
-    (home / "config" / "telegram_llm_coach.md").write_text("저녁은 120 g 이상 단백질", encoding="utf-8")
+    (home / "config" / "telegram_llm_coach.md").write_text("저녁은 단백질 150 g 이상", encoding="utf-8")
     good = {"answer": "단백질은 120 g 목표예요.", "memory_summary": "단백질 질문"}
     bad = {"answer": "단백질은 77 g 남았어요.", "memory_summary": ""}
     coach_number = {"answer": "목표보다 많이, 150 g 드세요.", "memory_summary": ""}
@@ -539,7 +539,7 @@ def test_answer_with_only_data_numbers_is_sent_else_existing_reply(
     assert answer_request.schema is SchemaName.ANSWER
     prompt = answer_request.prompt
     assert (
-        prompt.index("[코치 가이드]\n저녁은 120 g")
+        prompt.index("[코치 가이드]\n저녁은 단백질 150 g")
         < prompt.index("[고정 규칙]")
         < prompt.index("<nutrition status --json>")
     )
