@@ -184,13 +184,28 @@ def usage_text(command: str) -> str:
     return f"사용법: {usage}\n예: {example}"
 
 
-def usage_reply_text(reply: UsageReply) -> str:
+LLM_HELP_LINES = (
+    "/llm [claude|codex|default] - 자유 문장·사진을 해석할 LLM 보기/바꾸기",
+    "/memory - 다음 LLM 호출에 넘어가는 대화 기억 보기",
+    "/forget - 대화 기억 지우기(기록은 남음)",
+    "/history [N|YYYY-MM-DD] - 자유 문장 대화 기록 보기",
+    "명령이 아닌 문장과 사진은 LLM이 해석해 제안합니다. 저장은 /ok_… 확인 뒤에만 합니다.",
+)
+"""Telegram LLM v2: added to the help only while `config\\telegram_llm.json` exists."""
+
+
+def help_text(llm_enabled: bool) -> str:
+    return "\n".join([HELP_TEXT, *LLM_HELP_LINES]) if llm_enabled else HELP_TEXT
+
+
+def usage_reply_text(reply: UsageReply, *, llm_enabled: bool = False) -> str:
+    help_body = help_text(llm_enabled)
     if reply.reason is UsageReason.HELP:
-        return HELP_TEXT
+        return help_body
     if reply.reason is UsageReason.UNKNOWN_COMMAND:
-        return f"모르는 명령입니다: {reply.command}\n\n{HELP_TEXT}"
+        return f"모르는 명령입니다: {reply.command}\n\n{help_body}"
     if reply.reason is UsageReason.NOT_A_COMMAND:
-        return f"명령이 아닙니다.\n\n{HELP_TEXT}"
+        return f"명령이 아닙니다.\n\n{help_body}"
     return usage_text(reply.command if reply.command is not None else "help")
 
 

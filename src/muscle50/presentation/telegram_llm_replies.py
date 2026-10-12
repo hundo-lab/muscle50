@@ -1,0 +1,239 @@
+"""Telegram LLM v2 presentation: proposal, menu, edit and `/history` replies, and `telegram history` output.
+
+Bot replies are Korean; the body goes in `<pre>` and the `/ok_...`, `/eat_...` lines after it, outside
+`<pre>`, so one tap sends them (`BotReply`). Every number shown comes from the validated LLM output or
+the CLI's own JSON; estimates are always shown as ranges marked `estimated`. The `telegram history`
+CLI text uses ASCII labels (message and reply text are the user's own); its JSON is the stored lines.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Sequence
+from decimal import Decimal
+from typing import Any
+
+from muscle50.application.telegram_llm import (
+    EditView,
+    MealProposalView,
+    MenuLineView,
+    MenuView,
+    ReplyText,
+)
+from muscle50.domain.llm_today_totals import amount_text
+from muscle50.domain.menu_ranking import RankMode
+from muscle50.domain.nutrition import NutrientField
+from muscle50.domain.telegram_llm import NutrientRanges
+from muscle50.domain.telegram_llm_prompt import (
+    HISTORY_EMPTY_TEXT,
+    MEAL_NAMES,
+    duplicate_text,
+    photo_failed_head,
+    proposal_head,
+)
+from muscle50.presentation.telegram_format import BotReply, reply_messages
+
+_NUTRIENT_NAMES = {
+    NutrientField.CALORIES_KCAL: "kcal",
+    NutrientField.PROTEIN_G: "단백질",
+    NutrientField.CARBOHYDRATE_G: "탄수화물",
+    NutrientField.FAT_G: "지방",
+}
+_KIND_NAMES = {
+    "text": "문장",
+    "photo": "사진",
+    "confirm": "확인",
+    "plain": "일반식만 확인",
+    "cancel": "취소",
+    "eat": "메뉴 고르기",
+    "edit": "수정 확인",
+}
+_INTENT_NAMES = {
+    "meal_log": "식사 기록",
+    "question": "질문",
+    "menu": "메뉴",
+    "menu_suggest": "메뉴 제안",
+    "meal_edit": "식사 수정",
+    "chat": "잡담",
+    "unclear": "모름",
+    "eat": "메뉴 고르기",
+}
+
+
+class TelegramLlmReplies:
+    """The `LlmReplies` port."""
+
+    def messages(self, reply: ReplyText) -> list[str]:
+        rich = tuple(((line,),) for line in reply.commands)
+        return reply_messages(BotReply(reply.body, rich))
+
+    def proposal(self, view: MealProposalView) -> ReplyText:
+        return proposal_reply(view)
+
+    def menu(self, view: MenuView) -> ReplyText:
+        return menu_reply(view)
+
+    def edit(self, view: EditView) -> ReplyText:
+        return ReplyText(f"이렇게 고칠까요?\n{view.change}", (f"고치기: /ok_{view.token}   취소: /no_{view.token}",))
+
+    def candidates(self, meal_ids: Sequence[str]) -> ReplyText:
+        lines = ["어느 식사(또는 음식)인지 하나로 정하지 못해 아무것도 바꾸지 않았습니다. 후보:"]
+        lines.extend(f"/show {meal_id}" for meal_id in meal_ids)
+        lines.append("끼니와 음식 이름을 더 구체적으로 적어 다시 보내 주세요.")
+        return ReplyText("\n".join(lines))
+
+    def history(self, entries: Sequence[dict[str, Any]]) -> ReplyText:
+        return ReplyText(history_text(entries))
+
+
+def proposal_reply(view: MealProposalView) -> ReplyText:
+    day = view.day.isoformat()[5:]
+    if view.failed_photo:
+        lines = [photo_failed_head(view.meal_type, day)]
+    else:
+        lines = [proposal_head(view.meal_type, day, view.label)]
+    if view.slot_from_time:
+        lines.append("(끼니: 지금 시각 기준)")
+    if view.duplicates:
+        lines.append(duplicate_text(view.meal_type, view.duplicates))
+    for number, item in enumerate(view.items, start=1):
+        text = f"{number}. {item.text}"
+        if item.quantity_estimated:
+            text += " (수량 추정)"
+        if item.reason:
+            text += f" - {item.reason}"
+        lines.append(text)
+        if item.estimate:
+            lines.append(f"   추정: {ranges_text(item.estimate)} (estimated)")
+    lines.extend(view.dropped)
+    token = view.token
+    plain = f"   일반식만 기록(값 없이): /plain_{token}" if view.plain else ""
+    return ReplyText("\n".join(lines), (f"기록: /ok_{token}{plain}   취소: /no_{token}",))
+
+
+def menu_reply(view: MenuView) -> ReplyText:
+    meal = MEAL_NAMES[view.meal_type]
+    what = f"{meal} 메뉴 제안이에요." if view.suggestion else f"오늘 {meal} 메뉴예요."
+    ranking = view.ranking
+    if ranking.mode is RankMode.KNOWN:
+        protein = f"단백질 {view.protein_remaining} g" if view.protein_remaining is not None else "단백질 알 수 없음"
+        head = f"{what} 남은 양: {protein}, kcal {view.kcal_budget} (/status)"
+    elif ranking.mode is RankMode.RANGE:
+        assert ranking.budget_low is not None and ranking.budget_high is not None
+        head = (
+            f"{what} 남은 kcal 약 {amount_text(ranking.budget_low)}~{amount_text(ranking.budget_high)} "
+            "(추정 포함) (/status)"
+        )
+    else:
+        reasons = ", ".join(ranking.reasons)
+        head = f"{what} 남은 양을 몰라 단백질/kcal 비율 순" + (f" ({reasons})" if reasons else "")
+    lines = [head]
+    if ranking.target_met:
+        lines.append("오늘 kcal은 목표에 도달했습니다 (/status)")
+    if view.totals is not None:
+        lines.append(view.totals)
+    if view.lead:
+        lines.append(view.lead)
+    lines.append("추천 (값은 추정, estimated)" if view.suggestion else "추천 순서 (메뉴 값은 사진 추정, estimated)")
+    for number, line in enumerate(view.lines, start=1):
+        lines.append(f"{number}. {_menu_line(line)}")
+    eat = " ".join(f"/eat_{view.token}_{number}" for number in range(1, len(view.lines) + 1))
+    return ReplyText("\n".join(lines), (f"먹을 메뉴: {eat}",))
+
+
+def _menu_line(line: MenuLineView) -> str:
+    protein = _bounds_text(line.protein, " g", printed=line.printed_protein)
+    kcal = _bounds_text(line.kcal, "", printed=line.printed_kcal)
+    text = f"{line.title}   단백질 {protein}, kcal {kcal}"
+    if line.label:
+        text += f" {line.label}"
+    if line.note:
+        text += f" - {line.note}"
+    return text
+
+
+def _bounds_text(bounds: tuple[Decimal, Decimal] | None, unit: str, *, printed: bool) -> str:
+    if bounds is None:
+        return "알 수 없음"
+    low, high = bounds
+    value = amount_text(low) if low == high else f"{amount_text(low)}~{amount_text(high)}"
+    return f"{value}{unit}" + (" (메뉴판 표기)" if printed else "")
+
+
+def ranges_text(ranges: NutrientRanges) -> str:
+    parts = []
+    for nutrient, low, high in ranges:
+        unit = "" if nutrient is NutrientField.CALORIES_KCAL else " g"
+        value = amount_text(low) if low == high else f"{amount_text(low)}~{amount_text(high)}"
+        parts.append(f"{_NUTRIENT_NAMES[nutrient]} {value}{unit}")
+    return ", ".join(parts)
+
+
+# --- /history and `telegram history` -------------------------------------------------------------------
+
+
+def history_text(entries: Sequence[dict[str, Any]]) -> str:
+    """`/history`: one block per entry, oldest first (Korean)."""
+    if not entries:
+        return HISTORY_EMPTY_TEXT
+    blocks = []
+    for entry in entries:
+        at = entry["at"]
+        head = [f"{at[5:10]} {at[11:16]} {_KIND_NAMES.get(entry['kind'], entry['kind'])}"]
+        if entry["intent"]:
+            head.append(_INTENT_NAMES.get(entry["intent"], entry["intent"]))
+        if entry["provider"]:
+            head.append(f"{entry['provider']} {entry['model'] or '기본'}")
+        lines = [" · ".join(head), f"나: {_user_text(entry, photo_word='사진', not_kept='보관 안 함')}"]
+        if entry["reply"]:
+            lines.append(f"bot: {entry['reply']}")
+        result = entry["result"]
+        if isinstance(result, dict):
+            if result.get("exit_code") == 0:
+                verb = "수정" if entry["kind"] == "edit" else "기록"
+                lines.append(f"결과: {verb} {result.get('meal_id') or ''}".rstrip())
+            else:
+                lines.append(f"결과: 실패 (exit {result.get('exit_code')})")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def render_telegram_history(entries: Sequence[dict[str, Any]]) -> str:
+    """`muscle50 telegram history`: ASCII labels; message and reply text are shown as stored."""
+    if not entries:
+        return "No Telegram history entries."
+    lines = []
+    for entry in entries:
+        at = entry["at"]
+        head = [f"{at[:10]} {at[11:16]} {at[19:] or 'local'}", f"chat {entry['chat_id']}", entry["kind"]]
+        if entry["intent"]:
+            head.append(f"intent={entry['intent']}")
+        if entry["provider"]:
+            head.append(f"{entry['provider']}/{entry['model'] or 'default'}")
+        if entry["provider_result"]:
+            head.append(str(entry["provider_result"]))
+        if entry["proposal"]:
+            head.append(f"proposal={entry['proposal']}")
+        result = entry["result"]
+        if isinstance(result, dict):
+            head.append(f"exit={result.get('exit_code')}")
+            if result.get("meal_id"):
+                head.append(f"meal={result['meal_id']}")
+        lines.append(" ".join(head))
+        lines.append(f"  user: {_user_text(entry, photo_word='photo', not_kept='not kept')}")
+        if entry["reply"]:
+            reply_lines = str(entry["reply"]).split("\n")
+            lines.append(f"  bot: {reply_lines[0]}")
+            lines.extend(f"       {line}" for line in reply_lines[1:])
+    return "\n".join(lines)
+
+
+def render_telegram_history_json(entries: Sequence[dict[str, Any]]) -> str:
+    return json.dumps({"entries": list(entries)}, indent=2, ensure_ascii=True)
+
+
+def _user_text(entry: dict[str, Any], *, photo_word: str, not_kept: str) -> str:
+    if entry["kind"] == "photo":
+        caption = f" {entry['caption']}" if entry["caption"] else ""
+        return f"[{photo_word}]{caption} ({entry['photo'] or not_kept})"
+    return str(entry["text"] or "")

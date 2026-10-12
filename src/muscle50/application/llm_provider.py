@@ -52,7 +52,7 @@ class LlmCallResult:
     """The provider of the last attempt (the fallback when it was tried)."""
     model: str | None
     outcome: CallOutcome
-    document: Any | None
+    document: Any
     """The validated value when `outcome == "ok"`, otherwise None."""
     seconds: float
     used_fallback: bool

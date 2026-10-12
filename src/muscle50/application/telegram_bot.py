@@ -249,6 +249,34 @@ class ReplySummaries(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class LlmReply:
+    """Telegram LLM v2: HTML messages to send as they are."""
+
+    messages: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RunConfirmed:
+    """Telegram LLM v2: a confirmed proposal, run exactly like a typed command (`_run_command`).
+
+    `on_outcome` gets the CLI outcome and the reply text the bot would send (undo line included) and
+    returns the text to send; it records the result in the history.
+    """
+
+    invocation: CliInvocation
+    on_outcome: Callable[[CommandOutcome, str], str]
+
+
+LlmAction = LlmReply | RunConfirmed
+
+
+class LlmMessageHandler(Protocol):
+    def handle(self, chat_id: int, update_id: int, message: IncomingMessage, bot_username: str) -> LlmAction | None:
+        """The LLM layer's answer to an allowed, fresh message; None when the message is not its own."""
+        ...
+
+
 class CheckTelegramBot:
     """`telegram check`: state read, getMe and getWebhookInfo. Reads no message and writes nothing."""
 
@@ -279,6 +307,7 @@ class RunTelegramBot:
         sleep: Callable[[float], None],
         clock: Callable[[], float],
         poll_timeout_s: int = POLL_TIMEOUT_S,
+        llm: LlmMessageHandler | None = None,
     ) -> None:
         self._api = api
         self._handled = handled
@@ -293,6 +322,7 @@ class RunTelegramBot:
         self._sleep = sleep
         self._clock = clock
         self._poll_timeout_s = poll_timeout_s
+        self._llm = llm
         self._bot_id = 0
         self._handled_ids: list[int] = []
         self._running: tuple[str, int] | None = None
@@ -365,18 +395,50 @@ class RunTelegramBot:
             sent_at = datetime.fromtimestamp(message.sent_at_unix, UTC).astimezone()
             self._reply(chat_id, stale_text(sent_at))
             return False
+        if self._llm is not None:
+            handled, stop = self._llm_message(chat_id, update.update_id, message, identity.username)
+            if handled:
+                return stop
         parsed = parse_bot_message(message.text, bot_username=identity.username, today=self._today())
         if isinstance(parsed, UsageReply):
             self._log(f"chat {chat_id}: {_usage_log(parsed)}")
-            self._reply(chat_id, usage_reply_text(parsed))
+            self._reply(chat_id, usage_reply_text(parsed, llm_enabled=self._llm is not None))
             return False
         return self._run_command(chat_id, parsed)
+
+    def _llm_message(self, chat_id: int, update_id: int, message: IncomingMessage, username: str) -> tuple[bool, bool]:
+        """Telegram LLM v2: (handled, stop). Ctrl+C during an LLM call stops the bot like a command."""
+        assert self._llm is not None
+        self._running = ("llm", chat_id)
+        try:
+            action = self._llm.handle(chat_id, update_id, message, username)
+        except TelegramStateError:
+            raise  # like the v1 state file: the bot stops rather than risk running something twice
+        except Exception as exc:
+            self._running = None
+            self._log(f"chat {chat_id}: llm message failed with {type(exc).__name__}")
+            self._log("".join(traceback.format_exception(exc)).rstrip("\n"))
+            self._reply(chat_id, unexpected_error_text(type(exc).__name__))
+            return True, False
+        self._running = None
+        if action is None:
+            return False, False
+        if isinstance(action, LlmReply):
+            self._send_all(chat_id, action.messages)
+            return True, False
+        return True, self._run_command(chat_id, action.invocation, on_outcome=action.on_outcome)
 
     def _remember(self, update_id: int) -> None:
         self._handled_ids = [*self._handled_ids, update_id][-MAX_HANDLED_UPDATES:]
         self._handled.save(HandledUpdates(self._bot_id, tuple(self._handled_ids)))
 
-    def _run_command(self, chat_id: int, invocation: CliInvocation) -> bool:
+    def _run_command(
+        self,
+        chat_id: int,
+        invocation: CliInvocation,
+        *,
+        on_outcome: Callable[[CommandOutcome, str], str] | None = None,
+    ) -> bool:
         name = invocation.command
         if invocation.migrates:
             pending = self._pending_migrations()
@@ -418,7 +480,8 @@ class RunTelegramBot:
         self._running = None
         self._log(f"chat {chat_id}: /{name} -> exit {outcome.exit_code}")
         if outcome.usage_error:
-            self._reply(chat_id, usage_reply_text(UsageReply(UsageReason.MALFORMED, name)))
+            text = usage_reply_text(UsageReply(UsageReason.MALFORMED, name), llm_enabled=self._llm is not None)
+            self._reply(chat_id, on_outcome(outcome, text) if on_outcome is not None else text)
             return False
         if refresh_id is not None and outcome.exit_code == 0:
             after = self._count_unknown(chat_id, refresh_id)
@@ -434,6 +497,8 @@ class RunTelegramBot:
                 self._log(f"chat {chat_id}: /{name} reply has no undo line (headline not recognised)")
             else:
                 text = f"{text}\n{undo_line(meal_id)}"
+        if on_outcome is not None:
+            text = on_outcome(outcome, text)
         self._reply(chat_id, text)
         return False
 

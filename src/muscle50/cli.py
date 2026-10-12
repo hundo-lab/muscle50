@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import argparse
 import re
+import secrets
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timezone, tzinfo
 from decimal import Decimal
 from pathlib import Path
 from time import sleep
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from muscle50.application.activity_unknown_sets import ActivityUnknownSets, CountActivityUnknownSets
 from muscle50.application.backfill_activity_load_metrics import BackfillActivityLoadMetrics
@@ -22,6 +23,7 @@ from muscle50.application.inbody_source import InBodySourceError
 from muscle50.application.inbody_trend import ShowBodyCompositionTrend
 from muscle50.application.ingest_activity import ActivitySyncError
 from muscle50.application.ingest_activity_range import IngestGarminActivityRange, InvalidDateRangeError
+from muscle50.application.llm_provider import LlmProvider
 from muscle50.application.meal_corrections import EditMeal, MergeMeals, VoidMeal
 from muscle50.application.nutrition_logging import (
     CATALOG_SOURCE_TYPES,
@@ -87,6 +89,7 @@ from muscle50.application.telegram_bot import (
     TelegramTokenRejectedError,
     TelegramUnavailableError,
 )
+from muscle50.application.telegram_llm import TelegramFileApi, TelegramLlmHandler
 from muscle50.application.training_snapshot import BuildTrainingSnapshot
 from muscle50.config import AppPaths, ConfigurationError
 from muscle50.domain.analytics import DEFAULT_LOOKBACK_DAYS, MAX_LOOKBACK_DAYS, InvalidSnapshotWindowError
@@ -97,6 +100,7 @@ from muscle50.domain.body_composition_trend import (
 )
 from muscle50.domain.exercise_taxonomy import MuscleGroup
 from muscle50.domain.inbody_normalization import InBodyNormalizationError
+from muscle50.domain.llm_settings import LlmSettings, ProviderName
 from muscle50.domain.normalization import NormalizationError, activity_id_from
 from muscle50.domain.nutrition import (
     GENERAL_MEAL_NOTE_MAX_LENGTH,
@@ -120,19 +124,29 @@ from muscle50.infrastructure.garmin.client import (
 )
 from muscle50.infrastructure.inbody.raw_store import InBodyRawStore
 from muscle50.infrastructure.inbody.samsung_health import SamsungHealthInBodySource
+from muscle50.infrastructure.llm.executables import ResolvedExecutable, resolve_executable
+from muscle50.infrastructure.llm.process import SubprocessRunner
+from muscle50.infrastructure.llm.provider import CliLlmProvider
 from muscle50.infrastructure.nutrition_target_store import JsonNutritionTargetRepository
 from muscle50.infrastructure.raw_store import RawStore, RawStoreError, RecoveryRawStore
 from muscle50.infrastructure.sqlite.analytics_reader import AnalyticsDatabaseError, SqliteAnalyticsReader
 from muscle50.infrastructure.sqlite.body_composition import SqliteBodyCompositionRepository
 from muscle50.infrastructure.sqlite.body_composition_reader import BodyCompositionReadError, SqliteBodyCompositionReader
 from muscle50.infrastructure.sqlite.database import ActivityRepository, DailyRecoveryRepository
+from muscle50.infrastructure.sqlite.food_catalog_reader import SqliteFoodCatalogReader
 from muscle50.infrastructure.sqlite.nutrition_reader import SqliteNutritionReader
 from muscle50.infrastructure.sqlite.nutrition_repository import SqliteFoodNutritionRepository, SqliteMealRepository
 from muscle50.infrastructure.sqlite.schema_status import pending_migrations
 from muscle50.infrastructure.sqlite.sync_coverage import SqliteSyncCoverageRepository
 from muscle50.infrastructure.telegram.bot_api import UrllibTelegramBotApi, redact
 from muscle50.infrastructure.telegram.cli_runner import InProcessCliRunner
+from muscle50.infrastructure.telegram.coach_guide_file import CoachGuideFile
 from muscle50.infrastructure.telegram.config_file import TelegramConfigError, load_telegram_config
+from muscle50.infrastructure.telegram.history_log import HistoryReadError, JsonlHistoryLog
+from muscle50.infrastructure.telegram.llm_config_file import LlmConfigError, load_llm_settings
+from muscle50.infrastructure.telegram.llm_memory_store import JsonLlmMemoryStore
+from muscle50.infrastructure.telegram.llm_state_store import JsonLlmStateStore
+from muscle50.infrastructure.telegram.photo_store import PhotoStore
 from muscle50.infrastructure.telegram.state_store import JsonHandledUpdateStore
 from muscle50.presentation.inbody_terminal import render_body_composition_trend, render_body_composition_trend_json
 from muscle50.presentation.nutrition_terminal import (
@@ -159,6 +173,11 @@ from muscle50.presentation.sync_coverage_terminal import (
     render_sync_coverage_json,
 )
 from muscle50.presentation.telegram_format import render_telegram_check, telegram_messages
+from muscle50.presentation.telegram_llm_replies import (
+    TelegramLlmReplies,
+    render_telegram_history,
+    render_telegram_history_json,
+)
 from muscle50.presentation.telegram_summary import TelegramSummaries
 from muscle50.presentation.terminal import (
     render_activity_load_backfill_result,
@@ -338,6 +357,14 @@ def build_parser() -> argparse.ArgumentParser:
         "run",
         help="Answer commands from the allowed chats until Ctrl+C (each command runs as the same CLI command)",
     )
+    history = telegram_commands.add_parser(
+        "history",
+        help="Show the Telegram LLM conversation history (telegram\\history; read-only, writes nothing)",
+    )
+    history_range = history.add_mutually_exclusive_group()
+    history_range.add_argument("--last", type=int, metavar="N", help="the newest N entries, 1-1000 (default: 20)")
+    history_range.add_argument("--date", dest="as_of", metavar="YYYY-MM-DD", help="every entry of one local date")
+    history.add_argument("--json", action="store_true", help="print the entries as stored, as JSON")
     return parser
 
 
@@ -1597,6 +1624,8 @@ def _telegram(args: argparse.Namespace) -> int:
         return _telegram_check()
     if args.telegram_command == "run":
         return _telegram_run()
+    if args.telegram_command == "history":
+        return _telegram_history(args.last, args.as_of, as_json=args.json)
     return 2
 
 
@@ -1639,10 +1668,14 @@ def _telegram_run() -> int:
         def log(line: str) -> None:
             print(redact(line, token), file=sys.stderr, flush=True)
 
+        settings = load_llm_settings(paths.telegram_llm_config_path)  # None: Telegram LLM v2 is off
+        api = _telegram_api(token)
+        commands = InProcessCliRunner(main)
+        llm = _telegram_llm(paths, settings, api, commands, log) if settings is not None else None
         RunTelegramBot(
-            _telegram_api(token),
+            api,
             JsonHandledUpdateStore(paths.telegram_state_path),
-            InProcessCliRunner(main),
+            commands,
             allowed_chat_ids=config.allowed_chat_ids,
             today=lambda: _today(),
             pending_migrations=lambda: pending_migrations(paths.database_path),
@@ -1652,14 +1685,106 @@ def _telegram_run() -> int:
             log=log,
             sleep=lambda seconds: _telegram_sleep(seconds),
             clock=lambda: _now().timestamp(),
+            llm=llm,
         ).execute()
-    except (ConfigurationError, TelegramConfigError, TelegramStateError, TelegramUnavailableError) as exc:
+    except (
+        ConfigurationError,
+        TelegramConfigError,
+        TelegramStateError,
+        TelegramUnavailableError,
+        LlmConfigError,
+    ) as exc:
         print(redact(f"오류: {_telegram_error(exc)}", token), file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         pass
     print("\n취소되었습니다.", file=sys.stderr)
     return 130
+
+
+def _llm_provider(
+    settings: LlmSettings, executables: dict[ProviderName, ResolvedExecutable], log: Callable[[str], None]
+) -> LlmProvider:
+    """The local LLM CLIs (module-level so tests can swap in a fake; tests never run claude or codex)."""
+    return CliLlmProvider(settings, executables, SubprocessRunner(), log=log)
+
+
+def _resolve_llm_executable(provider: ProviderName, configured: str | None) -> ResolvedExecutable:
+    return resolve_executable(provider, configured)
+
+
+def _new_proposal_token() -> str:
+    return secrets.token_hex(2)
+
+
+def _telegram_llm(
+    paths: AppPaths,
+    settings: LlmSettings,
+    api: TelegramBotApi,
+    commands: InProcessCliRunner,
+    log: Callable[[str], None],
+) -> TelegramLlmHandler:
+    """Telegram LLM v2 wiring. Files are created only when first needed; the state file is read now so a
+    damaged one stops the bot before any message is handled."""
+    proposals = JsonLlmStateStore(paths.telegram_llm_state_path)
+    proposals.load()
+    executables = {
+        provider: _resolve_llm_executable(provider, settings.provider_settings(provider).executable)
+        for provider in ProviderName
+    }
+    fallback = settings.fallback_provider.value if settings.fallback_provider is not None else "none"
+    log(
+        f"telegram llm: on, provider {settings.provider.value}, fallback {fallback}, "
+        f"timeout {settings.timeout_seconds} s; "
+        + "; ".join(executables[provider].log_text() for provider in ProviderName)
+    )
+    return TelegramLlmHandler(
+        provider=_llm_provider(settings, executables, log),
+        files=cast(TelegramFileApi, api),
+        catalog=SqliteFoodCatalogReader(paths.database_path),
+        meals=SqliteNutritionReader(paths.database_path),
+        proposals=proposals,
+        memory=JsonLlmMemoryStore(paths.telegram_llm_memory_path),
+        history=JsonlHistoryLog(paths.telegram_history_dir),
+        photos=PhotoStore(paths.root, paths.telegram_photos_dir) if settings.keep_photos else None,
+        coach=CoachGuideFile(paths.telegram_llm_coach_path),
+        commands=commands,
+        pending_migrations=lambda: pending_migrations(paths.database_path),
+        summaries=TelegramSummaries(),
+        replies=TelegramLlmReplies(),
+        settings=settings,
+        now=lambda: _now(),
+        local_timezone=lambda day: _local_timezone(day),
+        new_token=lambda: _new_proposal_token(),
+        log=log,
+    )
+
+
+def _telegram_history(last: int | None, day_text: str | None, *, as_json: bool) -> int:
+    # Deliberately read-only: no ensure_directories(), no migrate(), no file created.
+    try:
+        if last is not None and not 1 <= last <= 1000:
+            raise NutritionLoggingError("--last는 1에서 1000 사이여야 합니다.")
+        day = None
+        if day_text is not None:
+            try:
+                day = date.fromisoformat(validate_calendar_date(day_text))
+            except RecoveryNormalizationError:
+                raise NutritionLoggingError("--date는 YYYY-MM-DD 형식이어야 합니다.") from None
+        paths = AppPaths.from_environment()
+        history = JsonlHistoryLog(paths.telegram_history_dir)
+        if not history.exists():
+            print("No Telegram history yet.")
+            return 0
+        entries = history.read(last=None if day is not None else (last or 20), day=day)
+        print(render_telegram_history_json(entries) if as_json else render_telegram_history(entries))
+        return 0
+    except (ConfigurationError, NutritionLoggingError, HistoryReadError) as exc:
+        print(f"오류: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\n취소되었습니다.", file=sys.stderr)
+        return 130
 
 
 def _telegram_unknown_sets(paths: AppPaths, source_activity_id: str) -> ActivityUnknownSets | None:
