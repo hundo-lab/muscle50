@@ -7,6 +7,11 @@ is incomplete and no below-target judgement or action is produced from it.
 
 Spec: `docs/specs/general-meal.md`. Migration: none. Output change: additive.
 
+> Telegram LLM v2 adds the **estimated general meal**: `--general [--general-note TEXT] --general-estimate
+> visual_estimate:kcal=700-950,protein=30-45 [--general-estimate-ref TEXT]` stores one item-owned fact with ranges only
+> (values stay unknown, marked `estimated`). See `docs/telegram-llm.md` ("Estimated general meals"). A general meal
+> without `--general-estimate` is exactly as described here.
+
 ## Non-goals
 
 - No estimation. A memo such as "제육" is never turned into kcal or protein.

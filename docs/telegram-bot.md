@@ -8,6 +8,10 @@ Spec: `docs/specs/telegram-bot.md`. Migration 없음(설정과 상태는 JSON �
 > 등)의 동작이다. `/unknown`, `/refresh`는 v1.1에서 추가됐다. 인자 없는 `/refresh`(UNKNOWN 운동 모두 다시 받기)는
 > v1.2에서 추가됐다(아래 [v1.2](#v12-telegram-refresh-all-unknown) 절).
 
+> v2(Telegram Free Text, Photo and Coach): `config\telegram_llm.json`이 있으면 명령이 아닌 문장과 사진을 로컬 LLM CLI가
+> 해석해 제안하고, `/llm`, `/memory`, `/forget`, `/history`와 `muscle50 telegram history`가 생긴다. 설정, 격리, 규칙은
+> `docs/telegram-llm.md`를 본다. 파일이 없으면 이 문서의 동작 그대로다.
+
 ## 목적과 non-goal
 
 - 휴대폰 Telegram에서 정해진 명령으로 muscle50을 쓴다. 오늘 운동 추천, 오늘 영양 상태, 식사 기록과 취소, InBody 추세,
