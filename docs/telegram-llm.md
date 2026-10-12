@@ -322,7 +322,9 @@ muscle50 nutrition food fact add chicken-breast --per 1 pack --kcal 165 --protei
   막히지 않았다(구현 단계 확인 4). 그 파일은 사용자 자신의 텍스트 지시일 뿐 도구나 MCP를 켜지 않지만, 응답 언어 같은
   지시가 끼어들 수 있다. 완화: 고정 규칙이 프롬프트에서 그 뒤에 오고 이긴다고 적혀 있으며, 답은 schema와 bot 검증을
   거치고, 모든 쓰기는 확인을 받는다. 기본 제공자는 Claude이고 Codex는 `/llm`이나 설정으로 직접 고른다. `CODEX_HOME`을
-  바꾸는 우회는 로그인 파일을 옮기게 되므로 쓰지 않았다. 사용자 결정이 필요하면 후속으로 다룬다.
+  바꾸는 우회는 로그인 파일을 옮기게 되므로 쓰지 않았다. **그래서 AC7(사용자 설정을 불러오지 않음)은 Claude에서는
+  충족하고 Codex에서는 일부만 충족한다.** Codex를 쓰려면 이 남는 위험을 사용자가 받아들여야 한다(통합 승인 때 결정).
+  받아들이지 않으면 `provider`와 `fallback_provider`에 `codex`를 쓰지 않고 `/llm codex`를 보내지 않는다.
 - Codex에는 "도구 없음" 스위치가 없다. 0.160.0에서 `functions.wait`, `request_user_input`, `collaboration.*`이 남는다.
   cwd에는 사진만 있고, 출력은 검증되고, 쓰기는 확인을 거친다. `--disable` 목록은 버전마다 바뀌므로 업그레이드 뒤 확인을
   다시 한다.

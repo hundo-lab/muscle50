@@ -718,6 +718,12 @@ def test_menu_ranked_by_remaining_then_eat_then_ok_or_plain(
     stored = json.loads(_ok(capsys, "nutrition", "meal", "show", "2026-10-06-lunch-1", "--json"))
     assert stored["items"][0]["nutrients"]["calories_kcal"]["minimum"] == "400"
     assert stored["items"][0]["note"] == "간편식 닭가슴살 샐러드"
+    # The menu stays open: another pick, recorded without values this time.
+    replies, _err, _fake = _session(monkeypatch, capsys, FakeProvider(), text(5, "/eat_7f3a_1"), text(6, "/plain_44d2"))
+    assert "이미 기록된 점심(2026-10-06-lunch-1)이 있어 하나 더 기록합니다." in replies[0]
+    assert replies[1].startswith("Recorded meal 2026-10-06-lunch-2.")
+    plain = json.loads(_ok(capsys, "nutrition", "meal", "show", "2026-10-06-lunch-2", "--json"))
+    assert plain["items"][0]["facts"] == [] and plain["items"][0]["note"] == "한식 제육볶음, 잡곡밥"
 
 
 def test_menu_unknown_remaining_ranks_by_ratio_with_label(
@@ -987,9 +993,18 @@ EXISTING_COMMANDS = [
     "/log snack 햇반 1 pack",
     "/log snack+ 일반식 편의점",
     "/refresh abc",
+    "/refresh 24610155225",
+    "/refresh",
+    "/daily",
     "/nope",
     "/start",
 ]
+
+
+def _garmin_login_needed(auth_dir: Path, *, input_fn: Callable[[str], str], **kwargs: object) -> object:
+    """The v1 path without a keyboard: the login prompt raises EOFError (no network, nothing written)."""
+    input_fn("Garmin email: ")
+    raise AssertionError("input must raise EOFError")
 
 
 @pytest.mark.parametrize("command", EXISTING_COMMANDS)
@@ -1000,6 +1015,8 @@ def test_existing_commands_reply_byte_identical_with_and_without_the_llm(
     tmp_path: Path,
     command: str,
 ) -> None:
+    monkeypatch.setattr(PythonGarminConnector, "authenticate", _garmin_login_needed)
+
     def run(root: Path, *, llm: bool) -> tuple[list[str], dict[str, Any]]:
         monkeypatch.setenv("MUSCLE50_HOME", str(root))
         v1._configure(root)
@@ -1034,3 +1051,37 @@ def test_non_command_text_without_llm_config_is_unchanged(
     assert replies == ["명령이 아닙니다.\n\n" + HELP_TEXT] * 2
     assert provider.requests == [] and fake.downloads == []
     assert "telegram llm" not in err and not (home / "telegram").exists()
+
+
+def test_console_stays_ascii_with_a_non_ascii_executable_path(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "_resolve_llm_executable",
+        lambda provider, configured: ResolvedExecutable(provider, f"D:/홍길동/{provider.value}.exe", None),
+    )
+    _llm_config(home)
+    _replies, err, _fake = _session(monkeypatch, capsys, FakeProvider(), text(1, "/help"))
+    start = next(line for line in err.split("\n") if line.startswith("telegram llm: on"))
+    assert start.isascii() and "\\ud64d" in start
+    assert err.removesuffix(v1.STOPPED).isascii()
+
+
+class _InterruptingProvider(FakeProvider):
+    def call(self, request: LlmRequest, provider: ProviderName) -> LlmCallResult:
+        self.requests.append((request, provider))
+        raise KeyboardInterrupt
+
+
+def test_ctrl_c_during_an_llm_call_stops_the_bot_and_the_message_is_never_rerun(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    _llm_config(home)
+    provider = _InterruptingProvider()
+    replies, err, _fake = _session(monkeypatch, capsys, provider, text(1, "점심 먹었어"), text(2, "/help"))
+    assert replies == [] and len(provider.requests) == 1
+    assert "chat 111: /llm_message interrupted by Ctrl+C; it will not be run again" in err.split("\n")
+    assert v1._state(home)["handled_update_ids"] == [1]
+    replies, _err, _fake = _session(monkeypatch, capsys, FakeProvider(), text(1, "점심 먹었어"))
+    assert replies == []  # already handled: not interpreted again

@@ -409,7 +409,7 @@ class RunTelegramBot:
     def _llm_message(self, chat_id: int, update_id: int, message: IncomingMessage, username: str) -> tuple[bool, bool]:
         """Telegram LLM v2: (handled, stop). Ctrl+C during an LLM call stops the bot like a command."""
         assert self._llm is not None
-        self._running = ("llm", chat_id)
+        self._running = ("llm_message", chat_id)  # logged as "/llm_message interrupted ..." (not the /llm command)
         try:
             action = self._llm.handle(chat_id, update_id, message, username)
         except TelegramStateError:

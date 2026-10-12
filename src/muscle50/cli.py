@@ -1671,7 +1671,12 @@ def _telegram_run() -> int:
         settings = load_llm_settings(paths.telegram_llm_config_path)  # None: Telegram LLM v2 is off
         api = _telegram_api(token)
         commands = InProcessCliRunner(main)
-        llm = _telegram_llm(paths, settings, api, commands, log) if settings is not None else None
+
+        def ascii_log(line: str) -> None:
+            # Like the bot's own lines: ASCII only (an executable path or OS message may not be).
+            log(line.encode("ascii", "backslashreplace").decode("ascii"))
+
+        llm = _telegram_llm(paths, settings, api, commands, ascii_log) if settings is not None else None
         RunTelegramBot(
             api,
             JsonHandledUpdateStore(paths.telegram_state_path),
