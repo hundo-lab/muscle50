@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from enum import StrEnum
 
+from muscle50.domain.llm_settings import ProviderName, ProviderSettings
 from muscle50.domain.nutrition import MealType
 
 MEAL_NAMES = {
@@ -161,6 +162,29 @@ def photo_failed_head(meal_type: MealType, day_text: str) -> str:
 
 def duplicate_text(meal_type: MealType, meal_ids: Sequence[str]) -> str:
     return f"이미 기록된 {MEAL_NAMES[meal_type]}({', '.join(meal_ids)})이 있어 하나 더 기록합니다."
+
+
+def llm_status_text(
+    active: ProviderName, models: ProviderSettings, fallback: ProviderName | None, timeout_seconds: int
+) -> str:
+    """The first line of `/llm`: the effective models (text, photo) and which kinds of message get a retry."""
+    text_model = models.model_for(photo=False)
+    photo_model = models.model_for(photo=True)
+    text_retry = models.retry_after(text_model)
+    photo_retry = models.retry_after(photo_model)
+    if text_retry is not None and photo_retry is not None:
+        retry = text_retry
+    elif text_retry is not None:
+        retry = f"{text_retry} (글만)"
+    elif photo_retry is not None:
+        retry = f"{photo_retry} (사진만)"
+    else:
+        retry = "없음"
+    return (
+        f"LLM: {active.value} · 글 {text_model or '기본'} · 사진 {photo_model or '기본'} · "
+        f"형식 실패 시 재시도: {retry} · 대체 제공자: {fallback.value if fallback else '없음'} · "
+        f"시간 상한 {timeout_seconds}초"
+    )
 
 
 def provider_switched_text(provider: str, company: str) -> str:

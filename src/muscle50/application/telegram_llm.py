@@ -130,6 +130,7 @@ from muscle50.domain.telegram_llm_prompt import (
     UNCLEAR_TEXT,
     PromptTask,
     build_prompt,
+    llm_status_text,
     provider_default_text,
     provider_switched_text,
 )
@@ -1112,11 +1113,11 @@ class TelegramLlmHandler:
         configured = self._settings.provider
         if argument == "":
             active = self.active_provider(state)
-            model = self._settings.provider_settings(active).model or "기본"
-            fallback = self._settings.fallback_provider
-            first = (
-                f"LLM: {active.value} (모델 {model}) · 대체 제공자: {fallback.value if fallback else '없음'} · "
-                f"시간 상한 {self._settings.timeout_seconds}초"
+            first = llm_status_text(
+                active,
+                self._settings.provider_settings(active),
+                self._settings.fallback_provider,
+                self._settings.timeout_seconds,
             )
             if state.provider_override is None:
                 other = "codex" if active is ProviderName.CLAUDE else "claude"
@@ -1241,6 +1242,8 @@ class TelegramLlmHandler:
             llm_output=exchange.outputs or None,
             reply=exchange.reply.plain(),
             proposal=exchange.proposal,
+            retried=last.retried if last is not None else None,
+            attempts=_attempts_document(last),
         )
         self._append_history(chat_id, entry)
         self._log(
@@ -1375,6 +1378,16 @@ def _item_text(item: Any) -> str:
     if item.quantity is not None and item.quantity_unit is not None:
         return f"{item.food_name} {amount_text(item.quantity)} {item.quantity_unit.value}"
     return f"{item.food_name}" + (f" (메모: {item.serving_description})" if item.serving_description else "")
+
+
+def _attempts_document(call: LlmCallResult | None) -> list[dict[str, Any]] | None:
+    """The attempts of the last LLM call for the history line; None when there was no call or no attempt record."""
+    if call is None or not call.attempts:
+        return None
+    return [
+        {"provider": item.provider.value, "model": item.model, "outcome": item.outcome, "retry": item.retry}
+        for item in call.attempts
+    ]
 
 
 def _recorded_meal_id(stdout: str) -> str | None:

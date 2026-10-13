@@ -594,7 +594,7 @@ def _clip(text: str) -> str:
 # --- conversation history (append-only JSONL lines, kept as JSON documents) -------------------------------
 
 HISTORY_VERSION = 1
-HISTORY_KEYS = (
+HISTORY_KEYS_V1 = (
     "v",
     "update_id",
     "at",
@@ -612,6 +612,9 @@ HISTORY_KEYS = (
     "proposal",
     "result",
 )
+HISTORY_KEYS = (*HISTORY_KEYS_V1, "retried", "attempts")
+"""New lines carry the last two keys (model routing); lines written before it have the first 16 and stay valid."""
+HISTORY_ATTEMPT_KEYS = ("provider", "model", "outcome", "retry")
 HISTORY_KINDS = frozenset({"text", "photo", "confirm", "plain", "cancel", "eat", "edit"})
 
 
@@ -626,11 +629,28 @@ def history_entry(**fields: Any) -> dict[str, Any]:
 
 
 def check_history_entry(document: Any) -> dict[str, Any]:
-    """A stored line as read back; ValueError when it is not a version-1 history entry."""
-    if not isinstance(document, dict) or tuple(document) != HISTORY_KEYS or document["v"] != HISTORY_VERSION:
+    """A stored line as read back (either key shape); ValueError when it is not a version-1 history entry."""
+    if (
+        not isinstance(document, dict)
+        or tuple(document) not in (HISTORY_KEYS_V1, HISTORY_KEYS)
+        or document["v"] != HISTORY_VERSION
+    ):
         raise ValueError("not a version 1 history entry")
     if document["kind"] not in HISTORY_KINDS or not isinstance(document["at"], str) or len(document["at"]) < 16:
         raise ValueError("not a version 1 history entry")
     if type(document["chat_id"]) is not int:
         raise ValueError("not a version 1 history entry")
+    if "retried" in document and not _routing_keys_ok(document["retried"], document["attempts"]):
+        raise ValueError("not a version 1 history entry")
     return document
+
+
+def _routing_keys_ok(retried: Any, attempts: Any) -> bool:
+    if retried is not None and type(retried) is not bool:
+        return False
+    if attempts is None:
+        return True
+    return isinstance(attempts, list) and all(
+        isinstance(item, dict) and tuple(item) == HISTORY_ATTEMPT_KEYS and type(item["retry"]) is bool
+        for item in attempts
+    )

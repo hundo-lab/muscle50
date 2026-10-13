@@ -20,7 +20,7 @@ import test_telegram_bot as v1
 from test_telegram_llm_domain import NULL_EDIT, NULL_ESTIMATE, interpretation
 
 import muscle50.cli as cli
-from muscle50.application.llm_provider import LlmCallResult, LlmRequest, SchemaName
+from muscle50.application.llm_provider import LlmAttempt, LlmCallResult, LlmRequest, SchemaName
 from muscle50.application.telegram_bot import IncomingMessage, IncomingUpdate
 from muscle50.cli import main
 from muscle50.domain.llm_settings import LlmSettings, ProviderName
@@ -87,12 +87,17 @@ class FakeProvider:
         self.requests.append((request, provider))
         response = self.responses.pop(0)
         if isinstance(response, str):
-            return LlmCallResult(provider, "sonnet", response, None, 1.0, False)  # type: ignore[arg-type]
+            return _result(provider, response, None)
         try:
             document = request.validate(response)
         except ValueError:
-            return LlmCallResult(provider, "sonnet", "bad_output", None, 1.0, False)
-        return LlmCallResult(provider, "sonnet", "ok", document, 1.0, False)
+            return _result(provider, "bad_output", None)
+        return _result(provider, "ok", document)
+
+
+def _result(provider: ProviderName, outcome: Any, document: Any) -> LlmCallResult:
+    attempts = (LlmAttempt(provider, "sonnet", outcome, 1.0),)
+    return LlmCallResult(provider, "sonnet", outcome, document, 1.0, False, attempts)
 
 
 def _fail_connect(*args: object, **kwargs: object) -> object:
@@ -941,7 +946,8 @@ def test_llm_override_switches_the_provider(
         text(7, "/llm gemini"),
     )
     assert replies[0] == (
-        "LLM: claude (모델 sonnet) · 대체 제공자: codex · 시간 상한 90초\n"
+        "LLM: claude · 글 haiku · 사진 sonnet · 형식 실패 시 재시도: sonnet (글만) · "
+        "대체 제공자: codex · 시간 상한 90초\n"
         "바꾸기: /llm codex · 설정 파일로 되돌리기: /llm default"
     )
     assert replies[1] == "다음 메시지부터 codex(OpenAI)로 보냅니다. 메시지와 사진이 OpenAI로 전송됩니다."

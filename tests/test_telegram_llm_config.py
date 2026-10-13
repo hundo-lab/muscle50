@@ -63,7 +63,7 @@ def test_full_document_is_read(tmp_path: Path) -> None:
     assert settings is not None
     assert (settings.provider, settings.fallback_provider) == (ProviderName.CODEX, ProviderName.CLAUDE)
     assert settings.codex == ProviderSettings("gpt-5.5", r"C:\Tools\codex.exe")
-    assert settings.claude == ProviderSettings("haiku", None)
+    assert settings.claude == ProviderSettings("haiku", None, "sonnet", "sonnet")
     assert (settings.persona_name, settings.persona_tone, settings.timeout_seconds, settings.keep_photos) == (
         "코치",
         "반말, 짧게",

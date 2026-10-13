@@ -70,8 +70,16 @@ class CliLlmProvider:
             order.append(fallback)
         document: Any = None
         for index, name in enumerate(order):
-            attempt, document = self._attempt(request, name)
+            settings = self._settings.provider_settings(name)
+            attempt, document, format_failure = self._attempt(
+                request, name, settings.model_for(photo=request.has_photo), retry=False
+            )
             attempts.append(attempt)
+            retry_model = settings.retry_after(attempt.model) if format_failure else None
+            if retry_model is not None:
+                # One more run of the same input on the retry model; its failure is not retried again.
+                attempt, document, _ = self._attempt(request, name, retry_model, retry=True)
+                attempts.append(attempt)
             if attempt.outcome == "ok":
                 break
             if index + 1 < len(order):
@@ -83,36 +91,38 @@ class CliLlmProvider:
             outcome=last.outcome,
             document=document if last.outcome == "ok" else None,
             seconds=sum(item.seconds for item in attempts),
-            used_fallback=len(attempts) > 1,
+            used_fallback=any(item.provider is not provider for item in attempts),
             attempts=tuple(attempts),
         )
 
-    def _attempt(self, request: LlmRequest, provider: ProviderName) -> tuple[LlmAttempt, Any]:
-        model = self._settings.provider_settings(provider).model
+    def _attempt(
+        self, request: LlmRequest, provider: ProviderName, model: str | None, *, retry: bool
+    ) -> tuple[LlmAttempt, Any, bool]:
+        """One CLI run. The last item is True for a format failure: the model answered but the answer is unusable."""
         resolved = self._executables.get(provider)
         if resolved is None or resolved.path is None:
             outcome: CallOutcome = resolved.failure if resolved is not None and resolved.failure else "not_found"
-            attempt = LlmAttempt(provider, model, outcome, 0.0)
+            attempt = LlmAttempt(provider, model, outcome, 0.0, retry=retry)
             self._log(f"llm {provider.value}: {_describe(attempt)}")
-            return attempt, None
+            return attempt, None, False
         started = self._clock()
         try:
-            outcome, raw, exit_code = self._run(request, provider, resolved.path, model)
+            outcome, raw, exit_code, format_failure = self._run(request, provider, resolved.path, model)
         except OSError:  # the executable vanished or the temp folder could not be written
-            outcome, raw, exit_code = "failed", None, None
+            outcome, raw, exit_code, format_failure = "failed", None, None, False
         document: Any = None
         if outcome == "ok":
             try:
                 document = request.validate(raw)
             except ValueError:
-                outcome = "bad_output"
-        attempt = LlmAttempt(provider, model, outcome, round(self._clock() - started, 1), exit_code)
+                outcome, format_failure = "bad_output", True
+        attempt = LlmAttempt(provider, model, outcome, round(self._clock() - started, 1), exit_code, retry)
         self._log(f"llm {provider.value}: {_describe(attempt)}")
-        return attempt, document
+        return attempt, document, format_failure
 
     def _run(
         self, request: LlmRequest, provider: ProviderName, executable: str, model: str | None
-    ) -> tuple[CallOutcome, Any, int | None]:
+    ) -> tuple[CallOutcome, Any, int | None, bool]:
         root = Path(self._make_temp_dir())
         try:
             work, io = root / "work", root / "io"
@@ -127,7 +137,7 @@ class CliLlmProvider:
                     timeout_s=self._settings.timeout_seconds,
                     env=self._child_env(),
                 )
-                outcome, raw = _claude_output(result)
+                outcome, raw, format_failure = _claude_output(result)
             else:
                 schema_path, output_path = io / "schema.json", io / "last.json"
                 schema_path.write_text(json.dumps(schema, ensure_ascii=True), encoding="utf-8", newline="\n")
@@ -149,20 +159,25 @@ class CliLlmProvider:
                     timeout_s=self._settings.timeout_seconds,
                     env=self._child_env(),
                 )
-                outcome, raw = _codex_output(result, output_path)
+                outcome, raw, format_failure = _codex_output(result, output_path)
         finally:
             shutil.rmtree(root, ignore_errors=True)
-        return outcome, raw, result.exit_code
+        return outcome, raw, result.exit_code, format_failure
 
     def _child_env(self) -> dict[str, str]:
         return child_environment(self._environ if self._environ is not None else os.environ)
 
 
-def _claude_output(result: ProcessResult) -> tuple[CallOutcome, Any]:
+def _claude_output(result: ProcessResult) -> tuple[CallOutcome, Any, bool]:
+    """The outcome, the raw document and whether a `bad_output` is a format failure (worth one retry).
+
+    A missing `result` event, a subtype other than `success` and `is_error: true` are CLI errors (for example a
+    usage limit): `bad_output` as in v2, but not a format failure.
+    """
     if result.timed_out:
-        return "timeout", None
+        return "timeout", None, False
     if result.exit_code != 0:
-        return "failed", None
+        return "failed", None, False
     final: dict[str, Any] | None = None
     for line in result.stdout.decode("utf-8", errors="replace").splitlines():
         try:
@@ -172,31 +187,33 @@ def _claude_output(result: ProcessResult) -> tuple[CallOutcome, Any]:
         if isinstance(event, dict) and event.get("type") == "result":
             final = event
     if final is None or final.get("subtype") != "success" or final.get("is_error") is True:
-        return "bad_output", None
+        return "bad_output", None, False
     if "structured_output" in final and final["structured_output"] is not None:
-        return "ok", final["structured_output"]
+        return "ok", final["structured_output"], False
     text = final.get("result")
     if not isinstance(text, str):
-        return "bad_output", None
+        return "bad_output", None, True
     try:
-        return "ok", json.loads(text)
+        return "ok", json.loads(text), False
     except ValueError:
-        return "bad_output", None
+        return "bad_output", None, True
 
 
-def _codex_output(result: ProcessResult, output_path: Path) -> tuple[CallOutcome, Any]:
+def _codex_output(result: ProcessResult, output_path: Path) -> tuple[CallOutcome, Any, bool]:
     if result.timed_out:
-        return "timeout", None
+        return "timeout", None, False
     if result.exit_code != 0:
-        return "failed", None
+        return "failed", None, False
     try:
-        return "ok", json.loads(output_path.read_text(encoding="utf-8"))
+        return "ok", json.loads(output_path.read_text(encoding="utf-8")), False
     except (OSError, ValueError):
-        return "bad_output", None
+        return "bad_output", None, True
 
 
 def _describe(attempt: LlmAttempt) -> str:
     model = attempt.model or "default model"
+    if attempt.retry:
+        model += ", retry"
     if attempt.outcome == "failed":
         return f"failed (exit {attempt.exit_code}) after {attempt.seconds:g} s ({model})"
     if attempt.outcome in ("not_found", "executable_not_supported"):

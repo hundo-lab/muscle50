@@ -36,6 +36,10 @@ class LlmRequest:
     validate: Callable[[Any], Any]
     """Turns the raw JSON document into the checked value; raises ValueError (`bad_output`) otherwise."""
 
+    @property
+    def has_photo(self) -> bool:
+        return self.photo is not None
+
 
 @dataclass(frozen=True)
 class LlmAttempt:
@@ -44,6 +48,8 @@ class LlmAttempt:
     outcome: CallOutcome
     seconds: float
     exit_code: int | None = None
+    retry: bool = False
+    """True for the one re-run on the retry model after a format failure."""
 
 
 @dataclass(frozen=True)
@@ -62,8 +68,14 @@ class LlmCallResult:
     def ok(self) -> bool:
         return self.outcome == "ok"
 
+    @property
+    def retried(self) -> bool:
+        """True when some attempt was a re-run on the retry model."""
+        return any(attempt.retry for attempt in self.attempts)
+
 
 class LlmProvider(Protocol):
     def call(self, request: LlmRequest, provider: ProviderName) -> LlmCallResult:
-        """Try ``provider``, then the configured fallback provider once when it differs and the first try failed."""
+        """Try ``provider`` (the photo or text model), re-run once on the retry model after a format failure,
+        then the configured fallback provider once (with the same rules) when it differs and the provider failed."""
         ...

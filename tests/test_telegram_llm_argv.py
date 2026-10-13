@@ -296,13 +296,13 @@ def test_claude_result_text_is_parsed_when_there_is_no_structured_output(tmp_pat
 @pytest.mark.parametrize(
     ("response", "outcome", "log"),
     [
-        (FAILED, "failed", "llm claude: failed (exit 1) after 0 s (sonnet)"),
-        (TIMED_OUT, "timeout", "llm claude: timeout after 0 s (sonnet)"),
-        (ProcessResult(0, b"not json\n", b"", False), "bad_output", "llm claude: bad output after 0 s (sonnet)"),
+        (FAILED, "failed", "llm claude: failed (exit 1) after 0 s (haiku)"),
+        (TIMED_OUT, "timeout", "llm claude: timeout after 0 s (haiku)"),
+        (ProcessResult(0, b"not json\n", b"", False), "bad_output", "llm claude: bad output after 0 s (haiku)"),
         (
             ProcessResult(0, json.dumps({"type": "result", "subtype": "error_max_turns"}).encode(), b"", False),
             "bad_output",
-            "llm claude: bad output after 0 s (sonnet)",
+            "llm claude: bad output after 0 s (haiku)",
         ),
     ],
 )
@@ -348,7 +348,7 @@ def test_fallback_on_tries_the_other_provider_once(tmp_path: Path) -> None:
     assert (result.outcome, result.provider, result.used_fallback) == ("ok", ProviderName.CODEX, True)
     assert [attempt.outcome for attempt in result.attempts] == ["timeout", "ok"]
     assert runner.calls[0].argv[0] == CLAUDE_EXE and runner.calls[1].argv[0] == CODEX_EXE
-    assert logs[1] == "llm claude: timeout after 0 s (sonnet); trying fallback codex"
+    assert logs[1] == "llm claude: timeout after 0 s (haiku); trying fallback codex"
     assert not any(path.exists() for path in made)
 
 

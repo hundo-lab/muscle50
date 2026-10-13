@@ -2,7 +2,8 @@
 
 One JSON line per exchange (`json.dumps(..., ensure_ascii=True)`, fixed key order), appended and fsynced;
 never rewritten or deleted by muscle50. The month is the entry's own local date (`at`). Reading is
-read-only and creates nothing; an unreadable line is an error, never skipped silently.
+read-only and creates nothing; an unreadable line is an error, never skipped silently. Lines written before
+model routing have 16 keys and new ones 18 (`retried`, `attempts`); both are read and printed as stored.
 """
 
 from __future__ import annotations

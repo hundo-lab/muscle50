@@ -183,7 +183,7 @@ def history_text(entries: Sequence[dict[str, Any]]) -> str:
         if entry["intent"]:
             head.append(_INTENT_NAMES.get(entry["intent"], entry["intent"]))
         if entry["provider"]:
-            head.append(f"{entry['provider']} {entry['model'] or '기본'}")
+            head.append(f"{entry['provider']} {entry['model'] or '기본'}{_retry_note(entry)}")
         lines = [" · ".join(head), f"나: {_user_text(entry, photo_word='사진', not_kept='보관 안 함')}"]
         if entry["reply"]:
             lines.append(f"bot: {entry['reply']}")
@@ -208,10 +208,14 @@ def render_telegram_history(entries: Sequence[dict[str, Any]]) -> str:
         head = [f"{at[:10]} {at[11:16]} {at[19:] or 'local'}", f"chat {entry['chat_id']}", entry["kind"]]
         if entry["intent"]:
             head.append(f"intent={entry['intent']}")
-        if entry["provider"]:
-            head.append(f"{entry['provider']}/{entry['model'] or 'default'}")
-        if entry["provider_result"]:
-            head.append(str(entry["provider_result"]))
+        chain = _attempt_chain(entry)
+        if chain is not None:
+            head.append(chain)
+        else:
+            if entry["provider"]:
+                head.append(f"{entry['provider']}/{entry['model'] or 'default'}")
+            if entry["provider_result"]:
+                head.append(str(entry["provider_result"]))
         if entry["proposal"]:
             head.append(f"proposal={entry['proposal']}")
         result = entry["result"]
@@ -230,6 +234,32 @@ def render_telegram_history(entries: Sequence[dict[str, Any]]) -> str:
 
 def render_telegram_history_json(entries: Sequence[dict[str, Any]]) -> str:
     return json.dumps({"entries": list(entries)}, indent=2, ensure_ascii=True)
+
+
+def _retry_note(entry: dict[str, Any]) -> str:
+    """` (재시도, 처음 <model> 형식 실패)` for a message whose last call was re-run on the retry model."""
+    if entry.get("retried") is not True:
+        return ""
+    attempts = entry.get("attempts") or []
+    for index, attempt in enumerate(attempts):
+        if attempt["retry"] and index > 0:
+            return f" (재시도, 처음 {attempts[index - 1]['model'] or '기본'} 형식 실패)"
+    return ""
+
+
+def _attempt_chain(entry: dict[str, Any]) -> str | None:
+    """`claude/haiku bad_output -> retry claude/sonnet ok`; None unless the last call ran more than once."""
+    attempts = entry.get("attempts")
+    if not attempts or len(attempts) < 2:
+        return None
+    parts = []
+    for index, attempt in enumerate(attempts):
+        label = f"{attempt['provider']}/{attempt['model'] or 'default'} {attempt['outcome']}"
+        if index == 0:
+            parts.append(label)
+        else:
+            parts.append(f"{'retry' if attempt['retry'] else 'fallback'} {label}")
+    return " -> ".join(parts)
 
 
 def _user_text(entry: dict[str, Any], *, photo_word: str, not_kept: str) -> str:

@@ -26,7 +26,7 @@ from muscle50.domain.llm_settings import (
 )
 
 _TOP_KEYS = frozenset({"provider", "claude", "codex", "persona", "timeout_seconds", "fallback_provider", "keep_photos"})
-_PROVIDER_KEYS = frozenset({"model", "executable"})
+_PROVIDER_KEYS = frozenset({"model", "photo_model", "retry_model", "executable"})
 _PERSONA_KEYS = frozenset({"name", "tone"})
 
 
@@ -93,13 +93,20 @@ def _provider(value: Any, key: str) -> ProviderName:
 
 def _provider_settings(value: Any, key: str, default: ProviderSettings) -> ProviderSettings:
     entry = _object(value, _PROVIDER_KEYS, key)
-    model = entry.get("model", default.model)
-    if model is not None and (not isinstance(model, str) or MODEL_PATTERN.fullmatch(model) is None):
-        raise ValueError(f"{key}.model must be null or 1-64 letters, digits, '.', '_', ':' or '-'")
+    model = _model(entry, "model", key, default.model)
+    photo_model = _model(entry, "photo_model", key, default.photo_model)
+    retry_model = _model(entry, "retry_model", key, default.retry_model)
     executable = entry.get("executable", default.executable)
     if executable is not None and (not isinstance(executable, str) or not Path(executable).is_absolute()):
         raise ValueError(f"{key}.executable must be null or an absolute path")
-    return ProviderSettings(model, executable)
+    return ProviderSettings(model, executable, photo_model, retry_model)
+
+
+def _model(entry: dict[str, Any], name: str, key: str, default: str | None) -> str | None:
+    value = entry.get(name, default)
+    if value is not None and (not isinstance(value, str) or MODEL_PATTERN.fullmatch(value) is None):
+        raise ValueError(f"{key}.{name} must be null or 1-64 letters, digits, '.', '_', ':' or '-'")
+    return value
 
 
 def _object(value: Any, keys: frozenset[str], where: str) -> dict[str, Any]:
