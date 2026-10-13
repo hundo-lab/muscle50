@@ -220,6 +220,11 @@ def test_format_failure_is_rerun_once_on_the_retry_model(tmp_path: Path) -> None
     )
     assert (result.retried, result.used_fallback, len(runner.calls)) == (True, False, 2)
     assert [_model(call.argv) for call in runner.calls] == ["haiku", "sonnet"]
+    schema = load_schema(SchemaName.ANSWER)  # AC9: both runs use exactly the pinned argv, only the model differs
+    assert [call.argv for call in runner.calls] == [
+        claude_argv(CLAUDE_EXE, "haiku", schema),
+        claude_argv(CLAUDE_EXE, "sonnet", schema),
+    ]
     assert result.attempts == (
         LlmAttempt(CLAUDE, "haiku", "bad_output", 0.0, 0, False),
         LlmAttempt(CLAUDE, "sonnet", "ok", 0.0, 0, True),
