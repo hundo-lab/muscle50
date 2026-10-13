@@ -323,8 +323,9 @@ muscle50 nutrition food fact add chicken-breast --per 1 pack --kcal 165 --protei
   지시가 끼어들 수 있다. 완화: 고정 규칙이 프롬프트에서 그 뒤에 오고 이긴다고 적혀 있으며, 답은 schema와 bot 검증을
   거치고, 모든 쓰기는 확인을 받는다. 기본 제공자는 Claude이고 Codex는 `/llm`이나 설정으로 직접 고른다. `CODEX_HOME`을
   바꾸는 우회는 로그인 파일을 옮기게 되므로 쓰지 않았다. **그래서 AC7(사용자 설정을 불러오지 않음)은 Claude에서는
-  충족하고 Codex에서는 일부만 충족한다.** Codex를 쓰려면 이 남는 위험을 사용자가 받아들여야 한다(통합 승인 때 결정).
-  받아들이지 않으면 `provider`와 `fallback_provider`에 `codex`를 쓰지 않고 `/llm codex`를 보내지 않는다.
+  충족하고 Codex에서는 일부만 충족한다.** 사용자가 이 남는 위험을 2026-10-13에 받아들였다(spec AC7). 그래서 Codex는
+  계속 고를 수 있다(설정의 `provider`/`fallback_provider`, `/llm codex`). 기본값은 그대로 `claude`이고 fallback은
+  꺼져 있다. 쓰고 싶지 않으면 `codex`를 고르지 않으면 된다.
 - Codex에는 "도구 없음" 스위치가 없다. 0.160.0에서 `functions.wait`, `request_user_input`, `collaboration.*`이 남는다.
   cwd에는 사진만 있고, 출력은 검증되고, 쓰기는 확인을 거친다. `--disable` 목록은 버전마다 바뀌므로 업그레이드 뒤 확인을
   다시 한다.
