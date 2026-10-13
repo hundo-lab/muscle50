@@ -123,5 +123,5 @@ LLM: claude · 글 haiku · 사진 sonnet · 형식 실패 시 sonnet으로 한 
 - 저장되는 추정 근거(`--general-estimate-ref`)는 이제 답한 모델 이름이다(글은 `claude haiku`). 기존 행은 바뀌지 않는다.
 - Claude 사용 한도 문구가 일반 결과 텍스트로 오면 형식 실패로 세어 한 번 재시도한다(가짜 실행기로만 확인).
 - `model`만 적은 v2 파일은 사진을 sonnet으로 돌린다(예: `model: "opus"`면 사진도 opus가 아니다). 사용자의 실제
-  `config	elegram_llm.json`은 읽지 않았다.
+  `config\telegram_llm.json`은 읽지 않았다.
 - 후속 후보: 사용 한도에 걸렸을 때 자동으로 다른 제공자로 넘기기, 작업별 모델 사용량 통계.
