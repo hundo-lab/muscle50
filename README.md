@@ -382,6 +382,10 @@ CLI(`claude -p` 또는 `codex exec`)를 본인 구독으로 실행하며 API 키
 - `/llm`(제공자 확인·변경), `/memory`(다음 호출에 넘어갈 기억), `/forget`(이 chat의 기억 삭제, 기록은 남음),
   `/history [N|YYYY-MM-DD]`(대화 기록). PC에서는 `muscle50 telegram history [--last N | --date YYYY-MM-DD] [--json]`
   (읽기 전용).
+- 메시지 종류별로 모델을 고릅니다(제공자 설정의 `model`=글, `photo_model`=사진, `retry_model`=형식 실패 뒤 재시도). 기본값은
+  Claude `haiku`(글) / `sonnet`(사진) / `sonnet`(재시도), Codex는 모두 `null`(Codex 기본 모델, 재시도 없음)입니다. 재시도는
+  답이 형식 검사를 통과하지 못했을 때 **한 번만** 하고, 시간 초과·로그인 문제나 내용이 틀린 답은 재시도하지 않습니다.
+  `/llm`과 `/history`가 실제로 답한 모델과 재시도 여부를 보여 줍니다.
 - 메시지와 사진은 고른 제공자(Anthropic 또는 OpenAI)로 전송됩니다. Codex는 사용자 전역 `~/.codex/AGENTS.md`를 읽는 알려진
   한계가 있어 기본은 Claude입니다. 구독 사용량을 쓰고 응답에 수 초~수십 초가 걸립니다.
 

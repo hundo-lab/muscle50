@@ -1,7 +1,7 @@
 ---
 id: telegram-llm-model-routing
 title: Telegram LLM Model Routing v2.1
-status: draft
+status: integrated
 migration: none
 output_change: additive
 user_gates: [design, integration]
@@ -113,4 +113,15 @@ LLM: claude · 글 haiku · 사진 sonnet · 형식 실패 시 sonnet으로 한 
 
 - 사진 메시지는 강한 모델을 쓰므로 그만큼 사용량을 쓴다.
 - 재시도는 형식 실패만 잡는다. 형식은 맞지만 내용이 틀린 답(메뉴를 잘못 읽음 등)은 사용자가 확인 단계에서 고친다.
+- 대화 기록(history)은 메시지의 마지막 LLM 호출만 설명한다. 질문·메뉴 추천처럼 호출이 둘인 메시지에서 첫 호출의 재시도는
+  콘솔 로그에만 보인다.
+- 최악의 경우 호출 단계마다 CLI를 최대 4번 돌린다. 호출이 둘인 메시지는 최대 8번(90초 제한 기준 약 12분)이고 그동안 다른
+  메시지는 기다린다. 대체 제공자는 기본 꺼짐이다.
+- 재시도가 실패한 뒤 대체 제공자가 답하면 봇 `/history` 머리말이 `codex 기본 (재시도, 처음 haiku 형식 실패)`처럼 어색하게
+  읽힌다. `telegram history` 텍스트는 실제 사슬을 보여 준다.
+- `/llm`은 대체 제공자의 모델을 보여 주지 않는다.
+- 저장되는 추정 근거(`--general-estimate-ref`)는 이제 답한 모델 이름이다(글은 `claude haiku`). 기존 행은 바뀌지 않는다.
+- Claude 사용 한도 문구가 일반 결과 텍스트로 오면 형식 실패로 세어 한 번 재시도한다(가짜 실행기로만 확인).
+- `model`만 적은 v2 파일은 사진을 sonnet으로 돌린다(예: `model: "opus"`면 사진도 opus가 아니다). 사용자의 실제
+  `config	elegram_llm.json`은 읽지 않았다.
 - 후속 후보: 사용 한도에 걸렸을 때 자동으로 다른 제공자로 넘기기, 작업별 모델 사용량 통계.
