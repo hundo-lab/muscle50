@@ -1740,7 +1740,7 @@ def _telegram_llm(
     fallback = settings.fallback_provider.value if settings.fallback_provider is not None else "none"
     log(
         f"telegram llm: on, provider {settings.provider.value}, fallback {fallback}, "
-        f"timeout {settings.timeout_seconds} s; "
+        f"timeout {settings.timeout_seconds} s, {_web_search_text(settings)}; "
         + "; ".join(executables[provider].log_text() for provider in ProviderName)
     )
     return TelegramLlmHandler(
@@ -1763,6 +1763,12 @@ def _telegram_llm(
         new_token=lambda: _new_proposal_token(),
         log=log,
     )
+
+
+def _web_search_text(settings: LlmSettings) -> str:
+    if not settings.web_search:
+        return "web search off"
+    return f"web search on (max {settings.web_search_max}, {settings.web_search_timeout_seconds} s)"
 
 
 def _telegram_history(last: int | None, day_text: str | None, *, as_json: bool) -> int:

@@ -20,12 +20,29 @@ from muscle50.domain.llm_settings import (
     PERSONA_TONE_MAX_LENGTH,
     TIMEOUT_MAX_S,
     TIMEOUT_MIN_S,
+    WEB_SEARCH_MAX_MAX,
+    WEB_SEARCH_MAX_MIN,
+    WEB_TIMEOUT_MAX_S,
+    WEB_TIMEOUT_MIN_S,
     LlmSettings,
     ProviderName,
     ProviderSettings,
 )
 
-_TOP_KEYS = frozenset({"provider", "claude", "codex", "persona", "timeout_seconds", "fallback_provider", "keep_photos"})
+_TOP_KEYS = frozenset(
+    {
+        "provider",
+        "claude",
+        "codex",
+        "persona",
+        "timeout_seconds",
+        "fallback_provider",
+        "keep_photos",
+        "web_search",
+        "web_search_max",
+        "web_search_timeout_seconds",
+    }
+)
 _PROVIDER_KEYS = frozenset({"model", "photo_model", "retry_model", "executable"})
 _PERSONA_KEYS = frozenset({"name", "tone"})
 
@@ -73,6 +90,17 @@ def _settings(document: Any) -> LlmSettings:
     keep_photos = root.get("keep_photos", defaults.keep_photos)
     if type(keep_photos) is not bool:
         raise ValueError("keep_photos must be true or false")
+    web_search = root.get("web_search", defaults.web_search)
+    if type(web_search) is not bool:
+        raise ValueError("web_search must be true or false")
+    web_max = root.get("web_search_max", defaults.web_search_max)
+    if type(web_max) is not int or not WEB_SEARCH_MAX_MIN <= web_max <= WEB_SEARCH_MAX_MAX:
+        raise ValueError(f"web_search_max must be an integer from {WEB_SEARCH_MAX_MIN} to {WEB_SEARCH_MAX_MAX}")
+    web_timeout = root.get("web_search_timeout_seconds", defaults.web_search_timeout_seconds)
+    if type(web_timeout) is not int or not WEB_TIMEOUT_MIN_S <= web_timeout <= WEB_TIMEOUT_MAX_S:
+        raise ValueError(
+            f"web_search_timeout_seconds must be an integer from {WEB_TIMEOUT_MIN_S} to {WEB_TIMEOUT_MAX_S}"
+        )
     return LlmSettings(
         provider=provider,
         claude=_provider_settings(root.get("claude", {}), "claude", defaults.claude),
@@ -82,6 +110,9 @@ def _settings(document: Any) -> LlmSettings:
         timeout_seconds=timeout,
         fallback_provider=fallback,
         keep_photos=keep_photos,
+        web_search=web_search,
+        web_search_max=web_max,
+        web_search_timeout_seconds=web_timeout,
     )
 
 

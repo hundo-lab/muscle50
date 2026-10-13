@@ -28,6 +28,13 @@ CallOutcome = Literal["ok", "timeout", "failed", "bad_output", "not_found", "exe
 
 
 @dataclass(frozen=True)
+class RunPin:
+    """Run exactly once, on this model of the given provider: no format retry and no fallback provider."""
+
+    model: str | None
+
+
+@dataclass(frozen=True)
 class LlmRequest:
     prompt: str
     """Sent on stdin, never in argv."""
@@ -35,6 +42,10 @@ class LlmRequest:
     photo: bytes | None
     validate: Callable[[Any], Any]
     """Turns the raw JSON document into the checked value; raises ValueError (`bad_output`) otherwise."""
+    web_search: bool = False
+    """Offer the web search tool (Claude only; Codex never searches). Every other call has no tool."""
+    pin: RunPin | None = None
+    """A corrective re-ask: one run on the pinned model, no retry and no fallback."""
 
     @property
     def has_photo(self) -> bool:
@@ -50,6 +61,8 @@ class LlmAttempt:
     exit_code: int | None = None
     retry: bool = False
     """True for the one re-run on the retry model after a format failure."""
+    web_searches: int | None = None
+    """How many web searches the run made; None when the tool was not offered, 0 when offered but unused."""
 
 
 @dataclass(frozen=True)
@@ -67,6 +80,12 @@ class LlmCallResult:
     @property
     def ok(self) -> bool:
         return self.outcome == "ok"
+
+    @property
+    def web_searches(self) -> int | None:
+        """The searches of all attempts of this call; None when no attempt was offered the tool."""
+        counts = [attempt.web_searches for attempt in self.attempts if attempt.web_searches is not None]
+        return sum(counts) if counts else None
 
     @property
     def retried(self) -> bool:

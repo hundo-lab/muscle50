@@ -25,6 +25,10 @@ PERSONA_NAME_MAX_LENGTH = 20
 PERSONA_TONE_MAX_LENGTH = 100
 TIMEOUT_MIN_S = 10
 TIMEOUT_MAX_S = 600
+WEB_SEARCH_MAX_MIN = 1
+WEB_SEARCH_MAX_MAX = 10
+WEB_TIMEOUT_MIN_S = 10
+WEB_TIMEOUT_MAX_S = 600
 
 
 @dataclass(frozen=True)
@@ -61,6 +65,12 @@ class LlmSettings:
     timeout_seconds: int
     fallback_provider: ProviderName | None
     keep_photos: bool
+    web_search: bool = True
+    """Claude may search the web for brand, restaurant and product foods (every interpret call, text or photo)."""
+    web_search_max: int = 3
+    """How many searches the prompt allows. Advisory: it is a prompt rule, counted afterwards, not a CLI limit."""
+    web_search_timeout_seconds: int = 150
+    """The time limit of a run that was given the search tool (instead of `timeout_seconds`)."""
 
     def provider_settings(self, provider: ProviderName) -> ProviderSettings:
         return self.claude if provider is ProviderName.CLAUDE else self.codex

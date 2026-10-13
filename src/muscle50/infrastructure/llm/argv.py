@@ -6,6 +6,10 @@ Isolation (live check 2026-10-12, docs/telegram-llm.md "Isolation"):
   `--strict-mcp-config` `--disable-slash-commands` remove them, the slash commands, skills, hooks and
   auto-memory while the subscription login still works. `--bare` is never used (it skips the login).
   The only tool left is `StructuredOutput`, which is how `--json-schema` returns its answer.
+- Claude Code with web search (v2.2, live check 2026-10-13): `--tools WebSearch` alone is refused in print mode
+  (the model asks, the permission is denied), so the search variant also passes `--allowedTools WebSearch`.
+  Nothing else changes: MCP servers stay 0 and `WebSearch` is the only tool besides `StructuredOutput`. The
+  variant is used only for a request that asks for it; the argv above is byte-identical otherwise.
 - Codex CLI: `--ignore-user-config --ignore-rules` skip `config.toml` (MCP servers, plugins) and the
   execpolicy rules; `web_search` and each feature below are disabled. Codex has no single "no tools"
   switch; the cwd holds only the photo and every answer is validated and confirmed by the user.
@@ -23,6 +27,23 @@ CLAUDE_ISOLATION_ARGV: tuple[str, ...] = (
     "-p",
     "--tools",
     "",
+    "--safe-mode",
+    "--strict-mcp-config",
+    "--disable-slash-commands",
+    "--no-session-persistence",
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+)
+
+CLAUDE_WEB_ISOLATION_ARGV: tuple[str, ...] = (
+    "-p",
+    "--tools",
+    "WebSearch",
+    "--allowedTools",
+    "WebSearch",
     "--safe-mode",
     "--strict-mcp-config",
     "--disable-slash-commands",
@@ -88,13 +109,22 @@ CLAUDE_SYSTEM_PROMPT = (
 """Fixed ASCII text; the persona and every user-dependent text are in the stdin prompt instead."""
 
 
-def claude_argv(executable: str, model: str | None, schema: object) -> tuple[str, ...]:
+CLAUDE_SYSTEM_PROMPT_WEB = (
+    "You are the text-to-JSON interpreter of muscle50, a personal fitness log. You have exactly one tool, "
+    "WebSearch, and must use it only as the fixed rules written in the user message allow; do not try to use any "
+    "other tool. Read the single user message, follow the fixed rules written in it, and answer only with JSON "
+    "that matches the given schema."
+)
+"""Used instead of `CLAUDE_SYSTEM_PROMPT` only when the search tool is offered."""
+
+
+def claude_argv(executable: str, model: str | None, schema: object, *, web_search: bool = False) -> tuple[str, ...]:
     return (
         executable,
-        *CLAUDE_ISOLATION_ARGV,
+        *(CLAUDE_WEB_ISOLATION_ARGV if web_search else CLAUDE_ISOLATION_ARGV),
         *(("--model", model) if model is not None else ()),
         "--system-prompt",
-        CLAUDE_SYSTEM_PROMPT,
+        CLAUDE_SYSTEM_PROMPT_WEB if web_search else CLAUDE_SYSTEM_PROMPT,
         "--json-schema",
         json.dumps(schema, separators=(",", ":"), ensure_ascii=True),
     )

@@ -63,6 +63,8 @@ class CliLlmProvider:
         self._clock = clock
 
     def call(self, request: LlmRequest, provider: ProviderName) -> LlmCallResult:
+        if request.pin is not None:
+            return self._pinned(request, provider, request.pin.model)
         attempts: list[LlmAttempt] = []
         order = [provider]
         fallback = self._settings.fallback_provider
@@ -95,6 +97,19 @@ class CliLlmProvider:
             attempts=tuple(attempts),
         )
 
+    def _pinned(self, request: LlmRequest, provider: ProviderName, model: str | None) -> LlmCallResult:
+        """A corrective re-ask: one run on ``model`` of ``provider``; its failure is neither retried nor sent on."""
+        attempt, document, _format_failure = self._attempt(request, provider, model, retry=False)
+        return LlmCallResult(
+            provider=provider,
+            model=model,
+            outcome=attempt.outcome,
+            document=document if attempt.outcome == "ok" else None,
+            seconds=attempt.seconds,
+            used_fallback=False,
+            attempts=(attempt,),
+        )
+
     def _attempt(
         self, request: LlmRequest, provider: ProviderName, model: str | None, *, retry: bool
     ) -> tuple[LlmAttempt, Any, bool]:
@@ -106,8 +121,9 @@ class CliLlmProvider:
             self._log(f"llm {provider.value}: {_describe(attempt)}")
             return attempt, None, False
         started = self._clock()
+        searches: int | None = None
         try:
-            outcome, raw, exit_code, format_failure = self._run(request, provider, resolved.path, model)
+            outcome, raw, exit_code, format_failure, searches = self._run(request, provider, resolved.path, model)
         except OSError:  # the executable vanished or the temp folder could not be written
             outcome, raw, exit_code, format_failure = "failed", None, None, False
         document: Any = None
@@ -116,28 +132,36 @@ class CliLlmProvider:
                 document = request.validate(raw)
             except ValueError:
                 outcome, format_failure = "bad_output", True
-        attempt = LlmAttempt(provider, model, outcome, round(self._clock() - started, 1), exit_code, retry)
+        attempt = LlmAttempt(provider, model, outcome, round(self._clock() - started, 1), exit_code, retry, searches)
         self._log(f"llm {provider.value}: {_describe(attempt)}")
+        if searches is not None and searches > self._settings.web_search_max:
+            self._log(
+                f"llm {provider.value}: web search used {searches}, above the limit {self._settings.web_search_max}"
+            )
         return attempt, document, format_failure
 
     def _run(
         self, request: LlmRequest, provider: ProviderName, executable: str, model: str | None
-    ) -> tuple[CallOutcome, Any, int | None, bool]:
+    ) -> tuple[CallOutcome, Any, int | None, bool, int | None]:
+        """(outcome, raw document, exit code, format failure, web searches or None when the tool was not offered)."""
         root = Path(self._make_temp_dir())
+        searches: int | None = None
         try:
             work, io = root / "work", root / "io"
             work.mkdir()
             io.mkdir()
             schema = load_schema(request.schema)
             if provider is ProviderName.CLAUDE:
+                web = request.web_search
                 result = self._runner.run(
-                    claude_argv(executable, model, schema),
+                    claude_argv(executable, model, schema, web_search=web),
                     cwd=work,
                     stdin=claude_stdin(request.prompt, request.photo),
-                    timeout_s=self._settings.timeout_seconds,
+                    timeout_s=self._settings.web_search_timeout_seconds if web else self._settings.timeout_seconds,
                     env=self._child_env(),
                 )
                 outcome, raw, format_failure = _claude_output(result)
+                searches = count_web_searches(result.stdout) if web else None
             else:
                 schema_path, output_path = io / "schema.json", io / "last.json"
                 schema_path.write_text(json.dumps(schema, ensure_ascii=True), encoding="utf-8", newline="\n")
@@ -162,7 +186,7 @@ class CliLlmProvider:
                 outcome, raw, format_failure = _codex_output(result, output_path)
         finally:
             shutil.rmtree(root, ignore_errors=True)
-        return outcome, raw, result.exit_code, format_failure
+        return outcome, raw, result.exit_code, format_failure, searches
 
     def _child_env(self) -> dict[str, str]:
         return child_environment(self._environ if self._environ is not None else os.environ)
@@ -199,6 +223,36 @@ def _claude_output(result: ProcessResult) -> tuple[CallOutcome, Any, bool]:
         return "bad_output", None, True
 
 
+def count_web_searches(stdout: bytes) -> int:
+    """The distinct web search calls in a stream-json stdout (also a timed-out run's partial output).
+
+    Counts `tool_use` / `server_tool_use` blocks named `WebSearch` (or `web_search`) once per block id. Only
+    this number is kept: the queries and the results never leave this function.
+    """
+    seen: set[str] = set()
+    anonymous = 0
+    for line in stdout.decode("utf-8", errors="replace").splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        message = event.get("message") if isinstance(event, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") not in ("tool_use", "server_tool_use"):
+                continue
+            if block.get("name") not in ("WebSearch", "web_search"):
+                continue
+            block_id = block.get("id")
+            if isinstance(block_id, str):
+                seen.add(block_id)
+            else:
+                anonymous += 1
+    return len(seen) + anonymous
+
+
 def _codex_output(result: ProcessResult, output_path: Path) -> tuple[CallOutcome, Any, bool]:
     if result.timed_out:
         return "timeout", None, False
@@ -214,6 +268,8 @@ def _describe(attempt: LlmAttempt) -> str:
     model = attempt.model or "default model"
     if attempt.retry:
         model += ", retry"
+    if attempt.web_searches:
+        model += f", web search {attempt.web_searches}"
     if attempt.outcome == "failed":
         return f"failed (exit {attempt.exit_code}) after {attempt.seconds:g} s ({model})"
     if attempt.outcome in ("not_found", "executable_not_supported"):

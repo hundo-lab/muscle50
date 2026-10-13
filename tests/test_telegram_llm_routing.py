@@ -775,5 +775,7 @@ def test_the_isolation_argv_is_unchanged_by_the_retry(tmp_path: Path) -> None:
 
 
 def test_request_type_is_reused_unchanged() -> None:
-    # The port signature did not change: a request still has exactly these four fields.
-    assert list(LlmRequest.__dataclass_fields__) == ["prompt", "schema", "photo", "validate"]
+    # v2.2 added two optional fields at the end (web_search, pin); the four original ones are unchanged.
+    assert list(LlmRequest.__dataclass_fields__) == ["prompt", "schema", "photo", "validate", "web_search", "pin"]
+    request = LlmRequest("p", SchemaName.ANSWER, None, lambda document: document)
+    assert (request.web_search, request.pin) == (False, None)
