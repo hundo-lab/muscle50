@@ -48,7 +48,7 @@ muscle50이 무엇을 향해 가는지 적은 문서다. 기능을 고르거나 
 - Telegram 등 채팅으로 묻기: "오늘 뭐 운동해?", "점심 뭐 먹지?", "단백질 얼마 남았어?",
   "근육 증가 방향 괜찮아?". 기존 use case를 그대로 부르는 얇은 층으로 만든다.
   - 명령어형 v1은 있다(`muscle50 telegram run`, `docs/telegram-bot.md`). v1.1(짧은 요약, UNKNOWN 알림, `/refresh`)과
-    v1.2(인자 없는 `/refresh`로 UNKNOWN 운동 모두 다시 받기)도 통합됐다. 위와 같은 자유 문장(LLM)은 v2다.
+    v1.2(인자 없는 `/refresh`로 UNKNOWN 운동 모두 다시 받기)도 통합됐다. 자유 문장·사진·코치(LLM) v2도 통합됐다(`config\telegram_llm.json`으로 켜는 선택 기능, `docs/telegram-llm.md`).
 
 ## 4. 현재 상태(2026-10-05)
 
@@ -59,8 +59,8 @@ muscle50이 무엇을 향해 가는지 적은 문서다. 기능을 고르거나 
 | 체성분 추세(InBody 측정 사이 변화, 목표까지 남은 양) | 있음(v1): `muscle50 inbody trend`(read-only, `docs/inbody-trend.md`). 추천에는 아직 쓰지 않는다 |
 | 측정 사이 리뷰(체성분 + 근력 + set + 식단 + 회복) | 없음 |
 | 칼로리/탄수/볼륨 조정 권고 | 없음 |
-| 메뉴 추천 | 없음 |
-| 채팅 인터페이스 | 있음(v1.2, 명령어형): `muscle50 telegram run`, `docs/telegram-bot.md`. 요약 답장, UNKNOWN 알림, `/refresh <id>`, UNKNOWN 운동 모두 다시 받기(`/refresh`). 자유 문장(LLM)은 v2 |
+| 메뉴 추천 | 부분: Telegram v2에서 사용자가 보낸 메뉴 캡처를 읽어 남은 단백질·kcal 기준으로 순서 제안(규칙 기반, 확인 후 저장) |
+| 채팅 인터페이스 | 있음(v1.2, 명령어형): `muscle50 telegram run`, `docs/telegram-bot.md`. 요약 답장, UNKNOWN 알림, `/refresh <id>`, UNKNOWN 운동 모두 다시 받기(`/refresh`). v2(선택): 자유 문장·사진 식사 기록(확인 후 저장), 코치 질문 답, 구내식당 메뉴 캡처 추천, `docs/telegram-llm.md` |
 
 ## 5. 우선순위
 
@@ -75,6 +75,7 @@ muscle50이 무엇을 향해 가는지 적은 문서다. 기능을 고르거나 
 2026-10-07: Telegram 명령어 bot v1이 통합됐다. 다음은 4, 5 또는 Telegram 자유 문장(LLM) v2다.
 2026-10-08: Telegram Mobile Replies v1.1(짧은 요약, UNKNOWN 알림, `/refresh`)이 통합됐다. 다음 순서는 그대로다.
 2026-10-08: Telegram Refresh All UNKNOWN v1.2(인자 없는 `/refresh`, 한 번에 10개)가 통합됐다. 다음 순서는 그대로다.
+2026-10-13: Telegram 자유 문장·사진·코치 v2(`docs/specs/telegram-llm.md`)가 통합됐다. 다음은 4, 5 순서다.
 
 목표에 직접 기여하지 않는 정리 작업(`auto-load-metrics`, `sync-coverage`, `meal-void-edit` 등)은 위 순서를
 막지 않을 때 하거나, 실제로 불편해졌을 때 한다.

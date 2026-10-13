@@ -188,7 +188,7 @@ muscle50 recommend --date 2026-09-24 --focus shoulders   # 오늘 할 focus 직�
 ## Nutrition logging (MVP)
 
 개인 음식 catalog에 직접 입력한 영양 정보(라벨/본인 입력)로 식사를 기록하고, 식사별·하루 섭취 kcal/단백질/탄수화물/
-지방을 계산합니다. 외부 DB 조회나 이름 기반 추정은 하지 않습니다. 메뉴 추천, 자유 문장 파싱은 아직 없습니다(목표와
+지방을 계산합니다. 외부 DB 조회나 이름 기반 추정은 하지 않습니다. 메뉴 추천과 CLI의 자유 문장 파싱은 없습니다(Telegram 자유 문장·사진은 아래 Telegram v2, 목표와
 남은 양은 아래 Nutrition targets).
 
 ```powershell
@@ -202,12 +202,18 @@ muscle50 nutrition food show chicken-breast   # fact history (active/superseded)
 # 기존 음식에 새 영양 fact version 추가(이전 fact와 이미 기록한 식사는 그대로, 이후 식사부터 새 fact 사용)
 muscle50 nutrition food fact add chicken-breast --per 100 g `
   --kcal <kcal> --protein <g> --carbs <g> --fat <g> --source food_database --accuracy estimated --source-ref "<출처>"
+# 아직 값이 없는 단위(pack, count 등)의 첫 fact를 기존 단위 옆에 추가(다른 단위 fact는 그대로, 환산 없음)
+muscle50 nutrition food fact add chicken-breast --per 1 pack `
+  --kcal <kcal> --protein <g> --carbs <g> --fat <g> --source nutrition_label --accuracy exact --new-unit
 muscle50 nutrition log --meal breakfast --item chicken-breast 200 g --item egg 2 count
 # food ID 대신 음식 이름이나 alias를 정확히 써도 됨(공백이 있으면 따옴표). log/meal add-item/meal replace-item 공통
 muscle50 nutrition log --meal lunch --item 닭가슴살 150 g --item 계란 1 count
 # 메뉴·영양값을 모르는 일반식(영양값 unknown, 메모는 선택). --item과 섞을 수 있고 명령줄 순서대로 item이 됨
 muscle50 nutrition log --meal lunch --general --general-note 구내식당
 muscle50 nutrition log --meal dinner --general --item chicken-breast 100 g
+# 일반식에 추정 범위만 붙이기(값은 비워 두고 estimated 범위만 저장. 합계는 계속 incomplete)
+muscle50 nutrition log --meal dinner --general --general-note 제육볶음 `
+  --general-estimate visual_estimate:kcal=700-950,protein=30-45
 muscle50 nutrition day                      # 오늘 섭취량 (--date YYYY-MM-DD, --json)
 # 이전 식사를 그대로 다시 기록(같은 음식/양/단위, 영양 값은 지금 catalog의 fact로 새로 snapshot)
 muscle50 nutrition repeat 2026-10-02-breakfast-1                       # 오늘, 같은 식사 종류, 시간 없음
@@ -315,7 +321,7 @@ DB가 없으면 만들지 않음) 값은 0.1 단위로 반올림합니다. 없�
 휴대폰 Telegram에서 정해진 명령으로 muscle50을 씁니다. 각 bot 명령은 해당 CLI 명령을 같은 코드로 실행합니다.
 `/today`, `/status`, `/daily`는 그 CLI의 JSON 결과로 만든 짧은 요약을 답하고, 뒤에 `full`을 붙이면 CLI text 전체를
 그대로 답합니다. 나머지 명령은 CLI text 출력을 그대로 답합니다. 요약의 숫자와 상태는 JSON 값 그대로이고 CLI 출력은
-바뀌지 않습니다. LLM, 자유 문장 해석, 서버, 예약 알림, 자동 refresh는 없습니다. 이 PC에서 `telegram run`이 실행 중일
+바뀌지 않습니다. 이 절의 명령어형 bot에는 LLM, 서버, 예약 알림, 자동 refresh가 없습니다(자유 문장·사진은 아래 v2, 선택 기능). 이 PC에서 `telegram run`이 실행 중일
 때만 답합니다.
 
 설정 파일 `%LOCALAPPDATA%\muscle50\config\telegram.json`은 사용자가 직접 만듭니다(muscle50은 만들지 않음, repo에 두지
@@ -357,3 +363,26 @@ token은 콘솔, 오류, 답장 어디에도 출력하지 않습니다. 처리�
 있으면 bot은 migration을 적용하지 않고 `/status`, `/day`, `/show`, `/log`, `/void`, `/daily`, `/refresh`를 거부합니다(터미널에서 백업 후 적용하고
 `telegram run`을 다시 시작). bot이 직접 쓰는 문구(`/help`, 사용법, `취소: /void <meal_id>` 줄 등)는 한국어입니다.
 상세와 한계: `docs/telegram-bot.md`.
+
+### Telegram v2: 자유 문장, 사진, 코치 (선택)
+
+명령어 대신 자유 문장과 사진으로 식사를 기록하고, 운동·영양·InBody 질문에 코치 말투로 답받습니다. 이 PC에 설치된 공식
+CLI(`claude -p` 또는 `codex exec`)를 본인 구독으로 실행하며 API 키는 쓰지 않습니다. **`config\telegram_llm.json`을 직접
+만들어야 켜지고, 없으면 bot은 위 v1.2와 byte 단위로 같습니다.** `{}`이면 기본값(provider `claude`, 대체 제공자 꺼짐)입니다.
+
+```json
+{"provider": "claude", "timeout_seconds": 90, "fallback_provider": null}
+```
+
+- 식사 문장·음식 사진·구내식당 메뉴 캡처는 먼저 **제안**으로 답하고, `/ok`로 확인하기 전에는 DB가 바뀌지 않습니다.
+  확인하면 `nutrition log`/`meal ...` 명령과 같은 코드로 저장합니다(한 번만, 유효 시간 안에서만).
+- 카탈로그에 없거나 모호한 음식은 추측해 연결하지 않고 일반식+메모로 제안합니다. 사진·문장 추정값은 `estimated` 범위로만
+  저장되고(`--general-estimate`), 합계는 계속 incomplete이며 모르는 값을 0으로 쓰지 않습니다.
+- 질문 답은 muscle50 결과 JSON에 있는 숫자만 쓸 수 있고, 다른 숫자가 섞이면 보내지 않고 기존 명령 답장을 보냅니다.
+- `/llm`(제공자 확인·변경), `/memory`(다음 호출에 넘어갈 기억), `/forget`(이 chat의 기억 삭제, 기록은 남음),
+  `/history [N|YYYY-MM-DD]`(대화 기록). PC에서는 `muscle50 telegram history [--last N | --date YYYY-MM-DD] [--json]`
+  (읽기 전용).
+- 메시지와 사진은 고른 제공자(Anthropic 또는 OpenAI)로 전송됩니다. Codex는 사용자 전역 `~/.codex/AGENTS.md`를 읽는 알려진
+  한계가 있어 기본은 Claude입니다. 구독 사용량을 쓰고 응답에 수 초~수십 초가 걸립니다.
+
+설정 key, 코치 가이드, 격리 방식, 파일·개인정보, 알려진 한계: `docs/telegram-llm.md`.

@@ -111,6 +111,8 @@ muscle50/
 ├─ config\nutrition_targets.json # 첫 `target set` 때만 생성
 ├─ config\telegram.json          # bot token + 허용 chat id. 사용자가 직접 만듦
 ├─ config\telegram_state.json    # 처리한 update id. `telegram run`이 첫 허용 메시지 때 생성
+├─ config\telegram_llm*.json|md  # Telegram v2(선택): 설정·코치 가이드는 사용자가, state·memory는 `telegram run`이 만듦
+├─ telegram\history\, photos\   # Telegram v2 대화 기록(JSONL, 추가만)과 받은 사진
 └─ tmp\
 ```
 
@@ -154,7 +156,7 @@ muscle50/
 | Nutrition Core (domain, port, JSON schema) | `domain/nutrition.py`, `application/nutrition.py`, `schemas/nutrition_meal_v1.schema.json`, migration 003 | 완료 | append-only fact, supersession |
 | Food catalog | `nutrition food add\|list\|show` | 완료 | source 4종만 허용하고 추정 source는 거부한다. |
 | Food fact versioning | `nutrition food fact add` | 완료 | 같은 unit의 새 버전만 만든다. unit 변환은 없다. |
-| 식사 기록 | `nutrition log --meal --item FOOD QTY UNIT ... [--general [--general-note TEXT]] [--additional]` | 부분 | `FOOD`는 food ID, 또는 정확히 같은 이름/alias다(Food Name Lookup v1, 부분 일치·추측 없음). `--general`은 메뉴·영양값을 모르는 일반식(영양값 unknown, 메모 선택, 예약 profile `general-meal`, General Meal v1)이다. 자유 문장 parser(`MealParser`는 Protocol만 있음), 외부 food DB는 없다. |
+| 식사 기록 | `nutrition log --meal --item FOOD QTY UNIT ... [--general [--general-note TEXT]] [--additional]` | 부분 | `FOOD`는 food ID, 또는 정확히 같은 이름/alias다(Food Name Lookup v1, 부분 일치·추측 없음). `--general`은 메뉴·영양값을 모르는 일반식(영양값 unknown, 메모 선택, 예약 profile `general-meal`, General Meal v1)이다. CLI의 자유 문장 parser(`MealParser`는 Protocol만 있음)와 외부 food DB는 없다(Telegram v2의 LLM 해석은 별도 층). `--general-estimate`는 일반식에 범위만 있는 `estimated` fact 하나를 붙인다. |
 | 하루 섭취 | `nutrition day [--date] [--json]` | 완료 | |
 | Meal edit | `nutrition meal show\|add-item\|remove-item\|replace-item\|void\|edit\|merge`, migration 008, 009 | 부분 | void(집계 제외), 날짜·종류·시간 수정, 같은 날짜 두 식사 병합은 append-only 기록으로 한다(Meal Void, Edit and Merge v1). `add-item`/`replace-item`은 `--general`도 받는다. void·edit·item 제거 취소, 세 개 이상 병합, 메모 수정은 없다. |
 | Meal repeat | `nutrition repeat <meal_id>` | 완료 | 양 조절과 template은 없다. |
@@ -173,7 +175,8 @@ muscle50/
 
 | 기능 | 관련 파일 / 명령 | 완성도 | 비고 |
 |---|---|---|---|
-| Telegram 명령어 bot v1.2 | `telegram check\|run` / `application/telegram_bot.py`, `application/activity_unknown_sets.py`, `domain/telegram_commands.py`, `infrastructure/telegram/`, `presentation/telegram_format.py`, `presentation/telegram_summary.py` | 부분 | 고정 명령(`/today` `/status` `/day` `/log` `/void` `/show` `/inbody` `/daily` `/unknown` `/refresh`)을 `cli.main`으로 실행한다. `/today` `/status` `/daily`는 같은 명령의 JSON으로 만든 짧은 요약을 답하고(`full`이면 CLI text), 나머지는 CLI text를 답한다. `/unknown`과 요약 끝의 UNKNOWN 알림은 Garmin Connect 링크와 `/refresh <id>`(=`garmin refresh`)를 준다. 인자 없는 `/refresh`(v1.2)는 `/unknown` 목록을 차례로 다시 받는다(한 번에 10개, 운동 사이 2초, 연속 3번 실패하면 멈춤, 남은 UNKNOWN 수를 답함). 자동 refresh 없음, CLI 출력 변경 없음. stdlib `urllib` long polling, 허용 chat 목록, token 비출력, migration 없음. LLM 자유 문장은 v2. 실제 Telegram 확인은 사용자 수동 단계다. 상세: `docs/telegram-bot.md`. |
+| Telegram 명령어 bot v1.2 | `telegram check\|run` / `application/telegram_bot.py`, `application/activity_unknown_sets.py`, `domain/telegram_commands.py`, `infrastructure/telegram/`, `presentation/telegram_format.py`, `presentation/telegram_summary.py` | 부분 | 고정 명령(`/today` `/status` `/day` `/log` `/void` `/show` `/inbody` `/daily` `/unknown` `/refresh`)을 `cli.main`으로 실행한다. `/today` `/status` `/daily`는 같은 명령의 JSON으로 만든 짧은 요약을 답하고(`full`이면 CLI text), 나머지는 CLI text를 답한다. `/unknown`과 요약 끝의 UNKNOWN 알림은 Garmin Connect 링크와 `/refresh <id>`(=`garmin refresh`)를 준다. 인자 없는 `/refresh`(v1.2)는 `/unknown` 목록을 차례로 다시 받는다(한 번에 10개, 운동 사이 2초, 연속 3번 실패하면 멈춤, 남은 UNKNOWN 수를 답함). 자동 refresh 없음, CLI 출력 변경 없음. stdlib `urllib` long polling, 허용 chat 목록, token 비출력, migration 없음. LLM 자유 문장은 v2(아래 행). 실제 Telegram 확인은 사용자 수동 단계다. 상세: `docs/telegram-bot.md`. |
+| Telegram 자유 문장·사진·코치 v2 | `telegram history` / `application/telegram_llm.py`, `domain/telegram_llm*.py`, `domain/llm_number_guard.py`, `domain/menu_ranking.py`, `infrastructure/llm/`, `infrastructure/telegram/{llm_*,history_log,photo_store,coach_guide_file}.py`, `presentation/telegram_llm_replies.py` | 부분 | `config\telegram_llm.json`이 있을 때만 켜진다(없으면 v1.2와 byte 동일). 공식 `claude -p`/`codex exec`를 임시 폴더에서 도구 없이 실행해 문장·사진·메뉴 캡처를 JSON 제안으로 바꾸고, 카탈로그 연결·검증 뒤 `/ok`로 확인해야만 기존 `nutrition` 코드로 저장한다. 질문 답은 숫자 검사를 통과해야 보낸다. 추정 일반식(`--general-estimate`)과 `food fact add --new-unit`을 함께 도입했다. `/llm` `/memory` `/forget` `/history`. migration 없음. Codex는 사용자 전역 지시를 읽는 알려진 한계가 있다(사용자 수용). 상세: `docs/telegram-llm.md`. |
 
 ---
 
@@ -246,7 +249,7 @@ muscle50
 ├─ recommend --date D [--focus push|pull|legs|shoulders] [--avoid MUSCLE ...] [--json]
 ├─ daily [--date D] [--focus F] [--avoid M ...] [--json] | --after-workout [--date D] [--json]
 ├─ inbody sync --file PATH [--show-values]
-├─ telegram check | run      # Telegram 명령어 bot v1(long polling, docs/telegram-bot.md)
+├─ telegram check | run | history   # Telegram 명령어 bot v1(long polling, docs/telegram-bot.md), v2 대화 기록(docs/telegram-llm.md)
 └─ nutrition
    ├─ food add --id --name [--alias ...] --per QTY UNIT --kcal --protein --carbs --fat --source --accuracy [--source-ref] [--json]
    ├─ food fact add <food_id> (같은 fact 플래그) [--json]

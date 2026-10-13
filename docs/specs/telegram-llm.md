@@ -1,7 +1,7 @@
 ---
 id: telegram-llm
 title: Telegram Free Text, Photo and Coach v2
-status: draft
+status: integrated
 migration: none
 output_change: additive
 user_gates: [design, integration]
@@ -291,6 +291,16 @@ bot:   이렇게 기록할까요? (점심, 10-12, 메뉴 캡처 추정)
   이 점을 알고 쓴다.
 - 사진 칼로리 추정은 오차가 크다(흔히 ±30~50%). 추정값은 참고용이다.
 - 메뉴 캡처 추천은 사용자가 캡처를 보내야 동작한다. 캡처를 읽는 정확도는 화면 글씨 크기와 잘림에 따라 다르다.
+- 구현·검증에서 확인한 한계(상세: `docs/telegram-llm.md` "Known issues / limitations"):
+  - Codex는 `--ignore-user-config`로도 사용자 전역 `~/.codex/AGENTS.md`를 읽고, 도구 `functions.wait`,
+    `request_user_input`, `collaboration.*`이 남는다. 사용자가 2026-10-13에 이 위험을 받아들였다(AC7). 기본은 claude,
+    대체 제공자는 꺼짐.
+  - 한 번에 한 메시지(LLM 호출 중 다른 메시지는 기다림). 처리 중 강제 종료나 기록 쓰기 실패면 history 줄이 빠질 수 있다.
+  - 숫자 검사는 작은 정수와 단위를 바꿔 쓴 답(g와 kg)을 막지 못할 수 있고 한국어 수사는 숫자로 보지 않는다.
+  - 메뉴 순서는 첫 식사 전, 값 없는 일반식이 있는 날, kcal 목표가 없을 때 모드 P로 떨어진다.
+  - 날짜는 오늘과 어제만 문장으로 정한다. 식사 수정은 대상이 하나로 정해질 때만 제안한다.
+  - live Telegram과 두 제공자 확인은 통합 후 `telegram_llm.json`을 만들고 `telegram run`을 재시작한 뒤 사용자가 한다(gate 4 아님).
+  - 추정값은 migration 없이 003의 열을 쓴다. `nutrition repeat`은 추정을 버리고 일반식으로 반복한다.
 - 후속 후보: 대화 기록·기억·식단을 한눈에 보는 대시보드(사용자 요청 2026-10-12, v2 뒤), API 키 제공자, 음성 메시지, 아침 자동 요약, "일반식 N끼"·추정 비율 통계, 자주 먹는 메뉴 학습.
 - 후속 후보 `cafeteria-auto`(v3 이후): HD Life 메뉴 자동 수집(안 B)과 간편식(샐러드) 예약(안 C, 매번 Telegram 확인).
   - 조건: **회사 IT·보안 담당의 자동 접속 허용을 먼저 받는다.** "HD현대 계열사" 로그인은 그룹 SSO
