@@ -79,6 +79,20 @@ def test_missing_history_creates_nothing(capsys: pytest.CaptureFixture[str], hom
     assert not home.exists()
 
 
+def test_missing_history_json_is_empty_entries_and_creates_nothing(
+    capsys: pytest.CaptureFixture[str], home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    code, out, err = _run(capsys, "--json")
+    assert (code, err) == (0, "")
+    assert json.loads(out) == {"entries": []}
+    assert not home.exists()
+    # Byte-identical to what an existing but empty history directory prints.
+    empty_home = tmp_path / "empty-home"
+    (empty_home / "telegram" / "history").mkdir(parents=True)
+    monkeypatch.setenv("MUSCLE50_HOME", str(empty_home))
+    assert _run(capsys, "--json") == (0, out, "")
+
+
 def test_text_uses_ascii_labels(capsys: pytest.CaptureFixture[str], home: Path) -> None:
     _write(home, ENTRIES)
     before = sorted(path.as_posix() for path in home.rglob("*"))

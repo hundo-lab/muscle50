@@ -1779,7 +1779,7 @@ def _telegram_history(last: int | None, day_text: str | None, *, as_json: bool) 
         paths = AppPaths.from_environment()
         history = JsonlHistoryLog(paths.telegram_history_dir)
         if not history.exists():
-            print("No Telegram history yet.")
+            print(render_telegram_history_json([]) if as_json else "No Telegram history yet.")
             return 0
         entries = history.read(last=None if day is not None else (last or 20), day=day)
         print(render_telegram_history_json(entries) if as_json else render_telegram_history(entries))
