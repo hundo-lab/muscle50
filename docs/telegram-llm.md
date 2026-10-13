@@ -4,6 +4,10 @@ Spec: `docs/specs/telegram-llm.md`. Migration 없음(추정값은 migration 003�
 Output change: additive(새 `telegram history` 명령, `nutrition log`/`meal add-item`/`food fact add`의 새 플래그, LLM이
 켜졌을 때만 `/help`에 늘어나는 줄과 새 답장).
 
+모델 선택과 재시도(Telegram LLM Model Routing v2.1, `docs/specs/telegram-llm-model-routing.md`)는 이 문서의 "모델 선택과
+재시도" 절에 있다. Migration 없음. Output change: additive. 바이트가 바뀌는 곳은 그 절에 모두 적었다(`/llm` 첫 줄, 새
+기록 줄의 두 key, 기본 Claude 글 모델과 그에 따른 추정 근거 문자열).
+
 ## 목적과 non-goal
 
 - Telegram에서 명령어 대신 **문장과 사진**으로 식사를 기록하고, 질문하고, 메뉴를 고른다. 해석은 이 PC에 설치된
@@ -22,8 +26,8 @@ byte 단위로 같다.** 모든 key는 선택이고 `{}`이면 아래 기본값�
 ```json
 {
   "provider": "claude",
-  "claude": {"model": "sonnet", "executable": null},
-  "codex": {"model": null, "executable": null},
+  "claude": {"model": "haiku", "photo_model": "sonnet", "retry_model": "sonnet", "executable": null},
+  "codex": {"model": null, "photo_model": null, "retry_model": null, "executable": null},
   "persona": {"name": "머슬", "tone": "존댓말, 짧게, 담백하게"},
   "timeout_seconds": 90,
   "fallback_provider": null,
@@ -32,8 +36,12 @@ byte 단위로 같다.** 모든 key는 선택이고 `{}`이면 아래 기본값�
 ```
 
 - `provider`: `claude` 또는 `codex`. `/llm codex`로 채팅에서 바꿀 수 있다(설정 파일은 바뀌지 않음).
-- `model`: `null`이면 모델 옵션을 넘기지 않는다. Codex는 `--ignore-user-config`로 실행하므로 `null`은 **Codex 내장 기본
+- `model`: 글 메시지에 쓰는 모델. `null`이면 모델 옵션을 넘기지 않는다. Codex는 `--ignore-user-config`로 실행하므로 `null`은 **Codex 내장 기본
   모델**이지 `~/.codex/config.toml`에 적은 모델이 아니다.
+- `photo_model`: 사진(식사 사진, 메뉴 캡처)이 붙은 요청에 쓰는 모델. `null`이면 `model`을 쓴다.
+- `retry_model`: 답이 형식 실패일 때 같은 입력을 한 번 더 돌리는 모델. `null`이면 재시도하지 않는다. 방금 쓴 모델과
+  같으면 재시도하지 않는다.
+- 세 모델 key는 `null` 또는 `[A-Za-z0-9._:-]` 1~64자이고, 오류 문구는 key 이름만 쓰고 값은 쓰지 않는다.
 - `executable`: 절대 경로 또는 `null`(PATH에서 찾음). Windows에서는 `.exe`만 실행한다(대소문자 무관). npm의
   `.cmd`/`.ps1` shim은 `executable_not_supported`로 거절한다. Python이 `cmd.exe`용으로 인자를 감싸지 않아
   `--tools ""`와 schema JSON이 깨지기 때문이다.
@@ -43,6 +51,50 @@ byte 단위로 같다.** 모든 key는 선택이고 `{}`이면 아래 기본값�
 - `keep_photos`: 받은 사진을 `telegram\photos`에 보관할지.
 - 설정을 바꾸면 `telegram run`을 다시 시작한다. 시작할 때 콘솔에 한 줄이 늘어난다:
   `telegram llm: on, provider claude, fallback none, timeout 90 s; claude (C:\...\claude.exe); codex (C:\...\codex.exe)`.
+
+### 모델 선택과 재시도
+
+| 제공자 | `model`(글) | `photo_model`(사진) | `retry_model`(형식 실패 뒤 한 번) |
+|---|---|---|---|
+| Claude 기본 | `haiku` | `sonnet` | `sonnet` |
+| Codex 기본 | `null`(Codex 내장 기본) | `null`(= `model`) | `null`(재시도 없음) |
+
+- 글 메시지는 가벼운 모델로, 사진은 더 강한 모델로 돌린다. 한 메시지의 두 번째 호출(질문 답, 메뉴 제안)은 첫 호출과 같은
+  규칙(글이면 `model`)을 따른다. 사진 메시지는 호출이 한 번뿐이다.
+- 파일의 `claude`에 `model`만 있고 새 key가 없는 v2 파일은 새 key를 기본값으로 읽는다. 그래서
+  `{"claude": {"model": "opus"}}`는 글은 opus, 사진은 **sonnet**, 재시도는 sonnet이다(사진이 opus에서 sonnet으로
+  내려간다). 사진도 opus로 하려면 `photo_model`을 적는다. 이전 기본값(`sonnet`)에 기대던 파일은 글 모델이 `haiku`로
+  바뀐다.
+- **재시도 규칙**: 모델이 답했지만 쓸 수 없는 답일 때만 같은 입력을 `retry_model`로 한 번 더 돌린다.
+  - 재시도하는 경우: Claude의 `result`가 JSON이 아님/문자열이 아님, 검증(스키마·범위)이 `ValueError`, Codex의 `last.json`이
+    없거나 JSON이 아님.
+  - 재시도하지 않는 경우: timeout, 실행 실패(`failed`), `not_found`, `executable_not_supported`, 그리고 Claude CLI가 낸
+    오류 결과(`result` 이벤트 없음, `success`가 아닌 subtype, `is_error: true`; 사용 한도 메시지 등이 여기 올 수 있다).
+    이 경우 한 번 더 돌려도 구독 사용량만 쓰기 때문이다.
+  - 재시도가 또 실패하면 다시 재시도하지 않는다. 대체 제공자가 켜져 있으면 그 제공자가 같은 규칙으로(첫 호출 + 재시도)
+    이어서 시도한다. 한 호출 단계의 CLI 실행은 최대 4번이다.
+- 매 실행은 새 임시 폴더, 전체 `timeout_seconds`, 같은 stdin·사진·정리된 환경·고정 argv로 돌고 `--model`/`-m`만 다르다.
+  Codex 재시도에서도 사진은 새 `work\` 폴더에 다시 쓴다. 격리 argv는 바뀌지 않는다.
+- `/llm`의 첫 줄은 실제로 쓰이는 모델을 보여 준다. 기본값 그대로면
+  `LLM: claude · 글 haiku · 사진 sonnet · 형식 실패 시 재시도: sonnet (글만) · 대체 제공자: 없음 · 시간 상한 90초`.
+  사진 모델이 재시도 모델과 같으면 사진은 재시도하지 않으므로 `(글만)`이 붙는다. 대체 제공자의 모델은 보여 주지 않는다.
+- 콘솔(ASCII, 메시지 원문 없음): 재시도 실행은 괄호 안에 `, retry`가 붙는다.
+
+```text
+llm claude: bad output after 3.2 s (haiku)
+llm claude: ok after 5.1 s (sonnet, retry)
+llm claude: timeout after 90 s (sonnet, retry); trying fallback codex
+```
+
+- `telegram\history`의 새 줄은 맨 끝에 두 key를 더 가진다(`v`는 그대로 1): `retried`(`true`/`false`, LLM 호출이 없는 줄은
+  `null`)와 `attempts`(`[{"provider","model","outcome","retry"}, ...]`, 호출이 없으면 `null`). 둘 다 그 메시지의
+  **마지막 LLM 호출**을 설명한다(기존 `provider`/`model`/`provider_result`와 같다). 예전 16 key 줄은 다시 쓰지 않고,
+  `telegram history --json`은 저장된 그대로 출력한다.
+- `muscle50 telegram history`는 시도가 둘 이상이면 `provider/model`과 결과 자리에 사슬을 쓴다:
+  `claude/haiku bad_output -> retry claude/sonnet ok`, `claude/sonnet timeout -> fallback codex/default ok`. 시도가 하나인
+  줄과 예전 줄은 전과 같다. `/history`는 재시도한 줄의 모델 뒤에 `(재시도, 처음 haiku 형식 실패)`를 붙인다.
+- 추정 일반식의 근거 문자열(`--general-estimate-ref`)은 실제로 답한 모델을 쓴다: 글은 `telegram-llm text (claude haiku)`,
+  재시도했으면 재시도 모델. 이미 저장된 행은 바뀌지 않는다.
 
 ### 코치 가이드(선택)
 
@@ -243,7 +295,7 @@ bot:  이렇게 고칠까요?
 
 ### 그 밖의 명령(기능이 켜졌을 때만)
 
-- `/llm` 지금 제공자, 모델, 대체 제공자, 시간 상한. `/llm codex|claude`는 채팅에서 바꾸고(상태 파일에 저장, 설정
+- `/llm` 지금 제공자, 글·사진 모델, 형식 실패 재시도, 대체 제공자, 시간 상한. `/llm codex|claude`는 채팅에서 바꾸고(상태 파일에 저장, 설정
   파일은 그대로) `다음 메시지부터 codex(OpenAI)로 보냅니다. 메시지와 사진이 OpenAI로 전송됩니다.`라고 답한다.
   `/llm default`는 설정 파일의 제공자로 되돌린다.
 - `/memory` 다음 호출에 넘어갈 `[기억]` 블록을 그대로 보여 준다(같은 함수로 만든다). `/forget` 이 chat의 기억만 지운다
@@ -269,7 +321,7 @@ muscle50 nutrition log --meal dinner --general --general-estimate language_estim
 - `--general-estimate`는 그 `--general`(또는 그 `--general-note`) 바로 뒤, `--general-estimate-ref`는 그
   `--general-estimate` 바로 뒤에만 온다(아니면 exit 2). 잘못된 SPEC, min > max, 추정이 아닌 출처는 exit 1, 아무것도
   쓰지 않는다. ref 기본값 `nutrition log --general-estimate`, bot은 `telegram-llm photo sha256:<12자> (claude sonnet)` 또는
-  `telegram-llm text (codex default)`.
+  `telegram-llm text (codex default)`(글 기본 모델은 `claude haiku`, 재시도했으면 재시도 모델).
 - `nutrition repeat`은 추정을 버리고 일반식으로 반복한다(gate 1 D-J). `meal merge`는 추정을 그대로 옮긴다.
 - 오늘 합계 줄(LLM 답장에서만): `단백질 확인 120 g + 추정 30~45 g (값 모르는 항목 1개)`. 확인 = `known_subtotal`,
   추정 = 값 없는 항목 범위의 정확한 합, 모르는 값은 0으로 쓰지 않는다. 기록이 없으면 `오늘 기록 없음 (0이 아님)`.
@@ -295,7 +347,7 @@ muscle50 nutrition food fact add chicken-breast --per 1 pack --kcal 165 --protei
 | `config\telegram_llm_coach.md` | 사용자 | 코치 가이드 |
 | `config\telegram_llm_state.json` | `telegram run` | `/llm` 선택, 열린 제안(정확한 argv). 손상되면 bot이 멈춘다(지우고 다시 시작 가능) |
 | `config\telegram_llm_memory.json` | `telegram run` | chat별 요약(300자)과 최근 8턴(각 300자, 24시간) — **메시지 원문 포함** |
-| `telegram\history\YYYY-MM.jsonl` | `telegram run` | 대화마다 한 줄, 추가만. 시각, chat, 메시지, 사진 위치, 의도, 제공자·모델, 검증된 LLM 출력, 답장, 제안, 결과(meal ID) — **식단과 대화 원문 포함** |
+| `telegram\history\YYYY-MM.jsonl` | `telegram run` | 대화마다 한 줄, 추가만. 시각, chat, 메시지, 사진 위치, 의도, 제공자·모델, 검증된 LLM 출력, 답장, 제안, 결과(meal ID), 재시도 여부와 시도 목록 — **식단과 대화 원문 포함** |
 | `telegram\photos\YYYY-MM\<sha256>.jpg` | `telegram run` | 받은 사진(`keep_photos`) |
 
 - 기록과 사진은 muscle50이 지우지 않는다. 필요하면 직접 지운다. `/forget`과 기억 상한은 기록을 지우지 않는다.
@@ -317,6 +369,18 @@ muscle50 nutrition food fact add chicken-breast --per 1 pack --kcal 165 --protei
 - `presentation/telegram_llm_replies.py`, `cli.py`(`telegram history`, `_telegram_llm` 연결, A2 플래그, `--new-unit`).
 
 ## Known issues / limitations
+
+- **모델 선택과 재시도**
+  - 최악의 경우 한 호출 단계에 CLI가 4번(제공자 2 x 첫 실행 + 재시도) 돈다. 질문·메뉴 제안은 호출이 두 번이라 최대 8번이고,
+    90초 상한이면 약 12분이다. 그동안 다른 메시지는 기다린다(한 번에 한 메시지). 대체 제공자는 기본으로 꺼져 있다.
+  - 기록 줄은 마지막 LLM 호출만 설명한다. 질문처럼 호출이 둘일 때 첫 호출이 재시도되고 두 번째는 아니면 기록에는
+    `retried: false`로 보이고, 재시도는 콘솔 로그에만 남는다.
+  - `/llm`은 대체 제공자의 모델을 보여 주지 않는다.
+  - 형식은 맞지만 내용이 틀린 답(잘못 읽은 메뉴, 틀린 양)은 재시도하지 않는다.
+  - 재시도는 구독 사용량을 한 번 더 쓴다. Haiku가 형식을 자주 틀리면 Sonnet 실행이 늘 수 있다(사용 통계는 아직 없다).
+  - Claude CLI의 사용 한도 메시지가 오류 결과로 오면 재시도하지 않지만, 평범한 결과 문장으로 오면 형식 실패로 보여 한 번
+    재시도한다. 실제 CLI의 한도 출력은 이 기능에서 확인하지 않았다(가짜 runner로만 검증).
+  - 이 기능을 켠 뒤 저장되는 추정 근거 문자열이 `claude sonnet` 대신 `claude haiku`로 바뀐다(글 메시지).
 
 - **Codex는 `~/.codex/AGENTS.md`(사용자 전역 지시)를 읽는다.** `--ignore-user-config`와 `-c project_doc_max_bytes=0`으로도
   막히지 않았다(구현 단계 확인 4). 그 파일은 사용자 자신의 텍스트 지시일 뿐 도구나 MCP를 켜지 않지만, 응답 언어 같은
