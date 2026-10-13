@@ -382,7 +382,7 @@ CLI(`claude -p` 또는 `codex exec`)를 본인 구독으로 실행하며 API 키
   모두 기록합니다. 일반식 item에는 항상 kcal·단백질 **추정 범위**가 붙고(있으면 양 기준), "햇반"처럼 이름이 조금 달라도
   LLM이 고른 카탈로그 음식은 이름을 보여 주어 `/ok`로 확인하게 합니다(그 이름·별칭·단위 목록이 제공자로 전송됩니다).
 - (v2.2) 상표·식당·제품 이름이 든 item은 Claude가 **웹 검색**으로 찾아보고 근거와 가정을 답장에 보여 줍니다. 기본 켜짐이고
-  `config	elegram_llm.json`에서 `web_search`(기본 true), `web_search_max`(메시지당 검색 횟수, 기본 3),
+  `config\telegram_llm.json`에서 `web_search`(기본 true), `web_search_max`(메시지당 검색 횟수, 기본 3),
   `web_search_timeout_seconds`(기본 150)로 조절하며, Claude만 검색합니다(Codex는 검색하지 않음). 검색은 응답 시간과 구독
   사용량을 늘리므로 끄려면 `"web_search": false`입니다.
 - (v2.2) 추정 숫자는 kcal·단백질·탄수·지방 사이의 관계와 가정에 적힌 숫자로 한 번 **재확인**합니다. 맞지 않으면 같은 제공자에
