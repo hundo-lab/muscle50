@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 from test_nutrition_domain import _fact
-from test_telegram_llm_domain import ITEM_ESTIMATE, interpretation
+from test_telegram_llm_domain import ITEM_ESTIMATE, NULL_ESTIMATE, interpretation
 
 from muscle50.application.nutrition_logging import GENERAL_ESTIMATE_REFERENCE_MAX_LENGTH
 from muscle50.domain.nutrition import (
@@ -88,6 +88,39 @@ def test_mixed_typed_and_untyped_items_without_a_default_meal_are_bad_output() -
     assert parse_interpretation({**document, "items": [typed, {**typed, "meal_type": "dinner"}]})
     assert parse_interpretation({**document, "items": [dict(document["items"][0])] * 2})
     assert parse_interpretation({**interpretation(meal_type="snack"), "items": [typed, dict(document["items"][0])]})
+
+
+@pytest.mark.parametrize("kind", ["catalog", "general"])
+@pytest.mark.parametrize("name", ["kcal", "protein"])
+def test_an_item_without_a_kcal_or_protein_range_is_bad_output(name: str, kind: str) -> None:
+    """Every item needs both ranges, catalog items too (their range is the fallback); carbs and fat may be null."""
+    document = interpretation()
+    item_document = document["items"][0]
+    item_document["kind"] = kind
+    item_document["estimate"][f"{name}_min"] = None
+    item_document["estimate"][f"{name}_max"] = None
+    with pytest.raises(LlmOutputError, match="needs both min and max"):
+        parse_interpretation(document)
+    item_document["estimate"] = dict(NULL_ESTIMATE)
+    with pytest.raises(LlmOutputError):
+        parse_interpretation(document)
+
+
+def test_menu_items_keep_their_all_nullable_estimates() -> None:
+    menu_item = {
+        "slot": "lunch",
+        "corner": None,
+        "name": "제육볶음",
+        "printed_kcal": None,
+        "printed_protein_g": None,
+        "estimate": dict(NULL_ESTIMATE),
+    }
+    parsed = parse_interpretation(
+        interpretation(
+            intent="menu", photo_kind="menu_capture", items=[], menu={"slots_visible": ["lunch"], "items": [menu_item]}
+        )
+    )
+    assert parsed.menu_items[0].estimate == ()
 
 
 def test_ranges_with_only_kcal_and_protein_are_enough() -> None:
