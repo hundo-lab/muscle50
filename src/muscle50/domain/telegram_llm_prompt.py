@@ -210,8 +210,9 @@ def web_search_line(count: int) -> str:
     return f"웹 검색 {count}회"
 
 
-def multi_proposal_head(day_text: str, meals: int) -> str:
-    return f"이렇게 기록할까요? ({day_text}, {meals}끼)"
+def multi_proposal_head(day_text: str, meals: int, label: str | None = None) -> str:
+    extra = f", {label}" if label else ""
+    return f"이렇게 기록할까요? ({day_text}, {meals}끼{extra})"
 
 
 def sequence_failed_line(meal_type: MealType, text: str) -> str:

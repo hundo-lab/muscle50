@@ -6,7 +6,6 @@ foods only. Covers AC1-AC4, AC6 and AC11 of docs/specs/telegram-llm-meal-estimat
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -14,8 +13,10 @@ import pytest
 import test_telegram_bot as v1
 import test_telegram_llm_bot as bot
 from test_telegram_llm_domain import NULL_ESTIMATE, interpretation
+from test_telegram_llm_meals import profile
 
 import muscle50.cli as cli
+from muscle50.domain.nutrition import QuantityUnit
 from muscle50.domain.telegram_commands import pending_migration_text
 from muscle50.domain.telegram_llm import LlmState, Proposal, ProposalKind, ProposalState
 from muscle50.domain.telegram_llm_prompt import PROPOSAL_NO_PLAIN_TEXT, PROPOSAL_USED_TEXT
@@ -170,6 +171,7 @@ def test_ok_runs_one_nutrition_log_per_meal_and_the_rows_equal_the_cli(
         assert f"Recorded meal {meal_id}." in reply and f"취소: /void {meal_id}" in reply
     assert reply.index("breakfast-1") < reply.index("lunch-1") < reply.index("dinner-1")
     assert reply.count("\n\n") >= 3 and "오늘 누적:" in reply and reply.split("\n\n")[-1].startswith("오늘 누적:")
+    assert "추정" in reply.split("\n\n")[-1]  # estimates are shown apart in the totals
     assert "chat 111: proposal 7f3a confirmed (3 meals)" in err
     after = meal_tables(home)
     # the same three argvs typed in the CLI on a twin home give the same rows
@@ -563,20 +565,15 @@ def test_a_catalog_read_error_still_runs_the_call_without_the_list(
 def test_a_cut_catalog_list_is_logged_with_counts_only(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
 ) -> None:
-    bot._catalog(capsys)
     bot._llm_config(home)
-    connection = sqlite3.connect(v1._database(home))
-    with connection:
-        for number in range(130):
-            connection.execute(
-                "INSERT INTO nutrition_food_profiles (profile_id, name) VALUES (?, ?)",
-                (f"x{number:03d}", f"음식{number}"),
-            )
-    connection.close()
-    # profiles with no fact have no registered unit and are not listed: the catalog is not cut
+    foods = [profile(f"food-{number:03d}", f"비밀음식{number:03d}", QuantityUnit.GRAM) for number in range(130)]
+    monkeypatch.setattr(SqliteFoodCatalogReader, "list_all", lambda self: tuple(foods))
     provider = bot.FakeProvider(single(item("국밥", "lunch")))
     _replies, err, _fake = bot._session(monkeypatch, capsys, provider, bot.text(1, MESSAGE))
-    assert "catalog list cut" not in err and "x000" not in provider.requests[0][0].prompt
+    assert "chat 111: catalog list cut: 120 of 130" in err.split("\n")
+    assert "비밀음식" not in err and "food-000" not in err  # counts only
+    listed = [line for line in provider.requests[0][0].prompt.splitlines() if line.startswith("food-")]
+    assert len(listed) == 120 and listed == sorted(listed)
 
 
 # --- state file ----------------------------------------------------------------------------------------------------

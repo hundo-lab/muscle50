@@ -119,7 +119,7 @@ def proposal_reply(view: MealProposalView) -> ReplyText:
 
 def multi_proposal_reply(view: MultiMealProposalView) -> ReplyText:
     """Two or more meals: one block per meal; one `/ok_` records them all, meal by meal."""
-    lines = [multi_proposal_head(view.day.isoformat()[5:], len(view.meals))]
+    lines = [multi_proposal_head(view.day.isoformat()[5:], len(view.meals), view.label)]
     for block in view.meals:
         lines.append(MEAL_NAMES[block.meal_type])
         if block.duplicates:

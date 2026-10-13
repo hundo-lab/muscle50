@@ -136,6 +136,7 @@ def test_a_web_request_uses_the_web_argv_and_the_search_timeout(tmp_path: Path) 
     assert call.cwd_files == []
     assert logs == ["llm claude: ok after 0 s (haiku, web search 2)"]
     assert QUERY not in "".join(logs) and PAGE not in "".join(logs)
+    assert QUERY not in repr(result) and PAGE not in repr(result)  # only the count is kept
 
 
 def test_a_request_without_the_flag_keeps_the_old_argv_and_timeout(tmp_path: Path) -> None:

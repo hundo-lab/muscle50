@@ -278,6 +278,8 @@ class MultiMealProposalView:
     meals: tuple[MealBlockView, ...]
     plain: bool
     searches: int = 0
+    label: str | None = None
+    """`사진 추정` for a photo, as in the single-meal proposal head."""
 
 
 @dataclass(frozen=True)
@@ -759,7 +761,7 @@ class TelegramLlmHandler:
         proposal = self._new_proposal(chat_id, ProposalKind.MEAL, meals=tuple(commands), day=day)
         exchange.proposal = proposal.token
         view = MultiMealProposalView(
-            proposal.token, day, tuple(blocks), any(command.argv_plain for command in commands), searches
+            proposal.token, day, tuple(blocks), any(command.argv_plain for command in commands), searches, label
         )
         exchange.reply = self._replies.multi_proposal(view)
 

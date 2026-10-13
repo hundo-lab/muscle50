@@ -8,6 +8,10 @@ Output change: additive(새 `telegram history` 명령, `nutrition log`/`meal add
 재시도" 절에 있다. Migration 없음. Output change: additive. 바이트가 바뀌는 곳은 그 절에 모두 적었다(`/llm` 첫 줄, 새
 기록 줄의 두 key, 기본 Claude 글 모델과 그에 따른 추정 근거 문자열).
 
+여러 끼니 한 문장, 모든 항목의 추정 범위, 카탈로그 음식 ID 제안, 웹 검색, 숫자 재확인(Telegram LLM Meal Estimates v2.2,
+`docs/specs/telegram-llm-meal-estimates.md`)은 "식사 추정·여러 끼니·웹 검색 (v2.2)" 절에 있다. Migration 없음. Output
+change: additive(LLM이 켜졌을 때만 바뀌는 곳은 그 절 끝의 목록에 모두 적었다).
+
 ## 목적과 non-goal
 
 - Telegram에서 명령어 대신 **문장과 사진**으로 식사를 기록하고, 질문하고, 메뉴를 고른다. 해석은 이 PC에 설치된
@@ -31,7 +35,10 @@ byte 단위로 같다.** 모든 key는 선택이고 `{}`이면 아래 기본값�
   "persona": {"name": "머슬", "tone": "존댓말, 짧게, 담백하게"},
   "timeout_seconds": 90,
   "fallback_provider": null,
-  "keep_photos": true
+  "keep_photos": true,
+  "web_search": true,
+  "web_search_max": 3,
+  "web_search_timeout_seconds": 150
 }
 ```
 
@@ -49,8 +56,12 @@ byte 단위로 같다.** 모든 key는 선택이고 `{}`이면 아래 기본값�
 - `fallback_provider`: `null`(기본) 또는 다른 제공자. 켜면 실패 시 한 번 더 시도하고, 메시지와 사진이 두 번째 회사로도
   간다.
 - `keep_photos`: 받은 사진을 `telegram\photos`에 보관할지.
+- `web_search`(true/false, 기본 **true**), `web_search_max`(1~10, 기본 3), `web_search_timeout_seconds`(10~600, 기본 150):
+  Claude에게 웹 검색을 허락하는 설정. 아래 "식사 추정·여러 끼니·웹 검색 (v2.2)"를 본다. 잘못된 형식·범위는 key 이름만
+  말하고 값은 쓰지 않으며, 이 key가 없는 v2.1 파일은 기본값으로 읽는다(그래서 **재시작 뒤 검색이 켜진다**).
 - 설정을 바꾸면 `telegram run`을 다시 시작한다. 시작할 때 콘솔에 한 줄이 늘어난다:
-  `telegram llm: on, provider claude, fallback none, timeout 90 s; claude (C:\...\claude.exe); codex (C:\...\codex.exe)`.
+  `telegram llm: on, provider claude, fallback none, timeout 90 s, web search on (max 3, 150 s); claude (C:\...\claude.exe); codex (C:\...\codex.exe)`
+  (검색을 끄면 `web search off`).
 
 ### 모델 선택과 재시도
 
@@ -60,7 +71,7 @@ byte 단위로 같다.** 모든 key는 선택이고 `{}`이면 아래 기본값�
 | Codex 기본 | `null`(Codex 내장 기본) | `null`(= `model`) | `null`(재시도 없음) |
 
 - 글 메시지는 가벼운 모델로, 사진은 더 강한 모델로 돌린다. 한 메시지의 두 번째 호출(질문 답, 메뉴 제안)은 첫 호출과 같은
-  규칙(글이면 `model`)을 따른다. 사진 메시지는 호출이 한 번뿐이다.
+  규칙(글이면 `model`)을 따른다. 사진 메시지는 호출이 한 번뿐이다(v2.2의 숫자 재확인이 일어나면 한 번 더).
 - 파일의 `claude`에 `model`만 있고 새 key가 없는 v2 파일은 새 key를 기본값으로 읽는다. 그래서
   `{"claude": {"model": "opus"}}`는 글은 opus, 사진은 **sonnet**, 재시도는 sonnet이다(사진이 opus에서 sonnet으로
   내려간다). 사진도 opus로 하려면 `photo_model`을 적는다. 이전 기본값(`sonnet`)에 기대던 파일은 글 모델이 `haiku`로
@@ -72,7 +83,7 @@ byte 단위로 같다.** 모든 key는 선택이고 `{}`이면 아래 기본값�
     오류 결과(`result` 이벤트 없음, `success`가 아닌 subtype, `is_error: true`; 사용 한도 메시지 등이 여기 올 수 있다).
     이 경우 한 번 더 돌려도 구독 사용량만 쓰기 때문이다.
   - 재시도가 또 실패하면 다시 재시도하지 않는다. 대체 제공자가 켜져 있으면 그 제공자가 같은 규칙으로(첫 호출 + 재시도)
-    이어서 시도한다. 한 호출 단계의 CLI 실행은 최대 4번이다.
+    이어서 시도한다. 한 호출 단계의 CLI 실행은 최대 4번이다(v2.2: 식사 해석은 숫자 재확인의 다시 묻기까지 최대 5번).
 - 매 실행은 새 임시 폴더, 전체 `timeout_seconds`, 같은 stdin·사진·정리된 환경·고정 argv로 돌고 `--model`/`-m`만 다르다.
   Codex 재시도에서도 사진은 새 `work\` 폴더에 다시 쓴다. 격리 argv는 바뀌지 않는다.
 - `/llm`의 첫 줄은 실제로 쓰이는 모델을 보여 준다. 기본값 그대로면
@@ -138,6 +149,12 @@ claude -p --tools "" --safe-mode --strict-mcp-config --disable-slash-commands --
        --input-format stream-json --output-format stream-json --verbose [--model <m>]
        --system-prompt <고정 ASCII 문장> --json-schema <schema JSON>
        (stdin: stream-json user 메시지 1개 = 프롬프트 text block + 사진이면 base64 image block)
+
+웹 검색 변형(v2.2; 해석 호출에서 `web_search`가 켜져 있을 때만, Claude만):
+claude -p --tools WebSearch --allowedTools WebSearch --safe-mode --strict-mcp-config --disable-slash-commands
+       --no-session-persistence --input-format stream-json --output-format stream-json --verbose [--model <m>]
+       --system-prompt <검색 변형 ASCII 문장> --json-schema <schema JSON>
+       (`--tools WebSearch`만으로는 print 모드에서 권한이 거절돼서 `--allowedTools WebSearch`가 함께 필요하다)
 
 codex exec --skip-git-repo-check --ephemeral -s read-only --ignore-user-config --ignore-rules -c web_search="disabled"
        --disable shell_tool --disable unified_exec --disable code_mode_host --disable computer_use --disable browser_use
@@ -210,11 +227,14 @@ bot:  (typed /log 답장과 같은 본문)
         지방 확인 3 g
 ```
 
-- 카탈로그 음식은 Food Name Lookup 규칙(정확한 ID, 이름, alias)으로만 잇는다. 없으면 `일반식 (메모: …) - 카탈로그에
-  없음`, 여러 음식에 맞으면 `- 이름이 여러 음식에 맞음`, 양을 말하지 않았으면 `- 수량·단위를 말하지 않음`으로 바꾼다.
+- 카탈로그 음식은 먼저 Food Name Lookup 규칙(정확한 ID, 이름, alias)으로 잇는다. 아무것도 맞지 않을 때만 LLM이 고른
+  카탈로그 ID를 쓴다(아래 "카탈로그 음식 ID 제안"). 연결하지 못하면 `일반식 (메모: …) - 카탈로그에 없음`, 여러 음식에
+  맞으면 `- 이름이 여러 음식에 맞음`, 양을 말하지 않았으면 `- 수량·단위를 말하지 않음`으로 바꾸고, 모두 LLM의 추정 범위를
+  붙인다.
 - 양을 말하지 않으면 LLM이 흔한 양을 제안할 수 있지만 `(수량 추정)`이 붙고 확인을 받는다.
-- 그 음식에 없는 단위는 빼고 이유를 보여 준다:
-  `빠짐: 바나나 2 g - 이 음식은 count 기준 값만 있습니다(단위 변환 없음). 1 g 값을 등록: muscle50 nutrition food fact add banana --per 1 g ... --new-unit`.
+- 그 음식에 값이 없는 단위는 **빼지 않고** 일반식 추정으로 바꾸고 등록 방법을 보여 준다(v2.2; 이전에는 `빠짐:`으로
+  뺐다): `일반식 (메모: 바나나 2 g) - 이 음식은 count 기준 값만 있습니다(단위 변환 없음)` 아래에
+  `등록: muscle50 nutrition food fact add banana --per 1 g ... --new-unit`.
 - 날짜는 bot이 정한다: 표현 없음·"오늘"은 오늘, "어제"는 어제, 그 밖은 `날짜를 정하지 못했습니다. /log로 보내 주세요`.
 - 끼니를 말하지 않으면 지금 시각으로 정하고 `(끼니: 지금 시각 기준)`을 보여 준다: [00:00, 10:00) 아침,
   [10:00, 15:00) 점심, [15:00, 24:00) 저녁.
@@ -326,6 +346,187 @@ muscle50 nutrition log --meal dinner --general --general-estimate language_estim
 - 오늘 합계 줄(LLM 답장에서만): `단백질 확인 120 g + 추정 30~45 g (값 모르는 항목 1개)`. 확인 = `known_subtotal`,
   추정 = 값 없는 항목 범위의 정확한 합, 모르는 값은 0으로 쓰지 않는다. 기록이 없으면 `오늘 기록 없음 (0이 아님)`.
 
+## 식사 추정·여러 끼니·웹 검색 (v2.2)
+
+한 문장에 여러 끼니("아침 …, 점심 …, 저녁 …")를 말해도 제안 하나로 나누고, 카탈로그에 없는 음식은 **항상 추정 범위가 붙은
+일반식**으로 기록한다. 새 명령이나 migration은 없다. 아무것도 `/ok_…` 전에는 쓰지 않는다.
+
+### 여러 끼니
+
+```text
+나:   오늘 아침 닭가슴살 2팩 즉석밥 1개, 점심 보돌미역 소고기활전복 미역국, 저녁 김밥 두줄 반 오뎅국 1개
+bot:  이렇게 기록할까요? (10-13, 3끼)
+      아침
+        1. 닭가슴살 (chicken-breast) 2 pack
+        2. CJ 햇반 백미밥 210g (hetbahn-white-210) 1 count ← "즉석밥"
+      점심
+        1. 일반식 (메모: 소고기활전복 미역국)
+           추정: kcal 650~950, 단백질 35~55 g (estimated)
+           가정: 보돌미역 메뉴를 못 찾아 일반 소고기전복미역국 정식으로 추정
+           출처: namu.wiki
+      저녁
+        1. 일반식 (메모: 김밥 2.5줄)
+           추정: kcal 800~1150, 단백질 25~40 g (estimated)
+        2. 일반식 (메모: 오뎅국 1그릇)
+           추정: kcal 150~300, 단백질 10~20 g (estimated)
+      웹 검색 1회
+      기록: /ok_5d21   값 없이 일반식만 기록: /plain_5d21   취소: /no_5d21
+```
+
+- 각 item이 자기 끼니(`meal_type`)를 갖는다. 끼니 낱말(아침, 점심, 저녁, 간식, 야식, `breakfast`…)은 음식이 아니고, 혹시
+  item으로 오면 bot이 그 item을 빼고 콘솔에 개수만 남긴다(`chat N: 2 meal-word items left out`). 다 빠지면 `사용법` 답이다.
+- 끼니를 하나도 말하지 않았으면 전처럼 한 끼이고 지금 시각으로 정한다. 일부 item만 끼니가 있고 맨 위 `meal_type`도 없으면
+  어느 끼니인지 추측하지 않고 `bad_output`이다(재시도 규칙을 따른다). 같은 끼니의 item은 한 끼로 합치고(제안 시점에 중복을
+  검사하므로 한 끼니가 두 번 나오면 둘째 `nutrition log`가 실패한다), 순서는 아침 → 점심 → 저녁 → 간식 → 기타다.
+- 끼니가 하나면 v2와 똑같다(같은 문구, 같은 argv, 단일 `nutrition log`). 둘 이상이면 제안이 끼니별 argv 목록을 가진다
+  (`config\telegram_llm_state.json`의 `meals`; 이 key가 없는 v2.1 파일도 읽는다). 끼니마다 `--additional`을 따로 정한다.
+- **`/ok`**: 제안을 먼저 `used`로 표시한 뒤 끼니마다 `nutrition log`를 차례로 한 번씩 돌린다(손으로 같은 argv를 친 것과 같은
+  행). 답은 한 메시지: 기록된 끼니마다 그 명령의 출력과 `취소: /void <id>`, 마지막에 `오늘 누적`.
+- **중간에 실패하면** 첫 실패에서 멈춘다. 이미 기록된 끼니는 그대로 두고(각자 `/void`로 취소), 답에 `실패: 점심 - 오류: …`,
+  `실행하지 않음: 저녁`, `남은 끼니는 다시 보내거나 /log로 기록하세요.`가 나온다. 제안은 이미 사용됨이라 `/ok`를 또 보내도
+  `이미 처리한 제안입니다`이고 두 번 기록되지 않는다. 남은 끼니만 다시 제안하는 기능은 없다(후속 후보).
+- 기록 줄(`/history`)은 하나이고 `result`가 `exit_code`(전부 성공이면 0, 아니면 실패한 명령의 코드), `meal_id`(처음 기록된
+  끼니), `meal_ids`, `failed`(끼니 또는 null), `not_run`을 가진다.
+- `/plain_`은 모든 끼니를 값 없이 기록한다(추정이 없는 끼니는 원래 argv 그대로). 어느 끼니에도 추정이 없으면 제안하지 않고
+  `/plain_`도 거절한다.
+- 마이그레이션이 적용되지 않았으면 전처럼 아무것도 쓰지 않고 제안도 사용하지 않는다.
+- Ctrl+C: 명령 하나가 중단되면 bot이 멈추고 나머지 끼니는 돌지 않는다. 제안은 이미 사용됨이라 다시 시작해도 돌지 않는다.
+  이미 기록된 끼니는 `/day`로 보인다.
+- 날짜가 섞인 문장("어제 …, 오늘 …")은 `date_expression: other`라 `날짜를 정하지 못했습니다`다.
+
+### 모든 항목에 추정 범위, 출처와 가정
+
+- 모든 item은 `estimate`의 kcal과 protein 범위가 **필수**다(스키마와 검증 모두). 카탈로그 음식의 범위는 대체값이고, 연결되면
+  카탈로그 값을 쓴다. 탄수화물·지방은 범위를 알 때만 적고 모르면 null이다(0으로 채우지 않는다). 점 값은 저장하지 않는다.
+- 카탈로그에 없는 item은 `kind general`과 양을 담은 `memo`("김밥 2.5줄")를 갖는다. 저장은 전과 같은 `--general`,
+  `--general-estimate=language_estimate:…`(사진은 `visual_estimate`)다. 새 source type은 없다.
+- `assumption`(80자 이하, 숫자 없이)은 무엇을 가정했는지, `source`(30자 이하)는 웹 검색으로 찾았을 때 **사이트 이름만**이다.
+  `://`나 `www.`가 있으면(주소·본문) `bad_output`이다. 제안에 `가정:` `출처:` 줄로 보이고, `--general-estimate-ref`에
+  `…; 출처: <site>; 가정: <text>`로 붙는다. 근거 문자열은 100자(CLI 한도)로 자르는데 **출처·가정 쪽을 먼저** 자르고 10자도
+  못 남으면 뺀다.
+- `웹 검색 N회`는 LLM이 아니라 bot이 센 횟수(메시지의 해석 호출 전체)이고 0이면 나오지 않는다.
+
+### 카탈로그 음식 ID 제안 (연결 규칙이 바뀐 곳)
+
+v2에는 "정확한 ID·이름·alias로만 잇고 추측·제안 연결은 없다"고 적혀 있었다(`application/food_lookup.py`의 규칙은 그대로다).
+v2.2는 LLM이 카탈로그 목록(`[카탈로그]`)에서 `food_id`를 **제안**하게 한다. 순서:
+
+1. 사용자의 말(`food_text`)로 정확히 찾는다. 하나면 연결, 여러 음식에 맞으면 **LLM ID로 덮어쓰지 않고** 일반식
+   (`이름이 여러 음식에 맞음`).
+2. 아무것도 맞지 않을 때만 LLM의 `food_id`를 쓴다. 없는 ID, 예약 ID(`general-meal`, `일반식`)는 일반식
+   (`고른 음식 ID가 카탈로그에 없음`). 있으면 연결하고 제안에 카탈로그 이름과 사용자의 말을 같이 보여 준다:
+   `CJ 햇반 백미밥 210g (hetbahn-white-210) 1 count ← "즉석밥"`. 사용자가 `/ok`로 확인하는 것이 승인이다.
+3. 연결됐지만 양이나 단위를 말하지 않았으면 일반식(`수량·단위를 말하지 않음`).
+4. 연결됐지만 그 단위의 값이 등록돼 있지 않으면 일반식 추정 + `등록: …` 안내. **단위 환산은 하지 않는다.**
+
+`nutrition log`는 언제나 정확한 ID를 받는다. 목록에는 예약된 일반식과 등록 단위가 하나도 없는 음식을 넣지 않는다. "등록
+단위"는 어떤 영양소든 그 단위의 값이 있는 단위다(과거 fact의 단위 전체가 아니다). 이름·별칭은 40자로 줄이고 별칭은 3개까지,
+120개·6000자를 넘으면 메시지에 이름이 나온 음식을 먼저, 나머지는 ID 순으로 채우고 콘솔에 `catalog list cut: 120 of 340`
+(개수만)을 남긴다. 카탈로그를 읽지 못하면(콘솔에 오류 종류만) 목록 없이 호출하고 정확한 조회는 그대로 동작한다.
+
+### 웹 검색
+
+- `web_search`가 true(기본)이고 **Claude가 답할 수 있을 때**(지금 제공자 또는 대체 제공자) 글·사진 **해석 호출**이 검색
+  도구를 받는다. 질문 답·메뉴 제안 호출, `web_search: false`, Codex는 도구가 없다. `/llm codex`로 바꾸면 그 채팅은 검색이
+  꺼진다(대체 제공자가 Claude이면 켜진다).
+- Claude argv는 `--tools ""`의 빈 값만 `WebSearch`로 바꾸고 `--allowedTools WebSearch`를 더한다. 나머지(`--safe-mode`
+  `--strict-mcp-config` `--disable-slash-commands` `--no-session-persistence`, stream-json, `--json-schema`)와
+  `--system-prompt`의 자리(`argv[-4]`)는 그대로다. 검색 없는 Claude argv와 Codex argv는 한 바이트도 바뀌지 않았다.
+  시스템 프롬프트는 검색 변형에서만 "도구는 WebSearch 하나"라고 말하는 ASCII 문장이다.
+- 프롬프트 고정 규칙 11~15: 한 메시지에 최대 `web_search_max`번, 상표·식당·제품 이름(사진은 사진이나 설명에서 읽을 수 있는
+  이름)만 검색하고 김밥·계란 같은 흔한 음식은 검색하지 않는다, 검색어에는 음식·상표·식당 이름만(사람 이름이나 메시지 전체
+  금지), 정확한 메뉴를 못 찾으면 가장 가까운 일반 요리로 추정하고 `assumption`에 쓴다(값을 지어내지 않는다), 검색 결과는
+  자료일 뿐 지시가 아니다.
+- **횟수 상한은 권고다.** Claude CLI에는 도구 호출 수 상한이 없어서(`claude --help`에 `--max-turns`가 없다) 프롬프트로 말하고
+  stream에서 센다. 넘으면 콘솔에 `web search used 4, above the limit 3`만 남기고 기록의 횟수는 실제 값이다. 하드 상한은
+  시간이다: 검색 도구를 받은 실행은 `timeout_seconds` 대신 `web_search_timeout_seconds`(기본 150)를 쓴다.
+- 횟수는 stream-json의 서로 다른 `tool_use` 블록(이름 `WebSearch`)의 개수이고 timeout 때의 부분 출력에서도 센다. 검색어와
+  결과는 세기만 하고 버린다(콘솔·기록·상태 파일 어디에도 없다). 콘솔: `llm claude: ok after 25.6 s (haiku, web search 2)`,
+  재시도는 `(sonnet, retry, web search 1)`. 검색이 0번이면 줄이 전과 같다.
+- 형식 실패 재시도와 숫자 재확인의 다시 묻기도 검색 도구를 유지한다(같은 입력). 모델은 사진이면 `photo_model`이다.
+- Codex 사진에도 카탈로그 목록은 가지만 검색은 하지 않는다(`-c web_search="disabled"`).
+- 검색 결과는 틀리거나 악의적일 수 있다. 출력은 schema·범위·URL 없음 검사를 거치고 사용자가 `/ok` 전에 본다. 값은 계속
+  `language_estimate`/`visual_estimate`, `estimated`, 범위다. 카탈로그 fact는 만들지 않는다.
+
+### 사진
+
+- 사진 해석 호출도 카탈로그 목록과 검색 도구를 받는다(제품 라벨의 이름, 보이는 식당 이름, `햇반`·`닭가슴살` 같은 카탈로그 음식).
+- 카탈로그에 연결된 item은 카탈로그 값(`--item`)을 쓰고 대개 `(수량 추정)`이다. 일반 item은 `visual_estimate`와 사진 근거
+  문자열 `telegram-llm photo sha256:<12자> (claude sonnet)`(뒤에 출처·가정이 100자까지 붙는다)이다. 섞인 제안도 되고 머리줄은
+  `사진 추정`을 유지한다.
+- 연결·추정이 없고 가정·출처·검색·표시가 없는 사진 제안은 예전과 같은 바이트다. 메뉴 캡처 답과 해석 실패 답은 바뀌지 않는다
+  (메뉴 캡처 호출은 검색할 수 있고 메뉴 item은 연결·재확인하지 않는다).
+
+### 숫자 재확인 (`domain/telegram_llm_check.py`)
+
+모델이 준 추정의 숫자가 서로 안 맞는지 bot이 `Decimal`로 정확히 검사한다(값을 고치지 않는다). 연결 뒤 **일반식 추정으로 저장될
+항목**(글·사진 식사, 연결된 항목의 대체 범위는 제외)만 검사하고 메뉴 item은 검사하지 않는다.
+
+| 코드 | 규칙(상수) |
+|---|---|
+| `range_too_wide` | kcal·단백질: 폭 `max-min`이 `max`의 0.7배를 넘고 바닥(kcal 150, 단백질 10 g)도 넘음. 650~950 통과, 100~900 실패, 0~0·0~5 g 통과 |
+| `range_is_a_point` | kcal·단백질: `min == max`이고 `max > 0` |
+| `macros_vs_kcal` | 단백질·탄수화물·지방 범위가 모두 있을 때 에너지 범위(4P+4C+9F의 최소~최대)가 kcal 범위(`Kmin×0.8-20` ~ `Kmax×1.2+20`)와 겹치지 않음 |
+| `macros_exceed_kcal` | 탄수화물이나 지방이 없을 때, 있는 영양소의 최소 에너지 합이 넓힌 kcal 상한보다 큼(없는 영양소가 0이어도 불가능) |
+| `assumption_number` | `assumption`의 숫자가 그 item의 수량·추정 범위 값에 없음(`source`는 숫자를 보지 않는다) |
+
+- 실패하면 **딱 한 번** 다시 묻는다: 답한 제공자의 `retry_model`(없으면 답한 모델)로 한 번만 돈다(형식 재시도 없음, 대체
+  제공자 없음, 검색 유지). 형식 재시도·대체 제공자는 내용 불일치가 아니라 형식 실패일 때만 쓴다.
+- 프롬프트의 `[데이터]`와 `[메시지]` 사이에 `[재확인]` 구역이 더해진다. 고정 문장과, 실패마다 한 줄(최대 5줄)
+  `- items[3]: macros_vs_kcal (kcal 650-950, 영양소 합 1200-1500)`이다. 음식 이름·메시지·기억은 넣지 않는다. 다시 묻기는
+  이전 답을 보지 못하므로(상태 없음) 순서가 바뀔 수 있고, 그래서 모든 item을 다시 확인하라고 적는다.
+- 결과: 새 답이 맞으면 `fixed`(새 답을 쓴다). 새 답도 안 맞으면 `still_inconsistent`(새 답을 표시와 함께 보여 줌).
+  다시 묻기가 실패(timeout, 실패, `bad_output`)하거나 쓸 수 없는 답(식사 기록이 아니거나 날짜를 못 정함 등)이면
+  `reask_failed`(첫 답을 표시와 함께 보여 줌). 두 번째 다시 묻기는 없다.
+- 표시와 함께 보여 줄 때 사용자는 `/ok`에서 결정한다:
+
+```text
+점심
+  1. 일반식 (메모: 소고기활전복 미역국)
+     추정: kcal 650~950, 단백질 35~55 g, 탄수화물 20~30 g, 지방 5~10 g (estimated) (값 확인 필요)
+     값 확인 필요: 열량과 영양소 합이 맞지 않음
+     가정: 보돌미역 메뉴를 못 찾아 일반 소고기전복미역국 정식으로 추정
+```
+
+  가정은 그대로 보인다. `/ok`로 저장하는 근거 문자열에는 `; 값 확인 필요`가 출처·가정 앞에 붙는다. `/plain_`은 값을 저장하지
+  않는다.
+- 콘솔(ASCII, 코드와 횟수만): `llm interpret recheck: macros_vs_kcal x1; asking again (sonnet)`, `… recheck: fixed`,
+  `… recheck: still inconsistent; shown with a marker`, `… recheck: re-ask failed (timeout); shown with a marker`.
+- 기록: 맨 끝에 `web_searches`(그 메시지의 해석 호출 전체의 검색 횟수 합. 시도하지 않았으면 `null`, 시도했는데 안 썼으면
+  `0`)와 `recheck`(`null` 또는 `{"reasons": [코드…], "outcome": "fixed"|"still_inconsistent"|"reask_failed"}`)가 붙는다.
+  이제 줄은 16개(v2), 18개(v2.1), 20개(v2.2) key 중 하나이고 예전 줄은 다시 쓰지 않는다. 다시 묻기가 있었으면
+  `provider`/`model`/`provider_result`/`retried`/`attempts`는 마지막 호출(다시 묻기)을 설명하고, `llm_output.interpret`는
+  쓴 답, `llm_output.interpret_first`는 첫 답이다. `telegram history`는 값이 있을 때만 ` web=N`, ` recheck=<outcome>`을,
+  `/history`는 ` · 웹 검색 N회`(N>0)와 ` · 재확인(고침|남음|실패)`을 붙인다. 기록 맨 끝의 `meal_ids`가 있으면 둘 다 그것을
+  보여 준다(`meals=a,b` / `결과: 기록 a, b`, 일부만이면 `결과: 일부 기록 a (실패: 점심)`).
+
+### 구현 단계 live 확인 (implementer, 2026-10-13~14, Claude Code 2.1.296, Codex CLI 0.160.0)
+
+임시 폴더, stdin으로 합성 프롬프트, 같은 격리 argv로 실제 CLI를 몇 번만 돌렸다. 사용자 데이터는 쓰지 않았다.
+
+| # | 확인 | 결과 |
+|---|---|---|
+| 1 | haiku + `--tools WebSearch --allowedTools WebSearch` + stream-json 입력 + `--json-schema`(새 interpret schema) | 통과(23 s). `system/init` tools는 `StructuredOutput`과 `WebSearch`, MCP 0. 최종 `result`에 `structured_output`이 있다. `--allowedTools`가 뒤 인자를 삼키지 않았다. |
+| 2 | `tool_use` 블록 모양 | `assistant` 이벤트의 `message.content[]`에 `{"type":"tool_use","id":"toolu_…","name":"WebSearch","input":{"query":…,"mode":…},"caller":{"type":"direct"}}`. 같은 이벤트 줄에 `StructuredOutput` 호출이 따로 온다. 이름과 id로 센다. |
+| 3 | 상한 장치 | `claude --help`에 호출 수 상한이 없다(`--max-budget-usd`만 있고 API 사용량용). 그래서 상한은 권고다. |
+| 4 | 두 CLI가 바뀐 interpret schema를 받는지 | Claude(위 1)와 Codex(`--output-schema`, 기본 모델, 12 s) 모두 통과. Codex 결과는 새 key 4개와 끼니별 item을 맞게 채웠다. |
+| 5 | haiku로 실제 새 프롬프트(웹 규칙 + 카탈로그 + 합성 3끼니 문장) | 27 s, 검색 1회. 끼니가 3개로 나뉘고 끼니 낱말 item 없음, 5개 item 모두 kcal·protein 범위, 닭가슴살·햇반은 카탈로그 ID로 연결, 숫자 검사 통과. `assumption`에 숫자가 들어오는 경우가 있어(수량과 같은 값이면 허용) 프롬프트만으로는 막지 못한다. |
+| 6 | 검색 지연 | 검색 1회 haiku 27 s, 위 1의 1회 23 s. 기본 150 s에 여유가 있다. 검색 여러 번과 timeout 경로는 실제로는 확인하지 않았다(가짜 runner로만). |
+| 7 | 고정된 다시 묻기: sonnet, `[재확인]` 구역 포함 | 통과(14.6 s, 검색 0회). 유효한 문서가 오고 첫 답과 다른 범위로 바뀌었다. |
+| 8 | 사진: sonnet + 합성 PNG 이미지 블록 + 웹 도구 + schema | 통과(7.5 s). init tools `StructuredOutput`·`WebSearch`, `structured_output` 있음. 검색은 쓰지 않았다. |
+
+CLI를 업그레이드하면 다시 확인한다. 검색 없는 대조 실행과 timeout·재시도 실제 실행은 하지 않았다.
+
+### Output change(LLM이 켜졌을 때만)
+
+- 문장 제안: 연결 방식이 `← "…"`로 보이는 항목, 일반식 대체 항목의 추정·이유·등록 안내(이전의 `빠짐:`은 없다), 여러 끼니
+  제안과 `/ok` 답, `가정:` `출처:` `웹 검색 N회` `(값 확인 필요)` 줄, 사진 제안의 연결된 항목.
+- 해석 프롬프트·스키마·요청(사용자에게 안 보임), 시작 콘솔 줄, 검색이 있는 콘솔 줄, 기록 줄의 새 key 두 개, 상태 파일의
+  `meals`, `telegram history`/`/history` 꼬리.
+- 바뀌지 않음: 모든 `muscle50` CLI 명령(`nutrition log`/`day`/`status`, `recommend`, `daily`, 예전 줄의 `telegram history`),
+  `telegram_llm.json`이 없을 때의 bot, 손으로 친 `/log` 답, `/llm` 첫 줄, 질문·메뉴·수정 답장, 추정·연결·가정·검색·표시가
+  없는 사진 제안, 검색·재확인이 없는 콘솔 줄, 검색 없는 Claude argv와 Codex argv.
+
 ## 생활 단위(팩·개·마리): `food fact add --new-unit`
 
 단위는 환산하지 않는다. 대신 카탈로그 음식에 그 단위의 값을 **따로** 등록한다.
@@ -355,6 +556,10 @@ muscle50 nutrition food fact add chicken-breast --per 1 pack --kcal 165 --protei
 - **전송되는 데이터**: 메시지, 사진(캡처 포함), 기억, 코치 가이드, 필요한 muscle50 JSON(질문 주제에 따라 운동 추천,
   영양 상태, InBody 추세; 메뉴 제안에는 오늘 먹은 음식 이름)이 고른 제공자(Anthropic 또는 OpenAI)로 간다. 대체
   제공자를 켜면 두 회사 모두로 갈 수 있다.
+  - v2.2부터 **글과 사진 해석 호출마다** 카탈로그 목록(음식 ID, 이름, 별칭 최대 3개, 등록 단위; 최대 120개·6000자)이
+    같이 간다. 질문 답과 메뉴 제안 호출에는 가지 않는다.
+  - 웹 검색이 켜져 있으면 Claude가 만든 **검색어**(상표·식당·제품 이름)가 Anthropic의 검색으로 간다. 사진에서 읽은
+    제품명·식당 이름도 같다(사진 자체는 이미 Anthropic으로 간다). 검색어와 결과는 muscle50이 저장하거나 기록하지 않는다.
 - 메뉴 캡처에는 이름이나 사번이 보일 수 있다. **메뉴 부분만 잘라서** 보낸다.
 
 ## 코드 위치
@@ -362,6 +567,9 @@ muscle50 nutrition food fact add chicken-breast --per 1 pack --kcal 165 --protei
 - `domain/telegram_llm.py`(LLM 출력 검증·경계, 날짜 표현, 끼니 시각표, 명령 문법, 기억, 기록 줄),
   `domain/telegram_llm_prompt.py`(프롬프트, 고정 규칙, bot 문구), `domain/llm_number_guard.py`, `domain/llm_today_totals.py`,
   `domain/menu_ranking.py`, `domain/llm_settings.py`.
+- v2.2: `domain/telegram_llm_meals.py`(끼니 묶음, 끼니 낱말, 카탈로그 목록, 근거 문자열), `domain/telegram_llm_check.py`(숫자
+  검사와 다시 묻기 note), `application/telegram_bot.py`의 `RunConfirmedSequence`/`_run_sequence`,
+  `infrastructure/llm/argv.py`의 검색 변형, `infrastructure/llm/provider.py`의 검색 횟수와 고정 실행(`RunPin`).
 - `application/telegram_llm.py`(`TelegramLlmHandler`), `application/llm_provider.py`(포트), `application/telegram_bot.py`
   (`llm` hook, `_run_command(on_outcome=…)`).
 - `infrastructure/llm/`(argv, 프로세스, 실행 파일, 제공자), `infrastructure/telegram/`(설정, 상태, 기억, 기록, 사진, 코치
@@ -381,6 +589,33 @@ muscle50 nutrition food fact add chicken-breast --per 1 pack --kcal 165 --protei
   - Claude CLI의 사용 한도 메시지가 오류 결과로 오면 재시도하지 않지만, 평범한 결과 문장으로 오면 형식 실패로 보여 한 번
     재시도한다. 실제 CLI의 한도 출력은 이 기능에서 확인하지 않았다(가짜 runner로만 검증).
   - 이 기능을 켠 뒤 저장되는 추정 근거 문자열이 `claude sonnet` 대신 `claude haiku`로 바뀐다(글 메시지).
+
+- **식사 추정·여러 끼니·웹 검색 (v2.2)**
+  - **최악의 경우가 늘었다.** 해석 호출 한 단계는 CLI가 최대 **5번** 돈다(제공자 2 x 첫 실행 + 재시도 = 4, 숫자 재확인의
+    다시 묻기 1). 검색 도구를 받은 실행은 각각 150 s까지 쓸 수 있어 한 메시지가 최대 약 12.5분(5 x 150 s)이다(이전 4 x 90 s =
+    6분, 검색 설정 후 4 x 150 s = 10분). 질문·메뉴 제안은 식사 item이 없어 다시 묻지 않으므로 8번 그대로다. 대체 제공자는 기본으로
+    꺼져 있고 다시 묻기는 형식 재시도·대체와 달리 숫자 검사가 실패할 때만 돈다.
+  - **검색 켜짐이 기본이다.** 재시작하면 v2.1 `telegram_llm.json`도 검색을 시작해 시간과 구독 사용량이 늘고 검색어가
+    Anthropic으로 간다. 끄려면 `"web_search": false`. 설정 파일이 없으면 bot은 그대로다.
+  - 횟수 상한은 프롬프트 규칙이라 모델이 넘길 수 있다(콘솔에 `above the limit`). 하드 상한은 시간뿐이고, timeout이 나면 그
+    메시지의 답과 사용량은 버려진다. 검색 지연의 실제 분포는 확인하지 못했다(live 확인은 1회짜리 둘뿐).
+  - 검색 결과는 틀릴 수 있다. 값은 범위 추정으로만 저장되고, 사이트 이름은 모델이 적은 것이라 실제 출처와 다를 수 있다.
+    웹을 쓰지 못했을 때(Codex, 검색 끔) `source`는 비어 있어야 하지만 모델이 적어도 막지는 못한다(주소 형태만 거절한다).
+  - 대체 제공자만 Claude인 설정(`provider: codex`, `fallback_provider: claude`)에서는 첫 실행이 Codex라 검색할 수 없지만
+    프롬프트에는 검색 규칙이 들어간다.
+  - 숫자 재확인은 거짓 양성이 있다(섬유질, 알코올, 당알코올이 든 음식). 한 번 더 Sonnet 실행을 쓴다. 허용 오차는 20%와 20 kcal이고
+    기록의 `recheck`로 실제 빈도를 볼 수 있다. 표시가 항상 `/ok`로 받아들여지면 소음이 된다(`값 확인 필요`가 근거 문자열에
+    남으므로 나중에 찾을 수 있다). 다시 묻기는 이전 답을 보지 못해 순서가 바뀔 수 있다.
+  - `assumption`에 숫자를 쓰지 말라고 프롬프트에 적었지만 모델이 쓰는 경우가 있다(live 확인 5). 수량·추정값과 같은 숫자는
+    허용하고 다른 숫자는 다시 묻기 사유다.
+  - 여러 끼니 `/ok` 도중 프로세스가 죽거나 Ctrl+C면 남은 끼니는 돌지 않고 답/기록 줄이 빠질 수 있다. 이미 기록된 끼니는 `/day`로
+    보인다. 일부만 기록됐을 때 남은 끼니만 다시 제안하는 기능은 없다.
+  - 끼니 낱말 필터는 끼니 낱말과 똑같은 이름의 실제 음식을 빼 버린다(드묾). 한 문장에 끼니 둘이 같은 끼니로 합쳐지는 것은
+    의도다. 날짜가 섞이면 처리하지 않는다.
+  - 카탈로그 목록은 최대 120개·6000자이고, 넘으면 메시지에 이름이 나온 음식이 먼저다. 이름이 비슷한 음식은 모델이 잘못 고를
+    수 있다(제안에 카탈로그 이름이 보이고 사용자가 확인한다).
+  - 근거 문자열의 출처·가정 부분은 100자 한도 때문에 잘릴 수 있다(사진은 약 45자만 남는다).
+  - 이미 저장된 제안(v2.1)은 `meals` 없이 읽히지만 제안 문구는 만들 때 정해져 있다.
 
 - **Codex는 `~/.codex/AGENTS.md`(사용자 전역 지시)를 읽는다.** `--ignore-user-config`와 `-c project_doc_max_bytes=0`으로도
   막히지 않았다(구현 단계 확인 4). 그 파일은 사용자 자신의 텍스트 지시일 뿐 도구나 MCP를 켜지 않지만, 응답 언어 같은
