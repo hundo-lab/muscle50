@@ -120,9 +120,7 @@ def _macro_failures(
     if fat is not None:
         present += ATWATER_FAT * fat[0]
     if present > kcal_high:
-        return [
-            CheckFailure(CheckCode.MACROS_EXCEED_KCAL, f"kcal {_range(kcal)}, 영양소 합 최소 {_number(present)}")
-        ]
+        return [CheckFailure(CheckCode.MACROS_EXCEED_KCAL, f"kcal {_range(kcal)}, 영양소 합 최소 {_number(present)}")]
     return []
 
 

@@ -33,7 +33,13 @@ import muscle50.cli as cli
 from muscle50.application.llm_provider import LlmAttempt, LlmCallResult, LlmRequest, SchemaName
 from muscle50.cli import main
 from muscle50.domain.llm_settings import DEFAULT_SETTINGS, LlmSettings, ProviderName, ProviderSettings
-from muscle50.domain.telegram_llm import HISTORY_KEYS, HISTORY_KEYS_V1, check_history_entry, history_entry
+from muscle50.domain.telegram_llm import (
+    HISTORY_KEYS,
+    HISTORY_KEYS_V1,
+    HISTORY_KEYS_V21,
+    check_history_entry,
+    history_entry,
+)
 from muscle50.domain.telegram_llm_prompt import PROVIDER_FAILED_TEXT
 from muscle50.infrastructure.llm.argv import CLAUDE_SYSTEM_PROMPT, claude_argv, codex_argv
 from muscle50.infrastructure.llm.executables import ResolvedExecutable
@@ -629,27 +635,44 @@ def test_llm_with_an_override_describes_the_active_provider_and_the_other_lines_
 # --- history keys and rendering (AC7) --------------------------------------------------------------------------
 
 
-def test_history_keys_append_the_two_new_keys_at_the_end() -> None:
+def test_history_key_shapes_are_16_18_and_20() -> None:
     assert len(HISTORY_KEYS_V1) == 16
-    assert (*HISTORY_KEYS_V1, "retried", "attempts") == HISTORY_KEYS
+    assert (*HISTORY_KEYS_V1, "retried", "attempts") == HISTORY_KEYS_V21 and len(HISTORY_KEYS_V21) == 18
+    assert (*HISTORY_KEYS_V21, "web_searches", "recheck") == HISTORY_KEYS and len(HISTORY_KEYS) == 20
     entry = history_entry(update_id=1, at="2026-10-13T12:00:00+09:00", chat_id=1, kind="plain")
-    assert list(entry) == list(HISTORY_KEYS) and (entry["retried"], entry["attempts"]) == (None, None)
+    assert list(entry) == list(HISTORY_KEYS)
+    assert (entry["retried"], entry["attempts"], entry["web_searches"], entry["recheck"]) == (None,) * 4
 
 
-def test_check_history_entry_accepts_both_shapes_and_rejects_others() -> None:
+def test_check_history_entry_accepts_all_three_shapes_and_rejects_others() -> None:
     new = history_entry(update_id=1, at="2026-10-13T12:00:00+09:00", chat_id=1, kind="text", text="a")
+    v21 = {key: new[key] for key in HISTORY_KEYS_V21}
     old = {key: new[key] for key in HISTORY_KEYS_V1}
-    assert check_history_entry(old) is old and check_history_entry(new) is new
+    assert check_history_entry(old) is old and check_history_entry(v21) is v21 and check_history_entry(new) is new
     attempt = {"provider": "claude", "model": "haiku", "outcome": "ok", "retry": False}
     assert check_history_entry({**new, "retried": True, "attempts": [attempt, {**attempt, "retry": True}]})
+    searched = {**new, "web_searches": 2, "recheck": {"reasons": ["macros_vs_kcal"], "outcome": "fixed"}}
+    assert check_history_entry(searched) is searched
+    assert check_history_entry({**new, "web_searches": 0, "recheck": {"reasons": [], "outcome": "reask_failed"}})
     bad = [
         {**new, "extra": 1},
         {key: value for key, value in new.items() if key != "attempts"},
+        {key: value for key, value in new.items() if key != "recheck"},
         {**new, "retried": "yes"},
         {**new, "attempts": "x"},
         {**new, "attempts": [{"provider": "claude"}]},
         {**new, "attempts": [{**attempt, "retry": "no"}]},
         {**new, "attempts": [[1, 2]]},
+        {**new, "web_searches": -1},
+        {**new, "web_searches": True},
+        {**new, "web_searches": "2"},
+        {**new, "web_searches": 1.5},
+        {**new, "recheck": "fixed"},
+        {**new, "recheck": {"reasons": [], "outcome": "maybe"}},
+        {**new, "recheck": {"reasons": ["made_up"], "outcome": "fixed"}},
+        {**new, "recheck": {"reasons": "macros_vs_kcal", "outcome": "fixed"}},
+        {**new, "recheck": {"outcome": "fixed", "reasons": []}},
+        {**new, "recheck": {"reasons": [], "outcome": "fixed", "extra": 1}},
     ]
     for document in bad:
         with pytest.raises(ValueError):

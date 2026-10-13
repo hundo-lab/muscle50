@@ -533,6 +533,16 @@ class MenuChoice:
 
 
 @dataclass(frozen=True)
+class MealCommand:
+    """One meal of a multi-meal proposal: the `nutrition log` argv `/ok_` and `/plain_` run for it."""
+
+    meal_type: MealType
+    argv_ok: tuple[str, ...]
+    argv_plain: tuple[str, ...] = ()
+    """Empty when no item of this meal has an estimate (`/plain_` then runs `argv_ok`)."""
+
+
+@dataclass(frozen=True)
 class Proposal:
     token: str
     chat_id: int
@@ -552,6 +562,13 @@ class Proposal:
     """An edit's meal (for `확인: /show <id>`)."""
     label: str = ""
     """How the menu was made (`메뉴 캡처 추정`, `메뉴 제안 추정`), shown in the `/eat_` proposal."""
+    meals: tuple[MealCommand, ...] = ()
+    """A multi-meal proposal (two or more meals): one command per meal, run in order; `argv_ok` stays empty."""
+
+    @property
+    def plain_available(self) -> bool:
+        """`/plain_` is offered when the proposal (or any of its meals) has an estimate to leave out."""
+        return bool(self.argv_plain) or any(meal.argv_plain for meal in self.meals)
 
     def with_state(self, state: ProposalState) -> Proposal:
         return replace(self, state=state)
@@ -644,8 +661,14 @@ HISTORY_KEYS_V1 = (
     "proposal",
     "result",
 )
-HISTORY_KEYS = (*HISTORY_KEYS_V1, "retried", "attempts")
-"""New lines carry the last two keys (model routing); lines written before it have the first 16 and stay valid."""
+HISTORY_KEYS_V21 = (*HISTORY_KEYS_V1, "retried", "attempts")
+"""Lines written by model routing (v2.1) have these 18 keys and stay valid."""
+HISTORY_KEYS = (*HISTORY_KEYS_V21, "web_searches", "recheck")
+"""New lines (v2.2) add the web search count and the numeric re-check; lines with 16 or 18 keys stay valid."""
+RECHECK_OUTCOMES = frozenset({"fixed", "still_inconsistent", "reask_failed"})
+RECHECK_CODES = frozenset(
+    {"range_too_wide", "range_is_a_point", "macros_vs_kcal", "macros_exceed_kcal", "assumption_number"}
+)
 HISTORY_ATTEMPT_KEYS = ("provider", "model", "outcome", "retry")
 HISTORY_KINDS = frozenset({"text", "photo", "confirm", "plain", "cancel", "eat", "edit"})
 
@@ -661,10 +684,10 @@ def history_entry(**fields: Any) -> dict[str, Any]:
 
 
 def check_history_entry(document: Any) -> dict[str, Any]:
-    """A stored line as read back (either key shape); ValueError when it is not a version-1 history entry."""
+    """A stored line as read back (any of the three key shapes); ValueError when it is not a version-1 entry."""
     if (
         not isinstance(document, dict)
-        or tuple(document) not in (HISTORY_KEYS_V1, HISTORY_KEYS)
+        or tuple(document) not in (HISTORY_KEYS_V1, HISTORY_KEYS_V21, HISTORY_KEYS)
         or document["v"] != HISTORY_VERSION
     ):
         raise ValueError("not a version 1 history entry")
@@ -674,7 +697,23 @@ def check_history_entry(document: Any) -> dict[str, Any]:
         raise ValueError("not a version 1 history entry")
     if "retried" in document and not _routing_keys_ok(document["retried"], document["attempts"]):
         raise ValueError("not a version 1 history entry")
+    if "recheck" in document and not _search_keys_ok(document["web_searches"], document["recheck"]):
+        raise ValueError("not a version 1 history entry")
     return document
+
+
+def _search_keys_ok(web_searches: Any, recheck: Any) -> bool:
+    if web_searches is not None and (type(web_searches) is not int or web_searches < 0):
+        return False
+    if recheck is None:
+        return True
+    return (
+        isinstance(recheck, dict)
+        and tuple(recheck) == ("reasons", "outcome")
+        and isinstance(recheck["reasons"], list)
+        and all(code in RECHECK_CODES for code in recheck["reasons"])
+        and recheck["outcome"] in RECHECK_OUTCOMES
+    )
 
 
 def _routing_keys_ok(retried: Any, attempts: Any) -> bool:

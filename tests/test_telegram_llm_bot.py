@@ -298,6 +298,8 @@ def test_typed_log_reply_is_unchanged_with_the_llm_on(
 def test_unmatched_ambiguous_and_missing_unit_items_are_never_linked(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
 ) -> None:
+    # v2.2 (spec rule 4): nothing is dropped any more. Every item that cannot be linked stays a general item
+    # that keeps the LLM's estimate range, with the reason (and, for an unregistered unit, the registration hint).
     _catalog(capsys)
     _llm_config(home)
     document = meal(
@@ -307,41 +309,44 @@ def test_unmatched_ambiguous_and_missing_unit_items_are_never_linked(
         _item("바나나", 2, "g"),
     )
     replies, _err, _fake = _session(monkeypatch, capsys, FakeProvider(document), text(1, "점심 먹었어"))
+    estimate = "   추정: kcal 300~400, 단백질 10~20 g (estimated)"
     assert replies == [
         "\n".join(
             [
                 "이렇게 기록할까요? (점심, 10-06)",
                 "1. 일반식 (메모: 오징어볶음 1 serving) - 카탈로그에 없음",
-                "   추정: kcal 300~400, 단백질 10~20 g (estimated)",
+                estimate,
                 "2. 일반식 (메모: apple 1 count) - 이름이 여러 음식에 맞음",
-                "   추정: kcal 300~400, 단백질 10~20 g (estimated)",
+                estimate,
                 "3. 일반식 (메모: 햇반) - 수량·단위를 말하지 않음",
-                "   추정: kcal 300~400, 단백질 10~20 g (estimated)",
-                "빠짐: 바나나 2 g - 이 음식은 count 기준 값만 있습니다(단위 변환 없음). 1 g 값을 등록: muscle50 "
-                "nutrition food fact add banana --per 1 g ... --new-unit",
+                estimate,
+                "4. 일반식 (메모: 바나나 2 g) - 이 음식은 count 기준 값만 있습니다(단위 변환 없음)",
+                estimate,
+                "   등록: muscle50 nutrition food fact add banana --per 1 g ... --new-unit",
                 "기록: /ok_7f3a   일반식만 기록(값 없이): /plain_7f3a   취소: /no_7f3a",
             ]
         )
     ]
     state = json.loads((home / "config" / "telegram_llm_state.json").read_text(encoding="utf-8"))
     ref = "--general-estimate-ref=telegram-llm text (claude sonnet)"
-    estimate = "--general-estimate=language_estimate:kcal=300-400,protein=10-20"
+    spec = "--general-estimate=language_estimate:kcal=300-400,protein=10-20"
     assert state["proposals"][0]["argv_ok"] == [
         *LUNCH_ARGV[:6],
-        *("--general", "--general-note=오징어볶음 1 serving", estimate, ref),
-        *("--general", "--general-note=apple 1 count", estimate, ref),
-        *("--general", "--general-note=햇반", estimate, ref),
+        *("--general", "--general-note=오징어볶음 1 serving", spec, ref),
+        *("--general", "--general-note=apple 1 count", spec, ref),
+        *("--general", "--general-note=햇반", spec, ref),
+        *("--general", "--general-note=바나나 2 g", spec, ref),
     ]
 
 
-def test_every_item_dropped_gives_reasons_and_no_proposal(
+def test_a_message_of_only_meal_words_gives_the_usage_text_and_no_proposal(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
 ) -> None:
     _catalog(capsys)
     _llm_config(home)
-    replies, _err, _fake = _session(monkeypatch, capsys, FakeProvider(meal(_item("바나나", 100, "g"))), text(1, "x"))
-    assert replies[0].startswith("빠짐: 바나나 100 g")
-    assert "사용법: /log" in replies[0]
+    document = meal(_item("점심", None, None, kind="general"), _item("저녁식사", None, None, kind="general"))
+    replies, _err, _fake = _session(monkeypatch, capsys, FakeProvider(document), text(1, "점심 저녁"))
+    assert len(replies) == 1 and replies[0].startswith("사용법: /log")
     assert not (home / "config" / "telegram_llm_state.json").exists()
 
 

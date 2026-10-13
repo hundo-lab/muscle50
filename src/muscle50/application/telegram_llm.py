@@ -21,13 +21,13 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, tzinfo
 from decimal import Decimal
 from typing import Any, Protocol
 
 from muscle50.application.food_lookup import FoodLookup, ResolveFoodReference
-from muscle50.application.llm_provider import LlmCallResult, LlmProvider, LlmRequest, SchemaName
+from muscle50.application.llm_provider import LlmCallResult, LlmProvider, LlmRequest, RunPin, SchemaName
 from muscle50.application.nutrition_logging import (
     NutritionLoggingError,
     format_general_estimate,
@@ -42,6 +42,8 @@ from muscle50.application.telegram_bot import (
     LlmReply,
     ReplySummaries,
     RunConfirmed,
+    RunConfirmedSequence,
+    SequenceStep,
     SummaryUnavailableError,
     TelegramUnavailableError,
 )
@@ -50,6 +52,7 @@ from muscle50.domain.llm_settings import PROVIDER_COMPANIES, LlmSettings, Provid
 from muscle50.domain.llm_today_totals import TodayTotals, amount_text, today_totals, totals_text
 from muscle50.domain.menu_ranking import UNREADABLE, KcalContext, MenuRanking, RankItem, kcal_context, rank_menu
 from muscle50.domain.nutrition import (
+    FoodNutritionProfile,
     Meal,
     MealType,
     NutrientField,
@@ -72,9 +75,11 @@ from muscle50.domain.telegram_llm import (
     EditAction,
     Intent,
     Interpretation,
+    InterpretItem,
     ItemKind,
     LlmCommand,
     LlmState,
+    MealCommand,
     MenuChoice,
     NutrientRanges,
     PhotoKind,
@@ -98,6 +103,20 @@ from muscle50.domain.telegram_llm import (
     prune_proposals,
     remember,
     resolve_date_expression,
+)
+from muscle50.domain.telegram_llm_check import (
+    CheckCode,
+    CheckFailure,
+    RecheckOutcome,
+    check_estimate,
+    recheck_note,
+)
+from muscle50.domain.telegram_llm_meals import (
+    catalog_prompt,
+    estimate_reference,
+    group_meals,
+    is_meal_word,
+    registered_units,
 )
 from muscle50.domain.telegram_llm_prompt import (
     CANCELLED_TEXT,
@@ -127,12 +146,21 @@ from muscle50.domain.telegram_llm_prompt import (
     PROPOSAL_WRONG_KIND_TEXT,
     PROVIDER_FAILED_TEXT,
     QUESTION_TOPICS_TEXT,
+    REASON_AMBIGUOUS,
+    REASON_BAD_ID,
+    REASON_NO_AMOUNT,
+    REASON_NOT_IN_CATALOG,
+    SEQUENCE_HINT,
     UNCLEAR_TEXT,
     PromptTask,
     build_prompt,
     llm_status_text,
     provider_default_text,
     provider_switched_text,
+    sequence_failed_line,
+    sequence_not_run_line,
+    unregistered_unit_hint,
+    unregistered_unit_reason,
 )
 
 HISTORY_DEFAULT = 5
@@ -157,6 +185,12 @@ class TelegramFileApi(Protocol):
 
 class MealsOfDay(Protocol):
     def list_eaten_between(self, start_inclusive: datetime, end_exclusive: datetime) -> tuple[Meal, ...]: ...
+
+
+class FoodCatalog(FoodLookup, Protocol):
+    """The catalog reads the handler needs: the exact lookup plus the list sent to the LLM."""
+
+    def list_all(self) -> tuple[FoodNutritionProfile, ...]: ...
 
 
 class ProposalStore(Protocol):
@@ -204,6 +238,12 @@ class ProposalItemView:
     quantity_estimated: bool
     reason: str | None
     estimate: NutrientRanges
+    hint: str | None = None
+    """A command to register a missing unit (`등록: muscle50 nutrition food fact add ...`)."""
+    assumption: str | None = None
+    source: str | None = None
+    check: tuple[CheckCode, ...] = ()
+    """The failed numeric checks: the item is shown with `(값 확인 필요)` and the reasons."""
 
 
 @dataclass(frozen=True)
@@ -218,6 +258,26 @@ class MealProposalView:
     dropped: tuple[str, ...]
     plain: bool
     failed_photo: bool = False
+    searches: int = 0
+    """Web searches made for this proposal (`웹 검색 N회` when above 0)."""
+
+
+@dataclass(frozen=True)
+class MealBlockView:
+    meal_type: MealType
+    duplicates: tuple[str, ...]
+    items: tuple[ProposalItemView, ...]
+
+
+@dataclass(frozen=True)
+class MultiMealProposalView:
+    """Two or more meals from one message: one `/ok_` records each with its own `nutrition log`."""
+
+    token: str
+    day: date
+    meals: tuple[MealBlockView, ...]
+    plain: bool
+    searches: int = 0
 
 
 @dataclass(frozen=True)
@@ -258,6 +318,8 @@ class LlmReplies(Protocol):
 
     def proposal(self, view: MealProposalView) -> ReplyText: ...
 
+    def multi_proposal(self, view: MultiMealProposalView) -> ReplyText: ...
+
     def menu(self, view: MenuView) -> ReplyText: ...
 
     def edit(self, view: EditView) -> ReplyText: ...
@@ -279,6 +341,8 @@ class _Exchange:
     outputs: dict[str, Any] = field(default_factory=dict)
     proposal: str | None = None
     summary: str | None = None
+    recheck: dict[str, Any] | None = None
+    """`{"reasons": [...], "outcome": ...}` when the numeric re-check found something (None: nothing failed)."""
 
 
 class TelegramLlmHandler:
@@ -287,7 +351,7 @@ class TelegramLlmHandler:
         *,
         provider: LlmProvider,
         files: TelegramFileApi,
-        catalog: FoodLookup,
+        catalog: FoodCatalog,
         meals: MealsOfDay,
         proposals: ProposalStore,
         memory: MemoryStore,
@@ -369,7 +433,16 @@ class TelegramLlmHandler:
     ) -> LlmAction:
         words = text if text is not None else (caption or "")
         exchange = _Exchange()
-        call = self._call(chat_id, SchemaName.INTERPRET, PromptTask.INTERPRET, words, photo, (), parse_interpretation)
+        call = self._call(
+            chat_id,
+            SchemaName.INTERPRET,
+            PromptTask.INTERPRET,
+            words,
+            photo,
+            self._catalog_data(chat_id, words),
+            parse_interpretation,
+            web_search=self._web_search_on(),
+        )
         exchange.calls.append(call)
         if not call.ok:
             if photo is not None:
@@ -406,7 +479,7 @@ class TelegramLlmHandler:
             if interpretation.tense is Tense.PLANNED:
                 exchange.reply = ReplyText(PLANNED_TEXT)
                 return
-            self._meal_proposal(chat_id, interpretation, exchange, photo_digest=None)
+            self._meal_proposal(chat_id, words, None, interpretation, exchange, photo_digest=None)
         elif intent is Intent.MEAL_EDIT:
             self._edit(chat_id, interpretation, exchange)
         elif intent is Intent.QUESTION:
@@ -428,7 +501,7 @@ class TelegramLlmHandler:
     ) -> None:
         kind = interpretation.photo_kind
         if kind is PhotoKind.MEAL_PHOTO:
-            self._meal_proposal(chat_id, interpretation, exchange, photo_digest=_digest(photo))
+            self._meal_proposal(chat_id, words, photo, interpretation, exchange, photo_digest=_digest(photo))
         elif kind is PhotoKind.MENU_CAPTURE:
             self._menu_capture(chat_id, interpretation, exchange, photo_digest=_digest(photo))
         else:
@@ -442,40 +515,253 @@ class TelegramLlmHandler:
     # --- meal proposals -------------------------------------------------------------------------------------
 
     def _meal_proposal(
-        self, chat_id: int, interpretation: Interpretation, exchange: _Exchange, *, photo_digest: str | None
+        self,
+        chat_id: int,
+        words: str,
+        photo: bytes | None,
+        interpretation: Interpretation,
+        exchange: _Exchange,
+        *,
+        photo_digest: str | None,
     ) -> None:
         day = resolve_date_expression(interpretation.date_expression, self._today())
         if day is None:
             exchange.reply = ReplyText(DATE_OTHER_TEXT)
             return
-        meal_type = interpretation.meal_type
-        slot_from_time = meal_type is None
-        if meal_type is None:
-            meal_type = meal_slot_for(self._now().time())
-        source = estimate_source(photo_digest is not None)
-        reference = self._reference(exchange.calls[-1], photo_digest)
-        entries: list[_Entry] = []
-        dropped: list[str] = []
-        for item in interpretation.items:
-            if photo_digest is None and item.kind is ItemKind.CATALOG:
-                entry, reason = self._catalog_entry(item.food_text, item.quantity, item.unit, item.quantity_estimated)
-                if entry is None:
-                    dropped.append(reason or "")
-                    continue
-                if entry.food_id is None:
-                    entry = _Entry(None, None, None, entry.memo, item.estimate, False, reason)
-                entries.append(entry)
-            else:
-                memo = clean_memo(item.memo or item.food_text)
-                entries.append(_Entry(None, None, None, memo, item.estimate, False, None))
+        entries = self._link_items(chat_id, interpretation)
         if not entries:
-            reasons = "\n".join(dropped) if dropped else ""
-            exchange.reply = ReplyText("\n".join(part for part in (reasons, usage_text("log")) if part))
+            exchange.reply = ReplyText(usage_text("log"))
             return
+        used = exchange.calls[-1]
+        failures = _failures(entries)
+        if failures:
+            entries, interpretation, day, used = self._recheck(
+                chat_id, words, photo, photo_digest, interpretation, day, entries, failures, exchange
+            )
         label = "사진 추정" if photo_digest is not None else None
-        self._store_meal_proposal(
-            chat_id, exchange, day, meal_type, entries, dropped, source, reference, label, slot_from_time
+        self._store_proposal(
+            chat_id,
+            exchange,
+            day,
+            interpretation.meal_type,
+            entries,
+            estimate_source(photo_digest is not None),
+            self._reference(used, photo_digest),
+            label,
         )
+
+    # --- linking ---------------------------------------------------------------------------------------------
+
+    def _link_items(self, chat_id: int, interpretation: Interpretation) -> list[_Entry]:
+        """One entry per item that is not just a meal word: a catalog entry or a general estimate (never dropped)."""
+        entries: list[_Entry] = []
+        meal_words = 0
+        for index, item in enumerate(interpretation.items, start=1):
+            if is_meal_word(item.food_text):
+                meal_words += 1
+                continue
+            entries.append(self._link_item(index, item))
+        if meal_words:
+            self._log(f"chat {chat_id}: {meal_words} meal-word items left out")
+        return entries
+
+    def _link_item(self, index: int, item: InterpretItem) -> _Entry:
+        """Exact lookup of the user's words first; the LLM's `food_id` only when that finds nothing (the user
+        confirms the shown catalog name at `/ok`). Anything that cannot be linked stays a general estimate."""
+        amount = (
+            f" {amount_text(item.quantity)} {item.unit.value}"
+            if item.quantity is not None and item.unit is not None
+            else ""
+        )
+
+        def general(reason: str | None, hint: str | None = None, *, memo: str | None = None) -> _Entry:
+            text = memo if memo is not None else clean_memo(f"{item.food_text}{amount}")
+            return _Entry(
+                None,
+                None,
+                None,
+                text,
+                item.estimate,
+                False,
+                reason,
+                hint,
+                source=item.source,
+                assumption=item.assumption,
+                index=index,
+                meal_type=item.meal_type,
+                own_quantity=item.quantity,
+            )
+
+        if item.kind is ItemKind.GENERAL:
+            return general(None, memo=clean_memo(item.memo or item.food_text))
+        if is_reserved_food_reference(item.food_text):
+            return general(REASON_NOT_IN_CATALOG)
+        via: str | None = None
+        try:
+            food_id = ResolveFoodReference(self._catalog).execute(item.food_text, label="")
+        except NutritionLoggingError:
+            return general(REASON_AMBIGUOUS)  # an ambiguous exact match is never overridden
+        if food_id is None:
+            if item.food_id is None:
+                return general(REASON_NOT_IN_CATALOG)
+            if is_reserved_food_reference(item.food_id) or self._catalog.get(item.food_id) is None:
+                return general(REASON_BAD_ID)
+            food_id, via = item.food_id, item.food_text
+        profile = self._catalog.get(food_id)
+        if profile is None:
+            return general(REASON_NOT_IN_CATALOG)
+        if item.quantity is None or item.unit is None:
+            return general(REASON_NO_AMOUNT)
+        units = registered_units(profile)
+        if item.unit not in units:
+            reason = unregistered_unit_reason([unit.value for unit in units])
+            return general(reason, unregistered_unit_hint(profile.profile_id, item.unit.value))
+        text = f"{profile.name} ({profile.profile_id}) {amount_text(item.quantity)} {item.unit.value}"
+        return _Entry(
+            profile.profile_id,
+            item.quantity,
+            item.unit,
+            text,
+            (),
+            item.quantity_estimated,
+            None,
+            via=via,
+            index=index,
+            meal_type=item.meal_type,
+        )
+
+    # --- the numeric re-check -------------------------------------------------------------------------------
+
+    def _recheck(
+        self,
+        chat_id: int,
+        words: str,
+        photo: bytes | None,
+        photo_digest: str | None,
+        interpretation: Interpretation,
+        day: date,
+        entries: list[_Entry],
+        failures: list[tuple[_Entry, CheckFailure]],
+        exchange: _Exchange,
+    ) -> tuple[list[_Entry], Interpretation, date, LlmCallResult]:
+        """At most one corrective re-ask (one run on the retry model, no format retry, no fallback).
+
+        Returns what the proposal is built from. A fixed answer replaces the first; a still inconsistent answer or
+        a failed re-ask leaves the items marked `(값 확인 필요)` for the user to decide at `/ok`.
+        """
+        first = exchange.calls[-1]
+        codes = list(dict.fromkeys(failure.code for _entry, failure in failures))
+        model = self._settings.provider_settings(first.provider).retry_model or first.model
+        counts = ", ".join(f"{code.value} x{sum(1 for _e, f in failures if f.code is code)}" for code in codes)
+        self._log(f"llm interpret recheck: {counts}; asking again ({model or 'default model'})")
+        second = self._call(
+            chat_id,
+            SchemaName.INTERPRET,
+            PromptTask.INTERPRET,
+            words,
+            photo,
+            self._catalog_data(chat_id, words),
+            parse_interpretation,
+            web_search=self._web_search_on() and first.provider is ProviderName.CLAUDE,
+            recheck_note=recheck_note([(entry.index, failure) for entry, failure in failures]),
+            pin=RunPin(model),
+            provider=first.provider,
+        )
+        exchange.calls.append(second)
+        answer = self._usable_second_answer(chat_id, second, photo_digest)
+        if answer is None:
+            outcome = RecheckOutcome.REASK_FAILED
+            detail = "unusable answer" if second.ok else second.outcome.replace("_", " ")
+            self._log(f"llm interpret recheck: re-ask failed ({detail}); shown with a marker")
+            final = (_mark(entries, failures), interpretation, day, first)
+        else:
+            candidate, candidate_day, candidate_entries = answer
+            exchange.outputs["interpret_first"] = interpretation.document
+            exchange.outputs["interpret"] = candidate.document
+            exchange.summary = candidate.memory_summary or exchange.summary
+            again = _failures(candidate_entries)
+            if again:
+                outcome = RecheckOutcome.STILL_INCONSISTENT
+                self._log("llm interpret recheck: still inconsistent; shown with a marker")
+            else:
+                outcome = RecheckOutcome.FIXED
+                self._log("llm interpret recheck: fixed")
+            final = (_mark(candidate_entries, again), candidate, candidate_day, second)
+        exchange.recheck = {"reasons": [code.value for code in codes], "outcome": outcome.value}
+        return final
+
+    def _usable_second_answer(
+        self, chat_id: int, second: LlmCallResult, photo_digest: str | None
+    ) -> tuple[Interpretation, date, list[_Entry]] | None:
+        """The re-ask's answer when it is still an eaten meal log with a date and items; else None."""
+        if not second.ok:
+            return None
+        candidate: Interpretation = second.document
+        if candidate.intent is not Intent.MEAL_LOG or candidate.tense is Tense.PLANNED:
+            return None
+        if photo_digest is not None and candidate.photo_kind is not PhotoKind.MEAL_PHOTO:
+            return None
+        day = resolve_date_expression(candidate.date_expression, self._today())
+        if day is None:
+            return None
+        entries = self._link_items(chat_id, candidate)
+        return (candidate, day, entries) if entries else None
+
+    # --- storing proposals ---------------------------------------------------------------------------------
+
+    def _store_proposal(
+        self,
+        chat_id: int,
+        exchange: _Exchange,
+        day: date,
+        default_meal: MealType | None,
+        entries: Sequence[_Entry],
+        source: NutritionSourceType,
+        reference: str,
+        label: str | None,
+    ) -> None:
+        """One meal: the v2 proposal. Two or more meals: one proposal that `/ok_` records meal by meal."""
+        meals: dict[MealType, list[_Entry]] = {}
+        slot_from_time = False
+        for group in group_meals(entries, default_meal):
+            meal_type = group.meal_type
+            if meal_type is None:
+                meal_type, slot_from_time = meal_slot_for(self._now().time()), True
+            meals.setdefault(meal_type, []).extend(group.items)
+        searches = _searches(exchange.calls) or 0
+        if len(meals) == 1:
+            ((meal_type, items),) = meals.items()
+            self._store_meal_proposal(
+                chat_id,
+                exchange,
+                day,
+                meal_type,
+                items,
+                [],
+                source,
+                reference,
+                label,
+                slot_from_time,
+                searches=searches,
+            )
+            return
+        commands = []
+        blocks = []
+        for meal_type, items in meals.items():
+            duplicates = self._existing_meals(chat_id, day, meal_type)
+            head = ("nutrition", "log", "--date", day.isoformat(), "--meal", meal_type.value)
+            tail = ("--additional",) if duplicates else ()
+            argv_ok = (*head, *(arg for entry in items for arg in entry.argv(source, reference, True)), *tail)
+            argv_plain = (*head, *(arg for entry in items for arg in entry.argv(source, reference, False)), *tail)
+            has_estimate = any(entry.estimate for entry in items)
+            commands.append(MealCommand(meal_type, argv_ok, argv_plain if has_estimate else ()))
+            blocks.append(MealBlockView(meal_type, duplicates, _item_views(items)))
+        proposal = self._new_proposal(chat_id, ProposalKind.MEAL, meals=tuple(commands), day=day)
+        exchange.proposal = proposal.token
+        view = MultiMealProposalView(
+            proposal.token, day, tuple(blocks), any(command.argv_plain for command in commands), searches
+        )
+        exchange.reply = self._replies.multi_proposal(view)
 
     def _catalog_entry(
         self, food_text: str, quantity: Decimal | None, unit: QuantityUnit | None, quantity_estimated: bool
@@ -520,6 +806,7 @@ class TelegramLlmHandler:
         slot_from_time: bool,
         *,
         failed_photo: bool = False,
+        searches: int = 0,
     ) -> None:
         duplicates = self._existing_meals(chat_id, day, meal_type)
         head = ("nutrition", "log", "--date", day.isoformat(), "--meal", meal_type.value)
@@ -536,10 +823,6 @@ class TelegramLlmHandler:
             day=day,
         )
         exchange.proposal = proposal.token
-        items = tuple(
-            ProposalItemView(entry.display(), entry.quantity_estimated, entry.reason, entry.estimate)
-            for entry in entries
-        )
         view = MealProposalView(
             proposal.token,
             meal_type,
@@ -547,10 +830,11 @@ class TelegramLlmHandler:
             label,
             slot_from_time,
             duplicates,
-            items,
+            _item_views(entries),
             tuple(dropped),
             has_estimate,
             failed_photo,
+            searches,
         )
         exchange.reply = self._replies.proposal(view)
 
@@ -1006,6 +1290,9 @@ class TelegramLlmHandler:
         if refused is not None:  # not consumed: it can be confirmed once the migration is applied
             return self._simple(chat_id, update_id, kind, refused, proposal=proposal.token, typed=typed)
         self._update(state, proposal.with_state(ProposalState.USED))  # before it runs: at most once
+        if proposal.meals:
+            self._log(f"chat {chat_id}: proposal {proposal.token} confirmed ({len(proposal.meals)} meals)")
+            return self._run_meals(chat_id, update_id, proposal, command.action, kind, typed)
         argv = proposal.argv_plain if command.action == "plain" else proposal.argv_ok
         edit = proposal.kind is ProposalKind.EDIT
         history_kind = "edit" if edit else kind
@@ -1038,6 +1325,71 @@ class TelegramLlmHandler:
 
         return RunConfirmed(invocation, on_outcome)
 
+    def _run_meals(
+        self, chat_id: int, update_id: int, proposal: Proposal, action: str, kind: str, typed: str
+    ) -> LlmAction:
+        """`/ok_` or `/plain_` of a multi-meal proposal: one `nutrition log` per meal, in order, stopping at the
+        first failure. Meals already recorded stay recorded (each has its own undo line)."""
+        plain = action == "plain"
+        meals = proposal.meals
+        invocations = tuple(
+            CliInvocation(
+                "plain" if plain else "ok",
+                (meal.argv_plain or meal.argv_ok) if plain else meal.argv_ok,
+                True,
+                False,
+                True,
+            )
+            for meal in meals
+        )
+
+        def on_done(steps: tuple[SequenceStep, ...]) -> str:
+            blocks: list[str] = []
+            recorded: list[str] = []
+            failed: MealType | None = None
+            failed_code = 0
+            for meal, step in zip(meals, steps, strict=False):
+                if step.ok:
+                    blocks.append(step.text)
+                    meal_id = _recorded_meal_id(step.outcome.stdout) if step.outcome is not None else None
+                    if meal_id is not None:
+                        recorded.append(meal_id)
+                else:
+                    failed = meal.meal_type
+                    failed_code = step.outcome.exit_code if step.outcome is not None and step.outcome.exit_code else 1
+                    blocks.append(sequence_failed_line(meal.meal_type, step.text))
+            not_run = [meal.meal_type for meal in meals[len(steps) :]]
+            if failed is not None and not_run:
+                blocks[-1] = f"{blocks[-1]}\n{sequence_not_run_line(not_run)}\n{SEQUENCE_HINT}"
+            text = "\n\n".join(blocks)
+            if recorded:
+                totals = self._totals_line(chat_id)
+                if totals is not None:
+                    text = f"{text}\n{totals}" if failed is not None else f"{text}\n\n{totals}"
+            result = {
+                "exit_code": failed_code,
+                "meal_id": recorded[0] if recorded else None,
+                "meal_ids": recorded,
+                "failed": failed.value if failed is not None else None,
+                "not_run": [meal.value for meal in not_run],
+            }
+            self._append_history(
+                chat_id,
+                history_entry(
+                    update_id=update_id,
+                    at=self._at(),
+                    chat_id=chat_id,
+                    kind=kind,
+                    text=typed,
+                    reply=text,
+                    proposal=proposal.token,
+                    result=result,
+                ),
+            )
+            return text
+
+        return RunConfirmedSequence(invocations, on_done)
+
     def _proposal_refusal(self, proposal: Proposal | None, command: ProposalCommand) -> str | None:
         if proposal is None:
             return PROPOSAL_UNKNOWN_TEXT
@@ -1050,7 +1402,7 @@ class TelegramLlmHandler:
             return PROPOSAL_CANCELLED_TEXT
         if int(self._now().timestamp()) >= proposal.expires_unix:
             return PROPOSAL_EXPIRED_TEXT
-        if command.action == "plain" and not proposal.argv_plain:
+        if command.action == "plain" and not proposal.plain_available:
             return PROPOSAL_NO_PLAIN_TEXT.format(token=proposal.token)
         return None
 
@@ -1171,6 +1523,11 @@ class TelegramLlmHandler:
         photo: bytes | None,
         data: Sequence[tuple[str, Any]],
         validate: Callable[[Any], Any],
+        *,
+        web_search: bool = False,
+        recheck_note: str | None = None,
+        pin: RunPin | None = None,
+        provider: ProviderName | None = None,
     ) -> LlmCallResult:
         guide, reason = self._coach.read()
         if reason is not None:
@@ -1184,10 +1541,33 @@ class TelegramLlmHandler:
             data=[(label, _data_text(document)) for label, document in data],
             message=words,
             has_photo=photo is not None,
+            web_search_max=self._settings.web_search_max if web_search else None,
+            recheck_note=recheck_note,
         )
-        result = self._provider.call(LlmRequest(prompt, schema, photo, validate), self.active_provider())
+        request = LlmRequest(prompt, schema, photo, validate, web_search=web_search, pin=pin)
+        result = self._provider.call(request, provider if provider is not None else self.active_provider())
         self._log(f"chat {chat_id}: llm {schema.value} -> {result.outcome} ({result.provider.value})")
         return result
+
+    def _web_search_on(self) -> bool:
+        """Interpret calls (text and photo) offer the search tool when it is on and Claude can answer."""
+        if not self._settings.web_search:
+            return False
+        return ProviderName.CLAUDE in (self.active_provider(), self._settings.fallback_provider)
+
+    def _catalog_data(self, chat_id: int, words: str) -> tuple[tuple[str, Any], ...]:
+        """The `[카탈로그]` data pair of an interpret call: the foods the LLM may link by ID (none when unreadable)."""
+        try:
+            profiles = self._catalog.list_all()
+        except Exception as exc:  # exact lookup still works without the list
+            self._log(f"chat {chat_id}: catalog list not read ({type(exc).__name__})")
+            return ()
+        prompt = catalog_prompt(profiles, words)
+        if prompt is None:
+            return ()
+        if prompt.shown < prompt.total:
+            self._log(f"chat {chat_id}: catalog list cut: {prompt.shown} of {prompt.total}")
+        return (("카탈로그", prompt.text),)
 
     def _memory_block(self, chat_id: int) -> str | None:
         try:
@@ -1244,6 +1624,8 @@ class TelegramLlmHandler:
             proposal=exchange.proposal,
             retried=last.retried if last is not None else None,
             attempts=_attempts_document(last),
+            web_searches=_searches(exchange.calls),
+            recheck=exchange.recheck,
         )
         self._append_history(chat_id, entry)
         self._log(
@@ -1339,6 +1721,19 @@ class _Entry:
     estimate: NutrientRanges
     quantity_estimated: bool
     reason: str | None
+    hint: str | None = None
+    """A command that registers the missing unit (shown under the item)."""
+    via: str | None = None
+    """The user's own word, when the LLM's catalog ID linked the item (shown as `← "word"`)."""
+    source: str | None = None
+    assumption: str | None = None
+    index: int = 0
+    """The item's 1-based number in the LLM's answer (for the re-ask note)."""
+    meal_type: MealType | None = None
+    own_quantity: Decimal | None = None
+    """The quantity the user gave a general item (the assumption may mention it)."""
+    check: tuple[CheckCode, ...] = ()
+    """The numeric checks this estimate still fails after the re-check: it is marked `(값 확인 필요)`."""
 
     def argv(self, source: NutritionSourceType, reference: str, with_estimate: bool) -> tuple[str, ...]:
         if self.food_id is not None and self.quantity is not None and self.unit is not None:
@@ -1349,13 +1744,56 @@ class _Entry:
         if with_estimate and self.estimate:
             args.append(f"--general-estimate={format_general_estimate(source, self.estimate)}")
             if reference:
-                args.append(f"--general-estimate-ref={reference}")
+                note = estimate_reference(reference, self.source, self.assumption, check_needed=bool(self.check))
+                args.append(f"--general-estimate-ref={note}")
         return tuple(args)
 
     def display(self) -> str:
         if self.food_id is not None:
-            return self.memo or self.food_id
+            text = self.memo or self.food_id
+            return f'{text} ← "{self.via}"' if self.via else text
         return f"일반식 (메모: {self.memo})" if self.memo else "일반식"
+
+
+def _item_views(entries: Sequence[_Entry]) -> tuple[ProposalItemView, ...]:
+    return tuple(
+        ProposalItemView(
+            entry.display(),
+            entry.quantity_estimated,
+            entry.reason,
+            entry.estimate,
+            entry.hint,
+            entry.assumption if entry.food_id is None else None,
+            entry.source if entry.food_id is None else None,
+            entry.check,
+        )
+        for entry in entries
+    )
+
+
+def _failures(entries: Sequence[_Entry]) -> list[tuple[_Entry, CheckFailure]]:
+    """The failed numeric checks of the entries that will be stored as general estimates."""
+    return [
+        (entry, failure)
+        for entry in entries
+        if entry.food_id is None and entry.estimate
+        for failure in check_estimate(entry.estimate, assumption=entry.assumption, quantity=entry.own_quantity)
+    ]
+
+
+def _mark(entries: Sequence[_Entry], failures: Sequence[tuple[_Entry, CheckFailure]]) -> list[_Entry]:
+    """The entries with the codes they fail attached (those that pass are the same objects)."""
+    marked = []
+    for entry in entries:
+        codes = tuple(dict.fromkeys(failure.code for failed, failure in failures if failed.index == entry.index))
+        marked.append(replace(entry, check=codes) if codes else entry)
+    return marked
+
+
+def _searches(calls: Sequence[LlmCallResult]) -> int | None:
+    """The web searches of all LLM calls of one message; None when no call was offered the tool."""
+    counts = [call.web_searches for call in calls if call.web_searches is not None]
+    return sum(counts) if counts else None
 
 
 def _bounds(ranges: NutrientRanges, nutrient: NutrientField) -> tuple[Decimal, Decimal] | None:

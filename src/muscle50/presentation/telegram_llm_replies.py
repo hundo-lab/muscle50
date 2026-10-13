@@ -18,18 +18,25 @@ from muscle50.application.telegram_llm import (
     MealProposalView,
     MenuLineView,
     MenuView,
+    MultiMealProposalView,
+    ProposalItemView,
     ReplyText,
 )
 from muscle50.domain.llm_today_totals import amount_text
 from muscle50.domain.menu_ranking import RankMode
 from muscle50.domain.nutrition import NutrientField
 from muscle50.domain.telegram_llm import NutrientRanges
+from muscle50.domain.telegram_llm_check import CHECK_REASON_TEXTS, OUTCOME_HISTORY_TEXTS, RecheckOutcome
 from muscle50.domain.telegram_llm_prompt import (
+    CHECK_LINE_HEAD,
+    CHECK_MARKER,
     HISTORY_EMPTY_TEXT,
     MEAL_NAMES,
     duplicate_text,
+    multi_proposal_head,
     photo_failed_head,
     proposal_head,
+    web_search_line,
 )
 from muscle50.presentation.telegram_format import BotReply, reply_messages
 
@@ -48,6 +55,7 @@ _KIND_NAMES = {
     "eat": "메뉴 고르기",
     "edit": "수정 확인",
 }
+MEAL_NAMES_BY_VALUE = {meal.value: name for meal, name in MEAL_NAMES.items()}
 _INTENT_NAMES = {
     "meal_log": "식사 기록",
     "question": "질문",
@@ -69,6 +77,9 @@ class TelegramLlmReplies:
 
     def proposal(self, view: MealProposalView) -> ReplyText:
         return proposal_reply(view)
+
+    def multi_proposal(self, view: MultiMealProposalView) -> ReplyText:
+        return multi_proposal_reply(view)
 
     def menu(self, view: MenuView) -> ReplyText:
         return menu_reply(view)
@@ -97,18 +108,52 @@ def proposal_reply(view: MealProposalView) -> ReplyText:
     if view.duplicates:
         lines.append(duplicate_text(view.meal_type, view.duplicates))
     for number, item in enumerate(view.items, start=1):
-        text = f"{number}. {item.text}"
-        if item.quantity_estimated:
-            text += " (수량 추정)"
-        if item.reason:
-            text += f" - {item.reason}"
-        lines.append(text)
-        if item.estimate:
-            lines.append(f"   추정: {ranges_text(item.estimate)} (estimated)")
+        lines.extend(_item_lines(number, item, indent=""))
     lines.extend(view.dropped)
+    if view.searches:
+        lines.append(web_search_line(view.searches))
     token = view.token
     plain = f"   일반식만 기록(값 없이): /plain_{token}" if view.plain else ""
     return ReplyText("\n".join(lines), (f"기록: /ok_{token}{plain}   취소: /no_{token}",))
+
+
+def multi_proposal_reply(view: MultiMealProposalView) -> ReplyText:
+    """Two or more meals: one block per meal; one `/ok_` records them all, meal by meal."""
+    lines = [multi_proposal_head(view.day.isoformat()[5:], len(view.meals))]
+    for block in view.meals:
+        lines.append(MEAL_NAMES[block.meal_type])
+        if block.duplicates:
+            lines.append(f"  {duplicate_text(block.meal_type, block.duplicates)}")
+        for number, item in enumerate(block.items, start=1):
+            lines.extend(_item_lines(number, item, indent="  "))
+    if view.searches:
+        lines.append(web_search_line(view.searches))
+    token = view.token
+    plain = f"   값 없이 일반식만 기록: /plain_{token}" if view.plain else ""
+    return ReplyText("\n".join(lines), (f"기록: /ok_{token}{plain}   취소: /no_{token}",))
+
+
+def _item_lines(number: int, item: ProposalItemView, *, indent: str) -> list[str]:
+    """The item line and its detail lines (estimate, check reasons, assumption, source, unit hint)."""
+    text = f"{indent}{number}. {item.text}"
+    if item.quantity_estimated:
+        text += " (수량 추정)"
+    if item.reason:
+        text += f" - {item.reason}"
+    lines = [text]
+    sub = f"{indent}   "
+    if item.estimate:
+        estimate = f"{sub}추정: {ranges_text(item.estimate)} (estimated)"
+        lines.append(f"{estimate} {CHECK_MARKER}" if item.check else estimate)
+    if item.check:
+        lines.append(f"{sub}{CHECK_LINE_HEAD}{', '.join(CHECK_REASON_TEXTS[code] for code in item.check)}")
+    if item.assumption:
+        lines.append(f"{sub}가정: {item.assumption}")
+    if item.source:
+        lines.append(f"{sub}출처: {item.source}")
+    if item.hint:
+        lines.append(f"{sub}{item.hint}")
+    return lines
 
 
 def menu_reply(view: MenuView) -> ReplyText:
@@ -184,14 +229,24 @@ def history_text(entries: Sequence[dict[str, Any]]) -> str:
             head.append(_INTENT_NAMES.get(entry["intent"], entry["intent"]))
         if entry["provider"]:
             head.append(f"{entry['provider']} {entry['model'] or '기본'}{_retry_note(entry)}")
+        if entry.get("web_searches"):
+            head.append(web_search_line(entry["web_searches"]))
+        recheck = _recheck_outcome(entry)
+        if recheck is not None:
+            head.append(f"재확인({OUTCOME_HISTORY_TEXTS[recheck]})")
         lines = [" · ".join(head), f"나: {_user_text(entry, photo_word='사진', not_kept='보관 안 함')}"]
         if entry["reply"]:
             lines.append(f"bot: {entry['reply']}")
         result = entry["result"]
         if isinstance(result, dict):
+            recorded = ", ".join(result["meal_ids"]) if result.get("meal_ids") else (result.get("meal_id") or "")
             if result.get("exit_code") == 0:
                 verb = "수정" if entry["kind"] == "edit" else "기록"
-                lines.append(f"결과: {verb} {result.get('meal_id') or ''}".rstrip())
+                lines.append(f"결과: {verb} {recorded}".rstrip())
+            elif result.get("meal_ids"):
+                failed_value = str(result.get("failed") or "")
+                failed = MEAL_NAMES_BY_VALUE.get(failed_value, failed_value)
+                lines.append(f"결과: 일부 기록 {recorded} (실패: {failed})")
             else:
                 lines.append(f"결과: 실패 (exit {result.get('exit_code')})")
         blocks.append("\n".join(lines))
@@ -216,12 +271,19 @@ def render_telegram_history(entries: Sequence[dict[str, Any]]) -> str:
                 head.append(f"{entry['provider']}/{entry['model'] or 'default'}")
             if entry["provider_result"]:
                 head.append(str(entry["provider_result"]))
+        if entry.get("web_searches") is not None:
+            head.append(f"web={entry['web_searches']}")
+        recheck = _recheck_outcome(entry)
+        if recheck is not None:
+            head.append(f"recheck={recheck.value}")
         if entry["proposal"]:
             head.append(f"proposal={entry['proposal']}")
         result = entry["result"]
         if isinstance(result, dict):
             head.append(f"exit={result.get('exit_code')}")
-            if result.get("meal_id"):
+            if result.get("meal_ids"):
+                head.append(f"meals={','.join(result['meal_ids'])}")
+            elif result.get("meal_id"):
                 head.append(f"meal={result['meal_id']}")
         lines.append(" ".join(head))
         lines.append(f"  user: {_user_text(entry, photo_word='photo', not_kept='not kept')}")
@@ -234,6 +296,12 @@ def render_telegram_history(entries: Sequence[dict[str, Any]]) -> str:
 
 def render_telegram_history_json(entries: Sequence[dict[str, Any]]) -> str:
     return json.dumps({"entries": list(entries)}, indent=2, ensure_ascii=True)
+
+
+def _recheck_outcome(entry: dict[str, Any]) -> RecheckOutcome | None:
+    """The numeric re-check outcome of a v2.2 line; None for older lines and for messages that needed none."""
+    recheck = entry.get("recheck")
+    return RecheckOutcome(recheck["outcome"]) if isinstance(recheck, dict) else None
 
 
 def _retry_note(entry: dict[str, Any]) -> str:

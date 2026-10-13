@@ -268,7 +268,34 @@ class RunConfirmed:
     on_outcome: Callable[[CommandOutcome, str], str]
 
 
-LlmAction = LlmReply | RunConfirmed
+@dataclass(frozen=True)
+class SequenceStep:
+    """One command of a confirmed multi-meal proposal and what it produced."""
+
+    invocation: CliInvocation
+    outcome: CommandOutcome | None
+    """None when an unexpected exception stopped the command."""
+    text: str
+    """What a single run would send: the CLI's stdout (or `오류:` text) plus the undo line after a success."""
+    error: str | None = None
+    """The exception type name when `outcome` is None."""
+
+    @property
+    def ok(self) -> bool:
+        return self.outcome is not None and self.outcome.exit_code == 0 and not self.outcome.usage_error
+
+
+@dataclass(frozen=True)
+class RunConfirmedSequence:
+    """Telegram LLM v2.2: a confirmed multi-meal proposal. The commands run in order through the same path as
+    `RunConfirmed`; the first one that fails (non-zero exit, usage error or exception) stops the rest. `on_done`
+    gets the steps that ran and returns the one reply to send (and records the history)."""
+
+    invocations: tuple[CliInvocation, ...]
+    on_done: Callable[[tuple[SequenceStep, ...]], str]
+
+
+LlmAction = LlmReply | RunConfirmed | RunConfirmedSequence
 
 
 class LlmMessageHandler(Protocol):
@@ -426,6 +453,8 @@ class RunTelegramBot:
         if isinstance(action, LlmReply):
             self._send_all(chat_id, action.messages)
             return True, False
+        if isinstance(action, RunConfirmedSequence):
+            return True, self._run_sequence(chat_id, action)
         return True, self._run_command(chat_id, action.invocation, on_outcome=action.on_outcome)
 
     def _remember(self, update_id: int) -> None:
@@ -500,6 +529,62 @@ class RunTelegramBot:
         if on_outcome is not None:
             text = on_outcome(outcome, text)
         self._reply(chat_id, text)
+        return False
+
+    def _run_sequence(self, chat_id: int, action: RunConfirmedSequence) -> bool:
+        """Runs a confirmed multi-meal proposal; True when the bot must stop (Ctrl+C in a command).
+
+        Each command is run like `_run_command` runs a typed one (same runner, same reply text, same undo line).
+        The proposal is already marked used, so a repeated `/ok_` cannot run anything again; a failure stops the
+        sequence and the meals already recorded stay recorded.
+        """
+        first = action.invocations[0]
+        if first.migrates:
+            pending = self._pending_migrations()
+            if pending is None:
+                self._log(f"chat {chat_id}: /{first.command} not run (cannot read schema_migrations)")
+                self._reply(chat_id, MIGRATION_STATUS_UNKNOWN_TEXT)
+                return False
+            if pending:
+                numbers = ", ".join(f"{version:03d}" for version in pending)
+                self._log(f"chat {chat_id}: /{first.command} not run (migration {numbers} not applied)")
+                self._reply(chat_id, pending_migration_text(pending))
+                return False
+        steps: list[SequenceStep] = []
+        for position, invocation in enumerate(action.invocations, start=1):
+            name = invocation.command
+            self._running = (name, chat_id)
+            try:
+                outcome = self._commands.run(invocation.argv)
+            except Exception as exc:
+                self._running = None
+                self._log(
+                    f"chat {chat_id}: /{name} {position}/{len(action.invocations)} failed with {type(exc).__name__}"
+                )
+                self._log("".join(traceback.format_exception(exc)).rstrip("\n"))
+                steps.append(
+                    SequenceStep(invocation, None, unexpected_error_text(type(exc).__name__), type(exc).__name__)
+                )
+                break
+            if outcome.exit_code == 130:
+                return True
+            self._running = None
+            self._log(f"chat {chat_id}: /{name} {position}/{len(action.invocations)} -> exit {outcome.exit_code}")
+            if outcome.usage_error:
+                text = usage_reply_text(UsageReply(UsageReason.MALFORMED, name), llm_enabled=self._llm is not None)
+            else:
+                text = _reply_text(outcome)
+                if invocation.adds_undo and outcome.exit_code == 0:
+                    meal_id = _recorded_meal_id(outcome.stdout)
+                    if meal_id is None:
+                        self._log(f"chat {chat_id}: /{name} reply has no undo line (headline not recognised)")
+                    else:
+                        text = f"{text}\n{undo_line(meal_id)}"
+            step = SequenceStep(invocation, outcome, text)
+            steps.append(step)
+            if not step.ok:
+                break
+        self._reply(chat_id, action.on_done(tuple(steps)))
         return False
 
     def _refresh_all(self, chat_id: int, invocation: CliInvocation) -> bool:

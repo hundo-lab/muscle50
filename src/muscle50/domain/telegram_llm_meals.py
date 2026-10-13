@@ -10,6 +10,7 @@ from __future__ import annotations
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Protocol
 
 from muscle50.domain.nutrition import (
     GENERAL_MEAL_FOOD_ID,
@@ -18,7 +19,6 @@ from muscle50.domain.nutrition import (
     NutrientField,
     QuantityUnit,
 )
-from muscle50.domain.telegram_llm import InterpretItem
 
 MEAL_WORDS = frozenset(
     {
@@ -55,11 +55,16 @@ _PUNCTUATION = ".,!?~:;/\\\"'()[]{}-_"
 # --- meals -----------------------------------------------------------------------------------------------
 
 
+class HasMealType(Protocol):
+    @property
+    def meal_type(self) -> MealType | None: ...
+
+
 @dataclass(frozen=True)
-class MealGroup:
+class MealGroup[T: HasMealType]:
     meal_type: MealType | None
     """None: the message named no meal (the bot picks the slot from the time)."""
-    items: tuple[InterpretItem, ...]
+    items: tuple[T, ...]
 
 
 def is_meal_word(text: str) -> bool:
@@ -71,11 +76,11 @@ def is_meal_word(text: str) -> bool:
     return squeezed in MEAL_WORDS
 
 
-def group_meals(items: Sequence[InterpretItem], default: MealType | None) -> tuple[MealGroup, ...]:
+def group_meals[T: HasMealType](items: Sequence[T], default: MealType | None) -> tuple[MealGroup[T], ...]:
     """The items grouped by meal: an item's own `meal_type`, else ``default``. Items of one meal are merged
     (so the proposal has one `nutrition log` per meal) and groups are ordered breakfast to other, then the
     group with no meal."""
-    by_meal: dict[MealType | None, list[InterpretItem]] = {}
+    by_meal: dict[MealType | None, list[T]] = {}
     for item in items:
         by_meal.setdefault(item.meal_type or default, []).append(item)
     ordered: list[MealType | None] = [meal for meal in _MEAL_ORDER if meal in by_meal]

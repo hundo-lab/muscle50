@@ -23,6 +23,7 @@ from muscle50.domain.telegram_llm import (
     EMPTY_STATE,
     PROPOSAL_TOKEN,
     LlmState,
+    MealCommand,
     MenuChoice,
     Proposal,
     ProposalKind,
@@ -109,6 +110,14 @@ def _proposal_document(proposal: Proposal) -> dict[str, Any]:
         "reference": proposal.reference,
         "meal_id": proposal.meal_id,
         "label": proposal.label,
+        "meals": [
+            {
+                "meal_type": meal.meal_type.value,
+                "argv_ok": list(meal.argv_ok),
+                "argv_plain": list(meal.argv_plain),
+            }
+            for meal in proposal.meals
+        ],
     }
 
 
@@ -155,6 +164,15 @@ def _proposal(item: dict[str, Any]) -> Proposal:
         reference=item["reference"],
         meal_id=item["meal_id"],
         label=str(item["label"]),
+        # A state file written before multi-meal proposals (v2.1) has no `meals` key: its proposals still load.
+        meals=tuple(
+            MealCommand(
+                meal_type=MealType(meal["meal_type"]),
+                argv_ok=_strings(meal["argv_ok"]),
+                argv_plain=_strings(meal["argv_plain"]),
+            )
+            for meal in item.get("meals", [])
+        ),
     )
 
 
