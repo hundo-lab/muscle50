@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 import test_telegram_bot as v1
-from test_telegram_llm_domain import NULL_EDIT, NULL_ESTIMATE, interpretation
+from test_telegram_llm_domain import ITEM_ESTIMATE, NEW_ITEM_KEYS, NULL_EDIT, NULL_ESTIMATE, interpretation
 
 import muscle50.cli as cli
 from muscle50.application.llm_provider import LlmAttempt, LlmCallResult, LlmRequest, SchemaName
@@ -197,7 +197,8 @@ def _item(food: str, quantity: float | None, unit: str | None, **fields: Any) ->
         "unit": unit,
         "quantity_estimated": False,
         "memo": None,
-        "estimate": dict(NULL_ESTIMATE),
+        "estimate": dict(ITEM_ESTIMATE),
+        **NEW_ITEM_KEYS,
     }
     item.update(fields)
     return item
@@ -311,23 +312,25 @@ def test_unmatched_ambiguous_and_missing_unit_items_are_never_linked(
             [
                 "이렇게 기록할까요? (점심, 10-06)",
                 "1. 일반식 (메모: 오징어볶음 1 serving) - 카탈로그에 없음",
+                "   추정: kcal 300~400, 단백질 10~20 g (estimated)",
                 "2. 일반식 (메모: apple 1 count) - 이름이 여러 음식에 맞음",
+                "   추정: kcal 300~400, 단백질 10~20 g (estimated)",
                 "3. 일반식 (메모: 햇반) - 수량·단위를 말하지 않음",
+                "   추정: kcal 300~400, 단백질 10~20 g (estimated)",
                 "빠짐: 바나나 2 g - 이 음식은 count 기준 값만 있습니다(단위 변환 없음). 1 g 값을 등록: muscle50 "
                 "nutrition food fact add banana --per 1 g ... --new-unit",
-                "기록: /ok_7f3a   취소: /no_7f3a",
+                "기록: /ok_7f3a   일반식만 기록(값 없이): /plain_7f3a   취소: /no_7f3a",
             ]
         )
     ]
     state = json.loads((home / "config" / "telegram_llm_state.json").read_text(encoding="utf-8"))
+    ref = "--general-estimate-ref=telegram-llm text (claude sonnet)"
+    estimate = "--general-estimate=language_estimate:kcal=300-400,protein=10-20"
     assert state["proposals"][0]["argv_ok"] == [
         *LUNCH_ARGV[:6],
-        "--general",
-        "--general-note=오징어볶음 1 serving",
-        "--general",
-        "--general-note=apple 1 count",
-        "--general",
-        "--general-note=햇반",
+        *("--general", "--general-note=오징어볶음 1 serving", estimate, ref),
+        *("--general", "--general-note=apple 1 count", estimate, ref),
+        *("--general", "--general-note=햇반", estimate, ref),
     ]
 
 

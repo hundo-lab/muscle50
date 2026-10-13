@@ -92,7 +92,7 @@ class SuggestCategory(StrEnum):
 KCAL_LIMIT = Decimal(3000)
 GRAM_LIMIT = Decimal(300)
 QUANTITY_LIMIT = Decimal(10000)
-MAX_ITEMS = 10
+MAX_ITEMS = 20
 MAX_MENU_ITEMS = 15
 MAX_TOPICS = 3
 MAX_SUGGESTIONS = 3
@@ -106,6 +106,9 @@ NAME_MAX = 40
 CORNER_MAX = 40
 DESCRIPTION_MAX = 80
 NOTE_MAX = 80
+SOURCE_MAX = 30
+ASSUMPTION_MAX = 80
+FOOD_ID_MAX = 60
 
 _ESTIMATE_FIELDS: tuple[tuple[NutrientField, str, Decimal], ...] = (
     (NutrientField.CALORIES_KCAL, "kcal", KCAL_LIMIT),
@@ -113,6 +116,9 @@ _ESTIMATE_FIELDS: tuple[tuple[NutrientField, str, Decimal], ...] = (
     (NutrientField.CARBOHYDRATE_G, "carbs", GRAM_LIMIT),
     (NutrientField.FAT_G, "fat", GRAM_LIMIT),
 )
+
+_REQUIRED_ESTIMATES = frozenset({"kcal", "protein"})
+"""Every meal item carries a kcal and a protein range (catalog items too, as the fallback)."""
 
 NutrientRanges = tuple[tuple[NutrientField, Decimal, Decimal], ...]
 """(nutrient, minimum, maximum) in NutrientField order; nutrients not estimated are left out."""
@@ -130,6 +136,13 @@ class InterpretItem:
     quantity_estimated: bool
     memo: str | None
     estimate: NutrientRanges
+    meal_type: MealType | None = None
+    """The meal the user named for this food (the top-level `meal_type` is the default)."""
+    food_id: str | None = None
+    """The catalog ID the LLM suggests; the bot checks it and the user confirms."""
+    source: str | None = None
+    """A site name (never a URL) when a web search was used."""
+    assumption: str | None = None
 
 
 @dataclass(frozen=True)
@@ -202,13 +215,17 @@ def parse_interpretation(document: Any) -> Interpretation:
     menu_items = _array(menu["items"], "menu.items", MAX_MENU_ITEMS)
     slots = _array(menu["slots_visible"], "menu.slots_visible", 3)
     edit = _object(root["edit"], "edit", 6)
+    parsed_items = tuple(_item(item, index) for index, item in enumerate(items, start=1))
+    default_meal = _optional_enum(MealType, root["meal_type"], "meal_type")
+    if default_meal is None and len({item.meal_type is None for item in parsed_items}) > 1:
+        raise LlmOutputError("items must all name a meal or none of them may (no meal_type to fall back on)")
     return Interpretation(
         intent=_enum(Intent, root["intent"], "intent"),
         photo_kind=_enum(PhotoKind, root["photo_kind"], "photo_kind"),
-        meal_type=_optional_enum(MealType, root["meal_type"], "meal_type"),
+        meal_type=default_meal,
         date_expression=_enum(DateExpression, root["date_expression"], "date_expression"),
         tense=_enum(Tense, root["tense"], "tense"),
-        items=tuple(_item(item, index) for index, item in enumerate(items, start=1)),
+        items=parsed_items,
         question_topics=tuple(dict.fromkeys(_enum(Topic, topic, "question_topics") for topic in topics)),
         slots_visible=tuple(dict.fromkeys(_slot(slot) for slot in slots)),
         menu_items=tuple(_menu_item(item, index) for index, item in enumerate(menu_items, start=1)),
@@ -264,7 +281,7 @@ def parse_suggestions(document: Any) -> SuggestResult:
 
 def _item(value: Any, index: int) -> InterpretItem:
     where = f"items[{index}]"
-    entry = _object(value, where, 7)
+    entry = _object(value, where, 11)
     quantity_estimated = entry["quantity_estimated"]
     if type(quantity_estimated) is not bool:
         raise LlmOutputError(f"{where}.quantity_estimated must be a boolean")
@@ -275,8 +292,21 @@ def _item(value: Any, index: int) -> InterpretItem:
         unit=_optional_enum(QuantityUnit, entry["unit"], f"{where}.unit"),
         quantity_estimated=quantity_estimated,
         memo=_optional_text(entry["memo"], f"{where}.memo", MEMO_TEXT_MAX),
-        estimate=_estimate(entry["estimate"], f"{where}.estimate"),
+        estimate=_estimate(entry["estimate"], f"{where}.estimate", required=_REQUIRED_ESTIMATES),
+        meal_type=_optional_enum(MealType, entry["meal_type"], f"{where}.meal_type"),
+        food_id=_optional_text(entry["food_id"], f"{where}.food_id", FOOD_ID_MAX),
+        source=_no_url(_optional_text(entry["source"], f"{where}.source", SOURCE_MAX), f"{where}.source"),
+        assumption=_no_url(
+            _optional_text(entry["assumption"], f"{where}.assumption", ASSUMPTION_MAX), f"{where}.assumption"
+        ),
     )
+
+
+def _no_url(text: str | None, where: str) -> str | None:
+    """A page address or body is never stored: a bare site name is fine."""
+    if text is not None and ("://" in text or "www." in text.casefold()):
+        raise LlmOutputError(f"{where} must not contain a web address")
+    return text
 
 
 def _menu_item(value: Any, index: int) -> MenuItem:
@@ -299,12 +329,14 @@ def _slot(value: Any) -> MealType:
     return slot
 
 
-def _estimate(value: Any, where: str) -> NutrientRanges:
+def _estimate(value: Any, where: str, *, required: frozenset[str] = frozenset()) -> NutrientRanges:
     entry = _object(value, where, 8)
     ranges = []
     for nutrient, name, limit in _ESTIMATE_FIELDS:
         low = _bounded(entry[f"{name}_min"], f"{where}.{name}_min", limit)
         high = _bounded(entry[f"{name}_max"], f"{where}.{name}_max", limit)
+        if name in required and (low is None or high is None):
+            raise LlmOutputError(f"{where}.{name} needs both min and max")
         if (low is None) != (high is None):
             raise LlmOutputError(f"{where}.{name} needs both min and max or neither")
         if low is not None and high is not None:

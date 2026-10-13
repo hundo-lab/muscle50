@@ -37,6 +37,9 @@ from muscle50.domain.telegram_llm import (
 from muscle50.domain.telegram_llm_prompt import FIXED_RULES, PromptTask, build_prompt
 
 NULL_ESTIMATE = {f"{name}_{end}": None for name in ("kcal", "protein", "carbs", "fat") for end in ("min", "max")}
+ITEM_ESTIMATE = {**NULL_ESTIMATE, "kcal_min": 300, "kcal_max": 400, "protein_min": 10, "protein_max": 20}
+"""A meal item must carry a kcal and a protein range (catalog items too, as the fallback)."""
+NEW_ITEM_KEYS = {"meal_type": None, "food_id": None, "source": None, "assumption": None}
 NULL_EDIT = {
     "action": None,
     "target_food_text": None,
@@ -62,7 +65,8 @@ def interpretation(**overrides: Any) -> dict[str, Any]:
                 "unit": "pack",
                 "quantity_estimated": True,
                 "memo": None,
-                "estimate": dict(NULL_ESTIMATE),
+                "estimate": dict(ITEM_ESTIMATE),
+                **NEW_ITEM_KEYS,
             }
         ],
         "question_topics": [],
@@ -85,12 +89,16 @@ def test_valid_interpretation() -> None:
         Decimal(1),
         QuantityUnit.PACK,
         True,
-        (),
+        (
+            (NutrientField.CALORIES_KCAL, Decimal(300), Decimal(400)),
+            (NutrientField.PROTEIN_G, Decimal(10), Decimal(20)),
+        ),
     )
+    assert (item.meal_type, item.food_id, item.source, item.assumption) == (None, None, None, None)
 
 
 def test_estimates_are_rounded_ranges() -> None:
-    estimate = {**NULL_ESTIMATE, "kcal_min": 700.04, "kcal_max": 950, "protein_min": 30.25, "protein_max": 45.0}
+    estimate = {**ITEM_ESTIMATE, "kcal_min": 700.04, "kcal_max": 950, "protein_min": 30.25, "protein_max": 45.0}
     document = interpretation()
     document["items"][0]["estimate"] = estimate
     assert parse_interpretation(document).items[0].estimate == (
@@ -121,7 +129,20 @@ def _broken(path: tuple[Any, ...], value: Any) -> dict[str, Any]:
         (("items", 0, "food_text"), "x" * 61),
         (("items", 0, "food_text"), "a\tb"),
         (("items", 0, "estimate", "kcal_min"), 3001),
-        (("items", 0, "estimate", "kcal_min"), 10),
+        (("items", 0, "estimate", "kcal_min"), 450),
+        (("items", 0, "estimate", "kcal_min"), None),
+        (("items", 0, "estimate", "kcal_max"), None),
+        (("items", 0, "estimate", "protein_min"), None),
+        (("items", 0, "estimate", "protein_max"), None),
+        (("items", 0, "meal_type"), "brunch"),
+        (("items", 0, "food_id"), "x" * 61),
+        (("items", 0, "source"), "x" * 31),
+        (("items", 0, "source"), "https://example.invalid/page"),
+        (("items", 0, "source"), "WWW.example.invalid"),
+        (("items", 0, "assumption"), "x" * 81),
+        (("items", 0, "assumption"), "see http://example.invalid"),
+        (("items", 0, "assumption"), "a\tb"),
+        (("items", 0, "extra"), 1),
         (("items", 0, "estimate", "protein_min"), 50),
         (("items", 0, "quantity_estimated"), "yes"),
         (("reply",), "x" * 301),
@@ -140,7 +161,8 @@ def test_out_of_bounds_output_is_bad_output(path: tuple[Any, ...], value: Any) -
 
 def test_too_many_items_and_missing_keys_are_refused() -> None:
     with pytest.raises(LlmOutputError):
-        parse_interpretation(interpretation(items=[interpretation()["items"][0]] * 11))
+        parse_interpretation(interpretation(items=[interpretation()["items"][0]] * 21))
+    assert len(parse_interpretation(interpretation(items=[interpretation()["items"][0]] * 20)).items) == 20
     document = interpretation()
     del document["edit"]
     with pytest.raises(LlmOutputError):

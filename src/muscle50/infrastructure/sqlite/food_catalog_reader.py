@@ -31,6 +31,19 @@ class SqliteFoodCatalogReader:
                 return None
             return _load_profile(connection, profile_id)
 
+    def list_all(self) -> tuple[FoodNutritionProfile, ...]:
+        """Every food (reserved general meal included), ordered by ID; none when there is no database or table."""
+        with self._read() as connection:
+            if connection is None:
+                return ()
+            rows = connection.execute("SELECT profile_id FROM nutrition_food_profiles ORDER BY profile_id").fetchall()
+            profiles = []
+            for row in rows:
+                profile = _load_profile(connection, row["profile_id"])
+                if profile is not None:
+                    profiles.append(profile)
+            return tuple(profiles)
+
     def search(self, name_or_alias: str) -> tuple[FoodNutritionProfile, ...]:
         with self._read() as connection:
             if connection is None:

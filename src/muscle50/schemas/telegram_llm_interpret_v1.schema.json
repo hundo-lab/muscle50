@@ -80,7 +80,11 @@
           "unit",
           "quantity_estimated",
           "memo",
-          "estimate"
+          "estimate",
+          "meal_type",
+          "food_id",
+          "source",
+          "assumption"
         ],
         "properties": {
           "kind": {
@@ -140,28 +144,16 @@
             ],
             "properties": {
               "kcal_min": {
-                "type": [
-                  "number",
-                  "null"
-                ]
+                "type": "number"
               },
               "kcal_max": {
-                "type": [
-                  "number",
-                  "null"
-                ]
+                "type": "number"
               },
               "protein_min": {
-                "type": [
-                  "number",
-                  "null"
-                ]
+                "type": "number"
               },
               "protein_max": {
-                "type": [
-                  "number",
-                  "null"
-                ]
+                "type": "number"
               },
               "carbs_min": {
                 "type": [
@@ -188,7 +180,43 @@
                 ]
               }
             },
-            "description": "estimated ranges for the whole dish or meal; null when not estimated"
+            "description": "estimated ranges for the whole dish or meal; kcal and protein are required, carbs and fat are null when not estimated"
+          },
+          "meal_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "breakfast",
+              "lunch",
+              "dinner",
+              "snack",
+              "other",
+              null
+            ],
+            "description": "the meal this food belongs to when the user named meals; null otherwise"
+          },
+          "food_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "the catalog ID of this food when it is in the catalog list; otherwise null"
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "site name only (no URL) when a web search was used; otherwise null"
+          },
+          "assumption": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "what was assumed for the estimate, without numbers; otherwise null"
           }
         }
       }
