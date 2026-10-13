@@ -48,7 +48,7 @@ muscle50이 무엇을 향해 가는지 적은 문서다. 기능을 고르거나 
 - Telegram 등 채팅으로 묻기: "오늘 뭐 운동해?", "점심 뭐 먹지?", "단백질 얼마 남았어?",
   "근육 증가 방향 괜찮아?". 기존 use case를 그대로 부르는 얇은 층으로 만든다.
   - 명령어형 v1은 있다(`muscle50 telegram run`, `docs/telegram-bot.md`). v1.1(짧은 요약, UNKNOWN 알림, `/refresh`)과
-    v1.2(인자 없는 `/refresh`로 UNKNOWN 운동 모두 다시 받기)도 통합됐다. 자유 문장·사진·코치(LLM) v2도 통합됐다(`config\telegram_llm.json`으로 켜는 선택 기능, `docs/telegram-llm.md`). 메시지 종류별 모델 선택(글 haiku, 사진 sonnet, 형식 실패 시 한 번 재시도)도 통합됐다.
+    v1.2(인자 없는 `/refresh`로 UNKNOWN 운동 모두 다시 받기)도 통합됐다. 자유 문장·사진·코치(LLM) v2도 통합됐다(`config\telegram_llm.json`으로 켜는 선택 기능, `docs/telegram-llm.md`). 메시지 종류별 모델 선택(글 haiku, 사진 sonnet, 형식 실패 시 한 번 재시도)도 통합됐다. v2.2(한 메시지의 여러 끼니, 일반식 추정 범위, 웹 검색, 숫자 재확인)도 통합됐다.
 
 ## 4. 현재 상태(2026-10-05)
 

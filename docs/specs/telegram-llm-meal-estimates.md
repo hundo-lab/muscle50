@@ -1,7 +1,7 @@
 ---
 id: telegram-llm-meal-estimates
 title: Telegram LLM Meal Estimates v2.2
-status: draft
+status: integrated
 migration: none
 output_change: additive
 user_gates: [design, integration]
@@ -131,4 +131,13 @@ bot:   (끼니마다 기존 /log 답장) … 취소: /void 2026-10-13-breakfast-
 - 웹 검색은 응답 시간과 사용량을 늘린다. 실제 시간은 history와 콘솔로 확인한다.
 - 식당·제품 영양 정보는 웹에 없거나 부정확할 수 있다. 추정은 참고용이다.
 - 별칭 추가 명령(`food alias add`)은 이번 범위가 아니다. 카탈로그 목록 연결로 대신한다(후속 후보).
+- 웹 검색 횟수 상한(`web_search_max`)은 프롬프트 규칙일 뿐이고 CLI에 횟수 제한이 없다. 실제 상한은 `web_search_timeout_seconds`다.
+  검색 지연은 한 번 실행 기준 23~27초만 확인했고, 여러 번 검색하는 실행과 시간 초과 경로는 가짜 실행기로만 확인했다.
+- 웹 검색은 기본 켜짐이다. 기존 v2.1 설정 파일도 `telegram run`을 다시 시작하면 검색을 시작해 시간과 사용량이 늘어난다.
+- 웹 검색 질의는 Anthropic으로 가고, 카탈로그 이름·별칭·단위 목록이 매 해석 호출(글·사진)과 함께 제공자로 전송된다.
+- 숫자 재확인 오탐은 sonnet 한 번을 더 쓴다. history의 `recheck`로 실제 비율을 본다.
+- 여러 끼니 `/ok` 도중 오류나 Ctrl+C가 나면 이미 기록된 끼니는 남고 답장이 사라진다. 기록되지 않은 끼니를 다시 제안하지 않는다.
+- 설정이 `provider: codex`, `fallback_provider: claude`이면 첫 실행이 검색할 수 없는데도 프롬프트에 웹 규칙이 들어간다.
+- 카탈로그 목록은 최대 120개 음식 / 6000자로 잘린다. 끼니 이름과 똑같은 이름의 실제 음식은 끼니 단어로 보고 item에서 뺀다(드문 경우).
+- 라이브 확인은 Claude 6회, Codex 1회뿐이다. 검색 없는 대조 실행과 실제 시간 초과·재시도는 돌리지 않았다.
 - 후속 후보: 자주 먹는 일반식을 카탈로그 음식으로 승격 제안, 끼니별 시간 기록.
