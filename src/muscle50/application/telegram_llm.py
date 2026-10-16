@@ -90,6 +90,7 @@ from muscle50.domain.telegram_llm import (
     MenuChoice,
     NutrientRanges,
     PhotoKind,
+    Portion,
     Proposal,
     ProposalCommand,
     ProposalKind,
@@ -120,9 +121,12 @@ from muscle50.domain.telegram_llm_check import (
 )
 from muscle50.domain.telegram_llm_meals import (
     catalog_prompt,
+    dish_memo,
     estimate_reference,
     group_meals,
+    is_label_estimate,
     is_meal_word,
+    portions_text,
     registered_units,
 )
 from muscle50.domain.telegram_llm_prompt import (
@@ -251,6 +255,10 @@ class ProposalItemView:
     source: str | None = None
     check: tuple[CheckCode, ...] = ()
     """The failed numeric checks: the item is shown with `(값 확인 필요)` and the reasons."""
+    label: bool = False
+    """The estimate is a label value: `라벨:` instead of `추정:` and no `(estimated)`."""
+    portions: str | None = None
+    """`닭 150~200 g, 감자 100~150 g`: the assumed grams (shown as `양 가정:`)."""
 
 
 @dataclass(frozen=True)
@@ -599,10 +607,12 @@ class TelegramLlmHandler:
                 index=index,
                 meal_type=item.meal_type,
                 own_quantity=item.quantity,
+                label=is_label_estimate(item.estimate, item.from_label),
+                portions=item.portions,
             )
 
         if item.kind is ItemKind.GENERAL:
-            return general(None, memo=clean_memo(item.memo or item.food_text))
+            return general(None, memo=clean_memo(dish_memo(item.food_text, item.memo)))
         if is_reserved_food_reference(item.food_text):
             return general(REASON_NOT_IN_CATALOG)
         via: str | None = None
@@ -1748,6 +1758,10 @@ class _Entry:
     """The quantity the user gave a general item (the assumption may mention it)."""
     check: tuple[CheckCode, ...] = ()
     """The numeric checks this estimate still fails after the re-check: it is marked `(값 확인 필요)`."""
+    label: bool = False
+    """The values are single values read from a nutrition label (shown as `라벨:`, stored as an estimate)."""
+    portions: tuple[Portion, ...] = ()
+    """The grams the LLM assumed per component (shown as `양 가정:`, kept in the estimate reference)."""
 
     def argv(self, source: NutritionSourceType, reference: str, with_estimate: bool) -> tuple[str, ...]:
         if self.food_id is not None and self.quantity is not None and self.unit is not None:
@@ -1758,7 +1772,14 @@ class _Entry:
         if with_estimate and self.estimate:
             args.append(f"--general-estimate={format_general_estimate(source, self.estimate)}")
             if reference:
-                note = estimate_reference(reference, self.source, self.assumption, check_needed=bool(self.check))
+                note = estimate_reference(
+                    reference,
+                    self.source,
+                    self.assumption,
+                    check_needed=bool(self.check),
+                    label=self.label,
+                    portions=self.portions,
+                )
                 args.append(f"--general-estimate-ref={note}")
         return tuple(args)
 
@@ -1780,6 +1801,8 @@ def _item_views(entries: Sequence[_Entry]) -> tuple[ProposalItemView, ...]:
             entry.assumption if entry.food_id is None else None,
             entry.source if entry.food_id is None else None,
             entry.check,
+            entry.label,
+            portions_text(entry.portions) if entry.food_id is None else None,
         )
         for entry in entries
     )
@@ -1791,7 +1814,13 @@ def _failures(entries: Sequence[_Entry]) -> list[tuple[_Entry, CheckFailure]]:
         (entry, failure)
         for entry in entries
         if entry.food_id is None and entry.estimate
-        for failure in check_estimate(entry.estimate, assumption=entry.assumption, quantity=entry.own_quantity)
+        for failure in check_estimate(
+            entry.estimate,
+            assumption=entry.assumption,
+            quantity=entry.own_quantity,
+            label=entry.label,
+            portions=entry.portions,
+        )
     ]
 
 

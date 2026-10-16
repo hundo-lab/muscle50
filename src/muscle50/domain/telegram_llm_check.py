@@ -16,7 +16,7 @@ from enum import StrEnum
 
 from muscle50.domain.llm_number_guard import allowed_numbers, unknown_numbers
 from muscle50.domain.nutrition import NutrientField
-from muscle50.domain.telegram_llm import NutrientRanges
+from muscle50.domain.telegram_llm import NutrientRanges, Portion
 
 WIDTH_RATIO = Decimal("0.7")
 """A range is too wide when `max - min` is above this share of `max` ..."""
@@ -72,27 +72,37 @@ class CheckFailure:
 
 
 def check_estimate(
-    ranges: NutrientRanges, *, assumption: str | None, quantity: Decimal | None
+    ranges: NutrientRanges,
+    *,
+    assumption: str | None,
+    quantity: Decimal | None,
+    label: bool = False,
+    portions: Sequence[Portion] = (),
 ) -> tuple[CheckFailure, ...]:
-    """The failed checks of one estimated general item, in a fixed order (empty: it passes)."""
+    """The failed checks of one estimated general item, in a fixed order (empty: it passes).
+
+    ``label``: the values are printed on a nutrition label, so a single value (min = max) is expected and only
+    `range_is_a_point` is skipped; the range width, the kcal/macro sums and the assumption numbers are still checked.
+    ``portions``: the assumed grams, which an assumption may repeat.
+    """
     by_field = {nutrient: (low, high) for nutrient, low, high in ranges}
     failures: list[CheckFailure] = []
     kcal = by_field.get(NutrientField.CALORIES_KCAL)
     protein = by_field.get(NutrientField.PROTEIN_G)
     carbs = by_field.get(NutrientField.CARBOHYDRATE_G)
     fat = by_field.get(NutrientField.FAT_G)
-    for label, bounds, floor in (("kcal", kcal, KCAL_WIDTH_FLOOR), ("protein", protein, PROTEIN_WIDTH_FLOOR)):
+    for name, bounds, floor in (("kcal", kcal, KCAL_WIDTH_FLOOR), ("protein", protein, PROTEIN_WIDTH_FLOOR)):
         if bounds is None:
             continue
         low, high = bounds
         if high - low > WIDTH_RATIO * high and high - low > floor:
-            failures.append(CheckFailure(CheckCode.RANGE_TOO_WIDE, f"{label} {_range(bounds)}"))
-        if low == high and high > 0:
-            failures.append(CheckFailure(CheckCode.RANGE_IS_A_POINT, f"{label} {_range(bounds)}"))
+            failures.append(CheckFailure(CheckCode.RANGE_TOO_WIDE, f"{name} {_range(bounds)}"))
+        if low == high and high > 0 and not label:
+            failures.append(CheckFailure(CheckCode.RANGE_IS_A_POINT, f"{name} {_range(bounds)}"))
     if kcal is not None and protein is not None:
         failures.extend(_macro_failures(kcal, protein, carbs, fat))
     if assumption:
-        allowed = allowed_numbers([_numbers_of(ranges, quantity)])
+        allowed = allowed_numbers([_numbers_of(ranges, quantity, portions)])
         if unknown_numbers(assumption, allowed):
             failures.append(
                 CheckFailure(CheckCode.ASSUMPTION_NUMBER, f"{len(unknown_numbers(assumption, allowed))} numbers")
@@ -124,9 +134,11 @@ def _macro_failures(
     return []
 
 
-def _numbers_of(ranges: NutrientRanges, quantity: Decimal | None) -> list[str]:
+def _numbers_of(ranges: NutrientRanges, quantity: Decimal | None, portions: Sequence[Portion] = ()) -> list[str]:
     """The item's own numbers as strings (`allowed_numbers` reads numbers out of strings)."""
     values = [] if quantity is None else [_number(quantity)]
+    for portion in portions:
+        values.extend((_number(portion.g_min), _number(portion.g_max)))
     for _nutrient, low, high in ranges:
         values.extend((_number(low), _number(high)))
     return values

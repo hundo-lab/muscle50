@@ -78,6 +78,17 @@ class EditAction(StrEnum):
     ADD_ITEM = "add_item"
     VOID_MEAL = "void_meal"
     CHANGE_MEAL_TYPE = "change_meal_type"
+    CHANGE_ESTIMATE = "change_estimate"
+    """Change the estimated nutrients and/or the memo of a general item."""
+
+
+class Refers(StrEnum):
+    """What a message is about when it answers an earlier one (null: a message of its own)."""
+
+    OPEN_PROPOSAL = "open_proposal"
+    """It corrects the proposal that is still open: the corrected `meal_log` replaces it."""
+    LAST_RECORDED = "last_recorded"
+    """It corrects a meal that was just recorded: a `meal_edit`."""
 
 
 class SuggestCategory(StrEnum):
@@ -109,6 +120,10 @@ NOTE_MAX = 80
 SOURCE_MAX = 30
 ASSUMPTION_MAX = 80
 FOOD_ID_MAX = 60
+MAX_PORTIONS = 4
+PORTION_NAME_MAX = 20
+PORTION_GRAM_LIMIT = Decimal(3000)
+ORDINAL_MAX = 9
 
 _ESTIMATE_FIELDS: tuple[tuple[NutrientField, str, Decimal], ...] = (
     (NutrientField.CALORIES_KCAL, "kcal", KCAL_LIMIT),
@@ -128,6 +143,15 @@ NutrientRanges = tuple[tuple[NutrientField, Decimal, Decimal], ...]
 
 
 @dataclass(frozen=True)
+class Portion:
+    """The weight the LLM assumed for one component of a dish whose amount the user did not state."""
+
+    name: str
+    g_min: Decimal
+    g_max: Decimal
+
+
+@dataclass(frozen=True)
 class InterpretItem:
     kind: ItemKind
     food_text: str
@@ -143,6 +167,12 @@ class InterpretItem:
     source: str | None = None
     """A site name (never a URL) when a web search was used."""
     assumption: str | None = None
+    from_label: bool = False
+    """The values are printed on a nutrition label (photo or the user's words): single values are allowed."""
+    portions: tuple[Portion, ...] = ()
+    """Assumed grams per component (empty when the user stated the amount or the item is a catalog item)."""
+    menu_ref: int | None = None
+    """The number of the recently shown menu item the user says they ate (the bot checks it)."""
 
 
 @dataclass(frozen=True)
@@ -163,6 +193,14 @@ class EditRequest:
     new_quantity: Decimal | None
     new_unit: QuantityUnit | None
     new_meal_type: MealType | None
+    new_memo: str | None = None
+    """`change_estimate`: the item's new memo (null: unchanged)."""
+    estimate: NutrientRanges = ()
+    """`change_estimate`: only the nutrients that change; the others keep their stored range."""
+    from_label: bool = False
+    """The new estimate is read from a label: single values are allowed."""
+    ordinal: int | None = None
+    """"아침 1식" is breakfast with ordinal 1: the Nth active meal of that type that day."""
 
 
 @dataclass(frozen=True)
@@ -181,6 +219,7 @@ class Interpretation:
     memory_summary: str
     document: dict[str, Any]
     """The validated JSON as received (kept in the history)."""
+    refers_to: Refers | None = None
 
 
 @dataclass(frozen=True)
@@ -208,19 +247,24 @@ class SuggestResult:
 
 
 def parse_interpretation(document: Any) -> Interpretation:
-    root = _object(document, "interpretation", 11)
+    root = _object(document, "interpretation", 12)
     items = _array(root["items"], "items", MAX_ITEMS)
     topics = _array(root["question_topics"], "question_topics", MAX_TOPICS)
     menu = _object(root["menu"], "menu", 2)
     menu_items = _array(menu["items"], "menu.items", MAX_MENU_ITEMS)
     slots = _array(menu["slots_visible"], "menu.slots_visible", 3)
-    edit = _object(root["edit"], "edit", 6)
+    edit = _object(root["edit"], "edit", 10)
     parsed_items = tuple(_item(item, index) for index, item in enumerate(items, start=1))
     default_meal = _optional_enum(MealType, root["meal_type"], "meal_type")
     if default_meal is None and len({item.meal_type is None for item in parsed_items}) > 1:
         raise LlmOutputError("items must all name a meal or none of them may (no meal_type to fall back on)")
+    intent = _enum(Intent, root["intent"], "intent")
+    refers_to = _optional_enum(Refers, root["refers_to"], "refers_to")
+    parsed_edit = _edit(edit)
+    _cross_check(intent, refers_to, parsed_edit)
     return Interpretation(
-        intent=_enum(Intent, root["intent"], "intent"),
+        intent=intent,
+        refers_to=refers_to,
         photo_kind=_enum(PhotoKind, root["photo_kind"], "photo_kind"),
         meal_type=default_meal,
         date_expression=_enum(DateExpression, root["date_expression"], "date_expression"),
@@ -229,14 +273,7 @@ def parse_interpretation(document: Any) -> Interpretation:
         question_topics=tuple(dict.fromkeys(_enum(Topic, topic, "question_topics") for topic in topics)),
         slots_visible=tuple(dict.fromkeys(_slot(slot) for slot in slots)),
         menu_items=tuple(_menu_item(item, index) for index, item in enumerate(menu_items, start=1)),
-        edit=EditRequest(
-            action=_optional_enum(EditAction, edit["action"], "edit.action"),
-            target_food_text=_optional_text(edit["target_food_text"], "edit.target_food_text", FOOD_TEXT_MAX),
-            new_food_text=_optional_text(edit["new_food_text"], "edit.new_food_text", FOOD_TEXT_MAX),
-            new_quantity=_quantity(edit["new_quantity"], "edit.new_quantity"),
-            new_unit=_optional_enum(QuantityUnit, edit["new_unit"], "edit.new_unit"),
-            new_meal_type=_optional_enum(MealType, edit["new_meal_type"], "edit.new_meal_type"),
-        ),
+        edit=parsed_edit,
         reply=_optional_text(root["reply"], "reply", REPLY_MAX, multiline=True),
         memory_summary=_text(root["memory_summary"], "memory_summary", SUMMARY_MAX, multiline=True, blank=True),
         document=root,
@@ -279,12 +316,78 @@ def parse_suggestions(document: Any) -> SuggestResult:
     )
 
 
+def _edit(entry: dict[str, Any]) -> EditRequest:
+    action = _optional_enum(EditAction, entry["action"], "edit.action")
+    new_memo = _optional_text(entry["new_memo"], "edit.new_memo", MEMO_TEXT_MAX)
+    estimate = _estimate(entry["estimate"], "edit.estimate")
+    from_label = entry["from_label"]
+    if type(from_label) is not bool:
+        raise LlmOutputError("edit.from_label must be a boolean")
+    return EditRequest(
+        action=action,
+        target_food_text=_optional_text(entry["target_food_text"], "edit.target_food_text", FOOD_TEXT_MAX),
+        new_food_text=_optional_text(entry["new_food_text"], "edit.new_food_text", FOOD_TEXT_MAX),
+        new_quantity=_quantity(entry["new_quantity"], "edit.new_quantity"),
+        new_unit=_optional_enum(QuantityUnit, entry["new_unit"], "edit.new_unit"),
+        new_meal_type=_optional_enum(MealType, entry["new_meal_type"], "edit.new_meal_type"),
+        new_memo=new_memo,
+        estimate=estimate,
+        from_label=from_label,
+        ordinal=_ordinal(entry["target_meal_ordinal"]),
+    )
+
+
+def _ordinal(value: Any) -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int or not 1 <= value <= ORDINAL_MAX:
+        raise LlmOutputError(f"edit.target_meal_ordinal must be an integer from 1 to {ORDINAL_MAX} or null")
+    return value
+
+
+def _cross_check(intent: Intent, refers_to: Refers | None, edit: EditRequest) -> None:
+    """Combinations the schema cannot express: they are a format failure (`bad_output`), never repaired."""
+    if refers_to is Refers.OPEN_PROPOSAL and intent is not Intent.MEAL_LOG:
+        raise LlmOutputError("refers_to open_proposal needs the meal_log intent")
+    if refers_to is Refers.LAST_RECORDED and intent is not Intent.MEAL_EDIT:
+        raise LlmOutputError("refers_to last_recorded needs the meal_edit intent")
+    if edit.action is EditAction.CHANGE_ESTIMATE and not edit.estimate and edit.new_memo is None:
+        raise LlmOutputError("change_estimate needs an estimate or a new memo")
+
+
+def _portions(value: Any, where: str) -> tuple[Portion, ...]:
+    portions = []
+    for index, raw in enumerate(_array(value, where, MAX_PORTIONS), start=1):
+        entry = _object(raw, f"{where}[{index}]", 3)
+        low = _bounded(entry["g_min"], f"{where}[{index}].g_min", PORTION_GRAM_LIMIT)
+        high = _bounded(entry["g_max"], f"{where}[{index}].g_max", PORTION_GRAM_LIMIT)
+        if low is None or high is None:
+            raise LlmOutputError(f"{where}[{index}] needs both g_min and g_max")
+        if low > high:
+            raise LlmOutputError(f"{where}[{index}].g_min is above g_max")
+        name = _no_url(_text(entry["name"], f"{where}[{index}].name", PORTION_NAME_MAX), f"{where}[{index}].name")
+        assert name is not None
+        portions.append(Portion(name, low, high))
+    return tuple(portions)
+
+
+def _menu_ref(value: Any, where: str) -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int:
+        raise LlmOutputError(f"{where} must be an integer or null")
+    return value
+
+
 def _item(value: Any, index: int) -> InterpretItem:
     where = f"items[{index}]"
-    entry = _object(value, where, 11)
+    entry = _object(value, where, 14)
     quantity_estimated = entry["quantity_estimated"]
     if type(quantity_estimated) is not bool:
         raise LlmOutputError(f"{where}.quantity_estimated must be a boolean")
+    from_label = entry["from_label"]
+    if type(from_label) is not bool:
+        raise LlmOutputError(f"{where}.from_label must be a boolean")
     return InterpretItem(
         kind=_enum(ItemKind, entry["kind"], f"{where}.kind"),
         food_text=_text(entry["food_text"], f"{where}.food_text", FOOD_TEXT_MAX),
@@ -299,6 +402,9 @@ def _item(value: Any, index: int) -> InterpretItem:
         assumption=_no_url(
             _optional_text(entry["assumption"], f"{where}.assumption", ASSUMPTION_MAX), f"{where}.assumption"
         ),
+        from_label=from_label,
+        portions=_portions(entry["portions"], f"{where}.portions"),
+        menu_ref=_menu_ref(entry["menu_ref"], f"{where}.menu_ref"),
     )
 
 

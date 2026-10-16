@@ -29,7 +29,8 @@ FIXED_RULE_LINES = [
     "5. 수량과 단위는 사용자가 말한 것을 적습니다. 말하지 않았으면 흔한 양을 제안할 수 있지만 그때는 "
     "quantity_estimated를 true로 합니다. 단위 낱말: 팩=pack, 개=count, 마리=animal, 조각=piece, "
     "인분·공기=serving, g·그램=g, ml=ml. 단위를 다른 단위로 환산하지 않습니다.",
-    "6. 영양값을 추정할 때는 항상 범위(min, max)로 적습니다. 모르는 값은 null이고 0으로 채우지 않습니다.",
+    "6. 영양값을 추정할 때는 항상 범위(min, max)로 적습니다. 영양정보 라벨에 인쇄된 값(from_label)만 한 값으로 "
+    "적을 수 있습니다. 모르는 값은 null이고 0으로 채우지 않습니다.",
     "7. 이미 먹은 식사만 meal_log(tense eaten)입니다. '먹을 예정', '먹을까'는 menu_suggest나 question입니다.",
     "8. 답 문장에 쓰는 숫자는 [데이터]에 있는 숫자만 씁니다. 데이터에 없는 값은 '알 수 없음'이라고 씁니다.",
     "9. 목록 번호를 붙이지 않습니다.",
@@ -80,17 +81,34 @@ TASKS = {
             "- items: meal_log의 음식마다 하나. food_text는 사용자가 쓴 말 그대로. [카탈로그]에 있는 단일 식품이면 "
             "kind catalog, food_id에 카탈로그 ID를 적고 unit은 그 음식의 등록 단위 중 하나(단위를 환산하지 "
             "않습니다. 등록 단위가 아니면 kind general). 카탈로그에 없으면 kind general, food_id null, memo에 "
-            "양을 포함한 짧은 설명('김밥 2.5줄').",
+            "양을 포함한 짧은 설명('김밥 2.5줄'). memo는 사용자가 말한 음식 이름으로 시작합니다(이름을 빼지 않습니다).",
             "- estimate: 모든 item(카탈로그 음식도 대체값으로)에 말한 양 기준의 범위. kcal과 protein은 필수, "
             "탄수화물과 지방은 범위를 알 때만 적고 모르면 null입니다. 모르는 영양소를 0으로 채우지 않습니다. "
             "사진이면 보이는 양 기준.",
             "- assumption: 추정에 쓴 가정을 한 문장으로(숫자 없이). 없으면 null. source: 웹 검색으로 찾은 값일 때만 "
             "사이트 이름(주소 금지), 아니면 null.",
+            "- from_label: 영양정보 라벨(사진 속 표시, 또는 사용자가 문장으로 알려 준 라벨 값)에서 읽은 값이면 true. "
+            "이때 estimate는 범위가 아니라 라벨에 인쇄된 한 값(min과 max를 같게)으로 적고, 라벨에 없는 영양소는 "
+            "null입니다. 라벨이 아닌 추정값은 false이고 항상 범위로 적습니다.",
+            "- portions: 사용자가 양을 말하지 않은 음식은 가정한 무게를 재료마다 name(짧은 말), g_min, g_max(g)로 "
+            "최대 4개 적습니다. 사용자가 양을 말했거나 카탈로그 음식이면 빈 배열. assumption에는 숫자를 쓰지 않습니다.",
+            "- menu_ref: [데이터]에 <최근 메뉴> 목록이 있고 사용자가 그 목록의 메뉴를 먹었다고 하면 그 번호, "
+            "아니면 null. 이때 food_text에는 사용자가 말한 메뉴 이름을 적습니다. 목록에 없는 음식에는 쓰지 않습니다.",
+            "- [데이터]의 <직전 기록>(이 채팅에서 방금 기록한 식사들, 번호는 item 번호)과 <열린 제안>(아직 "
+            "/ok 하지 않은 제안)이 있고 메시지가 그것을 고치거나 덧붙이는 말이면 새 식사로 기록하지 않습니다. "
+            "열린 제안을 고치는 말이면 refers_to=open_proposal, intent=meal_log이고 items에 고친 제안 전체"
+            "(바뀌지 않은 음식 포함)를 다시 적습니다. 이미 기록된 식사를 고치는 말이면 refers_to=last_recorded, "
+            "intent=meal_edit. 아니면 null.",
             "- question_topics: question이면 training, nutrition, body 중 해당하는 것.",
             "- menu: menu_capture이면 보이는 끼니(slots_visible)와 메뉴마다 slot, corner(코너 이름), name, "
             "메뉴판에 적힌 kcal·단백질(printed_kcal, printed_protein_g, 없으면 null), estimate.",
             "- edit: meal_edit이면 action과 대상 음식(target_food_text), 새 음식·수량·단위·끼니. 음식은 카탈로그 "
             "ID로 적어도 됩니다. 대상 끼니는 meal_type, 날짜는 date_expression에 적습니다. 아니면 모두 null.",
+            "- edit.change_estimate: 일반식의 영양값이나 메모를 고칠 때. target_food_text에는 그 음식의 메모(이름), "
+            "estimate에는 바뀌는 영양소만(그 영양소의 min, max. 나머지는 null), new_memo에는 새 메모(없으면 null), "
+            "from_label에는 라벨에서 읽은 값인지(true면 min과 max를 같게). 카탈로그 음식의 값은 고칠 수 없습니다.",
+            "- edit.target_meal_ordinal: '아침 1식'은 meal_type breakfast와 1, '두 번째 점심'은 lunch와 2. 순서를 "
+            "말하지 않았으면 null.",
             "- reply: chat일 때만 짧은 답(숫자 없이). 아니면 null.",
             "- memory_summary: 지금까지의 대화를 300자 안으로 요약(이번 메시지 포함).",
         ]

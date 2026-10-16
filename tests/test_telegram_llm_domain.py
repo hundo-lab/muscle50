@@ -39,7 +39,15 @@ from muscle50.domain.telegram_llm_prompt import FIXED_RULES, PromptTask, build_p
 NULL_ESTIMATE = {f"{name}_{end}": None for name in ("kcal", "protein", "carbs", "fat") for end in ("min", "max")}
 ITEM_ESTIMATE = {**NULL_ESTIMATE, "kcal_min": 300, "kcal_max": 400, "protein_min": 10, "protein_max": 20}
 """A meal item must carry a kcal and a protein range (catalog items too, as the fallback)."""
-NEW_ITEM_KEYS = {"meal_type": None, "food_id": None, "source": None, "assumption": None}
+NEW_ITEM_KEYS: dict[str, Any] = {
+    "meal_type": None,
+    "food_id": None,
+    "source": None,
+    "assumption": None,
+    "from_label": False,
+    "portions": [],
+    "menu_ref": None,
+}
 NULL_EDIT = {
     "action": None,
     "target_food_text": None,
@@ -47,6 +55,10 @@ NULL_EDIT = {
     "new_quantity": None,
     "new_unit": None,
     "new_meal_type": None,
+    "new_memo": None,
+    "estimate": dict(NULL_ESTIMATE),
+    "from_label": False,
+    "target_meal_ordinal": None,
 }
 
 
@@ -71,6 +83,7 @@ def interpretation(**overrides: Any) -> dict[str, Any]:
         ],
         "question_topics": [],
         "menu": {"slots_visible": [], "items": []},
+        "refers_to": None,
         "edit": dict(NULL_EDIT),
         "reply": None,
         "memory_summary": "점심 기록",

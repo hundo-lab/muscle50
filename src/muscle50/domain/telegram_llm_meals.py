@@ -10,6 +10,7 @@ from __future__ import annotations
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Protocol
 
 from muscle50.domain.nutrition import (
@@ -19,6 +20,7 @@ from muscle50.domain.nutrition import (
     NutrientField,
     QuantityUnit,
 )
+from muscle50.domain.telegram_llm import NutrientRanges, Portion
 
 MEAL_WORDS = frozenset(
     {
@@ -47,6 +49,8 @@ ESTIMATE_REFERENCE_MAX = 100
 NOTE_MIN_CHARS = 10
 """An estimate reference note is kept only when at least this many characters of it fit."""
 CHECK_NEEDED_NOTE = "값 확인 필요"
+LABEL_NOTE = "라벨"
+DISH_WORD_MIN_CHARS = 2
 
 _MEAL_ORDER = (MealType.BREAKFAST, MealType.LUNCH, MealType.DINNER, MealType.SNACK, MealType.OTHER)
 _PUNCTUATION = ".,!?~:;/\\\"'()[]{}-_"
@@ -156,17 +160,28 @@ def _clip(text: str) -> str:
 # --- estimate provenance ---------------------------------------------------------------------------------
 
 
-def estimate_reference(base: str, source: str | None, assumption: str | None, *, check_needed: bool = False) -> str:
+def estimate_reference(
+    base: str,
+    source: str | None,
+    assumption: str | None,
+    *,
+    check_needed: bool = False,
+    label: bool = False,
+    portions: Sequence[Portion] = (),
+) -> str:
     """The `--general-estimate-ref` text, at most `GENERAL_ESTIMATE_REFERENCE_MAX_LENGTH` characters.
 
-    ``base; 값 확인 필요; 출처: <source>; 가정: <assumption>``. The check marker is kept ahead of the note;
-    the note (source and assumption) is cut first, and dropped when fewer than `NOTE_MIN_CHARS` characters of
-    it would remain. Never a URL: the parser refuses those in ``source`` and ``assumption``.
+    ``base; 라벨; 값 확인 필요; 양: <portions>; 출처: <source>; 가정: <assumption>``. The label and check markers
+    are kept ahead of the note; the note (portions, source and assumption) is cut from its end first, and dropped
+    when fewer than `NOTE_MIN_CHARS` characters of it would remain. Never a URL: the parser refuses those in
+    ``source``, ``assumption`` and the portion names. Without a label and portions the text is the v2.2 one.
     """
     limit = ESTIMATE_REFERENCE_MAX
-    marker = f"; {CHECK_NEEDED_NOTE}" if check_needed else ""
+    marker = (f"; {LABEL_NOTE}" if label else "") + (f"; {CHECK_NEEDED_NOTE}" if check_needed else "")
     head = base[: limit - len(marker)].rstrip() + marker
     parts = []
+    if portions:
+        parts.append(f"양: {portions_reference(portions)}")
     if source:
         parts.append(f"출처: {source}")
     if assumption:
@@ -177,3 +192,53 @@ def estimate_reference(base: str, source: str | None, assumption: str | None, *,
     if room < NOTE_MIN_CHARS:
         return head
     return f"{head}; {'; '.join(parts)[:room].rstrip()}"
+
+
+def portions_reference(portions: Sequence[Portion]) -> str:
+    """`닭 150-200g, 감자 100-150g`: the assumed grams as stored in the estimate reference."""
+    return ", ".join(f"{portion.name} {_grams(portion.g_min)}-{_grams(portion.g_max)}g" for portion in portions)
+
+
+def portions_text(portions: Sequence[Portion]) -> str:
+    """`닭 150~200 g, 감자 100~150 g`: the assumed grams as shown in the proposal (one number when min = max)."""
+    parts = []
+    for portion in portions:
+        low, high = _grams(portion.g_min), _grams(portion.g_max)
+        amount = low if low == high else f"{low}~{high}"
+        parts.append(f"{portion.name} {amount} g")
+    return ", ".join(parts)
+
+
+def _grams(value: Decimal) -> str:
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+# --- label values and the dish name in the memo ------------------------------------------------------------------
+
+
+def is_label_estimate(ranges: NutrientRanges, from_label: bool) -> bool:
+    """A label value: the LLM says it was read from a label and every given range is a single value (min = max).
+
+    A label with a real range (the model mixed a value with a range) is an ordinary estimate and runs every check.
+    """
+    return from_label and bool(ranges) and all(low == high for _nutrient, low, high in ranges)
+
+
+def dish_memo(food_text: str, memo: str | None) -> str:
+    """The memo of a general item, always starting from the user's dish name.
+
+    The model sometimes keeps only the description (`닭 및 감자 위주` for `안동찜닭 닭 및 감자 위주`). When the first
+    word of ``food_text`` (at least `DISH_WORD_MIN_CHARS` characters) is not in the memo, it is put in front.
+    This is a plain containment test, not a semantic check.
+    """
+    text = memo or food_text
+    words = food_text.split()
+    word = words[0] if words else ""
+    if len(_fold(word)) >= DISH_WORD_MIN_CHARS and _fold(word) not in _fold(text):
+        return f"{word} {text}"
+    return text
+
+
+def _fold(text: str) -> str:
+    return unicodedata.normalize("NFKC", text).casefold()

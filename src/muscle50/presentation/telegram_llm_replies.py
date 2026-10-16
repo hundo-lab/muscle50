@@ -143,10 +143,16 @@ def _item_lines(number: int, item: ProposalItemView, *, indent: str) -> list[str
     lines = [text]
     sub = f"{indent}   "
     if item.estimate:
-        estimate = f"{sub}추정: {ranges_text(item.estimate)} (estimated)"
+        estimate = (
+            f"{sub}라벨: {ranges_text(item.estimate)}"
+            if item.label
+            else f"{sub}추정: {ranges_text(item.estimate)} (estimated)"
+        )
         lines.append(f"{estimate} {CHECK_MARKER}" if item.check else estimate)
     if item.check:
         lines.append(f"{sub}{CHECK_LINE_HEAD}{', '.join(CHECK_REASON_TEXTS[code] for code in item.check)}")
+    if item.portions:
+        lines.append(f"{sub}양 가정: {item.portions}")
     if item.assumption:
         lines.append(f"{sub}가정: {item.assumption}")
     if item.source:

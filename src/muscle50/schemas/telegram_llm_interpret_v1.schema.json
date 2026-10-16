@@ -11,6 +11,7 @@
     "items",
     "question_topics",
     "menu",
+    "refers_to",
     "edit",
     "reply",
     "memory_summary"
@@ -84,7 +85,10 @@
           "meal_type",
           "food_id",
           "source",
-          "assumption"
+          "assumption",
+          "from_label",
+          "portions",
+          "menu_ref"
         ],
         "properties": {
           "kind": {
@@ -217,6 +221,41 @@
               "null"
             ],
             "description": "what was assumed for the estimate, without numbers; otherwise null"
+          },
+          "from_label": {
+            "type": "boolean",
+            "description": "true when the values are printed on a nutrition label (photo or the user's words)"
+          },
+          "portions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "g_min",
+                "g_max"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "g_min": {
+                  "type": "number"
+                },
+                "g_max": {
+                  "type": "number"
+                }
+              }
+            },
+            "description": "the grams assumed per component (at most 4) when the user did not say the amount; an empty array otherwise"
+          },
+          "menu_ref": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "the number of the listed recent menu item the user says they ate; otherwise null"
           }
         }
       }
@@ -368,6 +407,18 @@
         }
       }
     },
+    "refers_to": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "open_proposal",
+        "last_recorded",
+        null
+      ],
+      "description": "open_proposal: the message corrects the proposal that is still open (meal_log with the whole corrected meal); last_recorded: it corrects a meal that was just recorded (meal_edit); null: it stands on its own"
+    },
     "edit": {
       "type": "object",
       "additionalProperties": false,
@@ -377,7 +428,11 @@
         "new_food_text",
         "new_quantity",
         "new_unit",
-        "new_meal_type"
+        "new_meal_type",
+        "new_memo",
+        "estimate",
+        "from_label",
+        "target_meal_ordinal"
       ],
       "properties": {
         "action": {
@@ -392,6 +447,7 @@
             "add_item",
             "void_meal",
             "change_meal_type",
+            "change_estimate",
             null
           ]
         },
@@ -442,6 +498,88 @@
             "other",
             null
           ]
+        },
+        "new_memo": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "estimate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kcal_min",
+            "kcal_max",
+            "protein_min",
+            "protein_max",
+            "carbs_min",
+            "carbs_max",
+            "fat_min",
+            "fat_max"
+          ],
+          "properties": {
+            "kcal_min": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "kcal_max": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "protein_min": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "protein_max": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "carbs_min": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "carbs_max": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "fat_min": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "fat_max": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "description": "only the nutrients that change (min and max together); null for the others"
+        },
+        "from_label": {
+          "type": "boolean",
+          "description": "true when the new estimate is printed on a nutrition label"
+        },
+        "target_meal_ordinal": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "the Nth meal of target meal_type that day (아침 1식 is 1); otherwise null"
         }
       }
     },
