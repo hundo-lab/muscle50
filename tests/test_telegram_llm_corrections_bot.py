@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import test_telegram_bot as v1
 import test_telegram_llm_bot as bot
 import test_telegram_llm_meals_bot as meals
 from test_telegram_llm_domain import NULL_EDIT, NULL_ESTIMATE, interpretation
@@ -21,14 +22,22 @@ from test_telegram_llm_meals_bot import catalog_item, dishes, est, item
 
 import muscle50.cli as cli
 from muscle50.application.telegram_bot import IncomingMessage, IncomingUpdate
+from muscle50.domain.telegram_commands import pending_migration_text
 from muscle50.domain.telegram_llm_prompt import (
     EDIT_CATALOG_ESTIMATE_TEXT,
     EDIT_NO_MEAL_TEXT,
     EDIT_NO_OPEN_TEXT,
     EDIT_NO_RECENT_TEXT,
+    OVERLAP_MANY_TEXT,
+    OVERLAP_SAME_TEXT,
     PROPOSAL_CANCELLED_TEXT,
+    PROPOSAL_EXPIRED_TEXT,
+    PROPOSAL_UNKNOWN_TEXT,
+    PROPOSAL_USED_TEXT,
+    PROPOSAL_WRONG_KIND_TEXT,
 )
 from muscle50.infrastructure.sqlite.nutrition_reader import SqliteNutritionReader
+from muscle50.infrastructure.sqlite.schema_status import code_migration_versions
 
 home = bot.home  # the autouse fixture of the bot tests: temporary MUSCLE50_HOME, fake clock, no network
 
@@ -170,7 +179,7 @@ def test_a_label_with_a_real_range_is_an_ordinary_estimate(
     assert "라벨:" not in replies[0] and "추정: kcal 185, 단백질 5~8 g" in replies[0]
 
 
-# --- AC10: assumed portions and the dish name in the memo ----------------------------------------------------
+# --- AC10: assumed portions and the dish name in the memo ------------------------------------------
 
 
 def stew(**fields: Any) -> dict[str, Any]:
@@ -228,7 +237,7 @@ def test_a_stated_amount_has_no_portion_line_and_a_memo_with_the_name_is_unchang
     assert "양:" not in meals.state_proposals(home)[0]["argv_ok"][-1]
 
 
-# --- AC2, AC4, AC5: correcting what was just recorded --------------------------------------------------------
+# --- AC2, AC4, AC5: correcting what was just recorded ----------------------------------------------
 
 
 def edit_doc(action: str, *, refers: str | None = "last_recorded", meal_type: str | None = None, **fields: Any) -> Any:
@@ -456,7 +465,7 @@ def test_a_general_item_is_found_by_its_memo_and_an_ambiguous_one_lists_the_item
     assert replies[0].split("\n")[1] == "아침 2026-10-06-breakfast-1 item 2: 일반식 (메모: 참치마요 삼각김밥 1개) 빼기"
 
 
-# --- AC7: correcting a proposal that is still open -----------------------------------------------------------
+# --- AC7: correcting a proposal that is still open -------------------------------------------------
 
 
 def test_correcting_an_open_proposal_replaces_it_in_one_save(
@@ -542,3 +551,245 @@ def test_get_active_reads_a_database_without_the_void_and_revision_tables(
         connection.close()
     meal = SqliteNutritionReader(database).get_active("2026-10-06-breakfast-1")
     assert meal is not None and meal.meal_id == "2026-10-06-breakfast-1"
+
+
+# --- AC3: the same food again in a slot that already has it ----------------------------------------
+
+
+def tuna_rice_ball(estimate: dict[str, Any] | None = None, **fields: Any) -> dict[str, Any]:
+    return bot._item(
+        "삼각김밥",
+        None,
+        None,
+        kind="general",
+        memo="깻잎닭갈비 삼각김밥 1개",
+        meal_type="breakfast",
+        estimate=estimate or est((180, 200), (5, 6)),
+        **fields,
+    )
+
+
+OVERLAP_PROPOSAL = "\n".join(
+    [
+        "오늘 아침(2026-10-06-breakfast-1)에 이미 같은 음식이 있습니다: 깻잎닭갈비 삼각김밥 1개",
+        "이렇게 기록할까요? (아침, 10-06)",
+        "1. 일반식 (메모: 깻잎닭갈비 삼각김밥 1개)",
+        "   추정: kcal 180~200, 단백질 5~6 g (estimated)",
+    ]
+)
+
+OVERLAP_COMMANDS = (
+    "기존 아침 고치기: /fix_91c0   하나 더 기록: /ok_91c0   일반식만 기록(값 없이): /plain_91c0   취소: /no_91c0"
+)
+
+
+def overlap_reply(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path, *items: dict[str, Any]
+) -> list[str]:
+    """Breakfast recorded from a label photo (token 7f3a), then a text message that proposes ``items``."""
+    prepare(capsys, home)
+    record_label_meal(monkeypatch, capsys, home)
+    replies, _provider = say(monkeypatch, capsys, dishes(*items), 3, "아침에 삼각김밥 먹었어")
+    return replies
+
+
+def test_an_overlapping_food_asks_fix_one_more_or_cancel_and_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    record_label_meal(monkeypatch, capsys, home)
+    before = meals.meal_tables(home)
+    replies, _provider = say(monkeypatch, capsys, dishes(tuna_rice_ball()), 3, "아침에 삼각김밥 먹었어")
+    assert replies == [OVERLAP_PROPOSAL + "\n" + OVERLAP_COMMANDS]
+    assert meals.meal_tables(home) == before
+    overlap = meals.state_proposals(home)[1]
+    assert overlap["fix_argv"][:7] == ["nutrition", "meal", "replace-item", MEAL_1, "--item-number", "1", "--general"]
+    assert overlap["argv_ok"][-1] == "--additional"  # /ok_ still records another meal
+
+
+MEAL_1 = "2026-10-06-breakfast-1"
+
+
+def test_fix_makes_an_edit_proposal_and_kills_the_overlap_commands(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    overlap_reply(monkeypatch, capsys, home, tuna_rice_ball())
+    before = meals.meal_tables(home)
+    replies, _provider = say(monkeypatch, capsys, None, 4, "/fix_91c0")
+    assert replies == [
+        "\n".join(
+            [
+                "이렇게 고칠까요?",
+                f"아침 {MEAL_1} item 1: 일반식 (메모: 깻잎닭갈비 삼각김밥 1개)"
+                " → 일반식 (메모: 깻잎닭갈비 삼각김밥 1개)",
+                "고치기: /ok_c2e1   취소: /no_c2e1",
+            ]
+        )
+    ]
+    assert meals.meal_tables(home) == before  # nothing is written by /fix_ itself
+    states = {proposal["token"]: proposal["state"] for proposal in meals.state_proposals(home)}
+    assert states == {"7f3a": "used", "91c0": "cancelled", "c2e1": "open"}  # one save
+    edit = meals.state_proposals(home)[2]
+    assert edit["kind"] == "edit" and edit["meal_id"] == MEAL_1 and edit["day"] == "2026-10-06"
+    assert edit["argv_ok"][:7] == ["nutrition", "meal", "replace-item", MEAL_1, "--item-number", "1", "--general"]
+    assert edit["argv_ok"][7:9] == [
+        "--general-note=깻잎닭갈비 삼각김밥 1개",
+        "--general-estimate=language_estimate:kcal=180-200,protein=5-6",
+    ]
+    # the overlap proposal's commands are dead
+    replies, _provider = say(monkeypatch, capsys, None, 5, "/ok_91c0")
+    assert replies == [PROPOSAL_CANCELLED_TEXT]
+    replies, _provider = say(monkeypatch, capsys, None, 6, "/fix_91c0")
+    assert replies == [PROPOSAL_CANCELLED_TEXT]
+    # confirming the fix replaces the item in the same meal: no second meal
+    replies, _provider = say(monkeypatch, capsys, None, 7, "/ok_c2e1")
+    assert replies[0].startswith(f"Replaced item 1 of meal {MEAL_1} with item 3.")
+    assert {row[0] for row in bot._tables(home)["nutrition_meals"]} == {MEAL_1}
+    shown = json.loads(bot._ok(capsys, "nutrition", "meal", "show", MEAL_1, "--json"))
+    assert [item["sequence"] for item in shown["items"]] == [2, 3]
+    assert shown["items"][1]["nutrients"]["calories_kcal"]["minimum"] == "180"
+
+
+def test_the_fix_choice_is_in_the_history_file(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    overlap_reply(monkeypatch, capsys, home, tuna_rice_ball())
+    say(monkeypatch, capsys, None, 4, "/fix_91c0")
+    history = bot._history(home)  # a rejected kind would only be logged, never raised: assert the line itself
+    assert [entry["kind"] for entry in history] == ["photo", "confirm", "text", "fix"]
+    assert history[-1]["text"] == "/fix_91c0" and history[-1]["proposal"] == "c2e1"
+    assert history[-1]["reply"].startswith("이렇게 고칠까요?")
+
+
+def test_ok_after_an_overlap_records_another_meal_with_additional(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    overlap_reply(monkeypatch, capsys, home, tuna_rice_ball())
+    replies, _provider = say(monkeypatch, capsys, None, 4, "/ok_91c0")
+    assert replies[0].startswith("Recorded meal 2026-10-06-breakfast-2.")
+    assert {row[0] for row in bot._tables(home)["nutrition_meals"]} == {MEAL_1, "2026-10-06-breakfast-2"}
+    replies, _provider = say(monkeypatch, capsys, None, 5, "/fix_91c0")
+    assert replies == [PROPOSAL_USED_TEXT]
+
+
+def test_the_same_content_offers_no_fix(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    same = tuna_rice_ball(estimate=LABEL_ESTIMATE, from_label=True)
+    replies = overlap_reply(monkeypatch, capsys, home, same, catalog_item("닭가슴살", "breakfast", 1, "pack"))
+    lines = replies[0].split("\n")
+    assert lines[:2] == [
+        "오늘 아침(2026-10-06-breakfast-1)에 이미 같은 음식이 있습니다: 깻잎닭갈비 삼각김밥 1개, 닭가슴살",
+        OVERLAP_SAME_TEXT,
+    ]
+    assert lines[-1] == "하나 더 기록: /ok_91c0   일반식만 기록(값 없이): /plain_91c0   취소: /no_91c0"
+    assert "/fix_" not in replies[0] and meals.state_proposals(home)[1]["fix_argv"] == []
+    replies, _provider = say(monkeypatch, capsys, None, 4, "/fix_91c0")
+    assert replies == [PROPOSAL_WRONG_KIND_TEXT]
+
+
+def test_several_changes_offer_no_fix(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    replies = overlap_reply(
+        monkeypatch, capsys, home, tuna_rice_ball(), catalog_item("닭가슴살", "breakfast", 2, "pack")
+    )
+    assert replies[0].split("\n")[1] == OVERLAP_MANY_TEXT
+    assert "/fix_" not in replies[0] and "하나 더 기록: /ok_91c0" in replies[0]
+    replies, _provider = say(monkeypatch, capsys, None, 4, "/fix_91c0")
+    assert replies == [PROPOSAL_WRONG_KIND_TEXT]
+
+
+def test_new_items_next_to_an_identical_one_are_added_by_one_add_item(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    replies = overlap_reply(
+        monkeypatch,
+        capsys,
+        home,
+        catalog_item("닭가슴살", "breakfast", 1, "pack"),
+        catalog_item("햇반", "breakfast", 1, "pack"),
+    )
+    assert "기존 아침 고치기: /fix_91c0" in replies[0]
+    fix = meals.state_proposals(home)[1]["fix_argv"]
+    assert fix == ["nutrition", "meal", "add-item", MEAL_1, "--item", "hetbahn-210", "1", "pack"]
+    replies, _provider = say(monkeypatch, capsys, None, 4, "/fix_91c0")
+    assert f"아침 {MEAL_1}: 추가 햇반 (hetbahn-210) 1 pack" in replies[0]
+    say(monkeypatch, capsys, None, 5, "/ok_c2e1")
+    shown = json.loads(bot._ok(capsys, "nutrition", "meal", "show", MEAL_1, "--json"))
+    assert [item["sequence"] for item in shown["items"]] == [1, 2, 3]
+
+
+def test_a_different_food_is_not_an_overlap_and_keeps_the_notice_on_top(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    replies = overlap_reply(monkeypatch, capsys, home, catalog_item("햇반", "breakfast", 1, "pack"))
+    assert replies[0].split("\n")[:2] == [
+        f"이미 기록된 아침({MEAL_1})이 있어 하나 더 기록합니다.",
+        "이렇게 기록할까요? (아침, 10-06)",
+    ]
+    assert "/fix_" not in replies[0] and "기록: /ok_91c0" in replies[0]
+
+
+def test_a_multi_meal_overlap_has_the_notice_and_no_fix(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    record_label_meal(monkeypatch, capsys, home)
+    document = dishes(
+        tuna_rice_ball(), item("국밥", "lunch", estimate=est((600, 700), (20, 30))), item("파스타", "dinner")
+    )
+    replies, _provider = say(monkeypatch, capsys, document, 3, "아침에 삼각김밥, 점심 국밥, 저녁 파스타")
+    lines = replies[0].split("\n")
+    assert lines[0] == "오늘 아침(2026-10-06-breakfast-1)에 이미 같은 음식이 있습니다: 깻잎닭갈비 삼각김밥 1개"
+    assert lines[1] == "이렇게 기록할까요? (10-06, 3끼)"
+    assert "/fix_" not in replies[0] and "기록(겹치는 끼니는 하나 더): /ok_91c0" in replies[0]
+    assert meals.state_proposals(home)[1]["fix_argv"] == []
+
+
+def test_fix_on_proposals_that_cannot_be_fixed_gets_the_fixed_texts(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    say(monkeypatch, capsys, dishes(catalog_item("닭가슴살", "lunch", 1, "pack")), 1, "점심 닭가슴살")
+    replies, _provider = say(monkeypatch, capsys, None, 2, "/fix_7f3a")  # an open proposal with nothing to fix
+    assert replies == [PROPOSAL_WRONG_KIND_TEXT]
+    replies, _provider = say(monkeypatch, capsys, None, 3, "/fix_ffff")
+    assert replies == [PROPOSAL_UNKNOWN_TEXT]
+    # a menu proposal is not a meal proposal
+    menu = interpretation(intent="menu_suggest", items=[])
+    suggest = {
+        "lead": "",
+        "suggestions": [
+            {"name": "샐러드", "category": "home", "description": "", "estimate": est((300, 400), (20, 30)), "note": ""}
+        ],
+        "memory_summary": "",
+    }
+    bot._session(monkeypatch, capsys, bot.FakeProvider(menu, suggest), bot.text(4, "뭐 먹지"))
+    replies, _provider = say(monkeypatch, capsys, None, 5, "/fix_91c0")
+    assert replies == [PROPOSAL_WRONG_KIND_TEXT]
+
+
+def test_fix_on_an_expired_overlap_proposal_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    overlap_reply(monkeypatch, capsys, home, tuna_rice_ball())
+    before = meals.meal_tables(home)
+    later = bot.NOW + timedelta(minutes=61)
+    monkeypatch.setattr(cli, "_now", lambda: later)
+    late = IncomingUpdate(4, IncomingMessage(bot.ALLOWED, "/fix_91c0", int(later.timestamp())))
+    replies, _err, _fake = bot._session(monkeypatch, capsys, bot.FakeProvider(), late)
+    assert replies == [PROPOSAL_EXPIRED_TEXT] and meals.meal_tables(home) == before
+    assert {proposal["token"] for proposal in meals.state_proposals(home)} == {"7f3a", "91c0"}
+
+
+def test_a_pending_migration_refuses_the_fix_confirmation_without_consuming_it(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    overlap_reply(monkeypatch, capsys, home, tuna_rice_ball())
+    say(monkeypatch, capsys, None, 4, "/fix_91c0")
+    latest = code_migration_versions()[-1]
+    v1._drop_migration_marker(v1._database(home), latest)
+    replies, _provider = say(monkeypatch, capsys, None, 5, "/ok_c2e1")
+    assert replies == [pending_migration_text((latest,))]
+    assert meals.state_proposals(home)[2]["state"] == "open"

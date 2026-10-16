@@ -569,7 +569,7 @@ def estimate_source(photo: bool) -> NutritionSourceType:
 # --- commands the LLM layer owns (only when the feature is on) ---------------------------------------
 
 PROPOSAL_TOKEN = re.compile(r"[0-9a-f]{4}")
-_PROPOSAL_COMMAND = re.compile(r"/(ok|plain|no)_([0-9a-f]{4})")
+_PROPOSAL_COMMAND = re.compile(r"/(ok|plain|no|fix)_([0-9a-f]{4})")
 _EAT_COMMAND = re.compile(r"/eat_([0-9a-f]{4})_([1-9][0-9]?)")
 LLM_COMMANDS = frozenset({"llm", "memory", "forget", "history"})
 
@@ -577,7 +577,7 @@ LLM_COMMANDS = frozenset({"llm", "memory", "forget", "history"})
 @dataclass(frozen=True)
 class ProposalCommand:
     action: str
-    """`ok`, `plain`, `no` or `eat`."""
+    """`ok`, `plain`, `no`, `fix` or `eat`."""
     token: str
     number: int | None = None
     """`/eat_<token>_<n>`: the menu number."""
@@ -782,7 +782,7 @@ RECHECK_CODES = frozenset(
     {"range_too_wide", "range_is_a_point", "macros_vs_kcal", "macros_exceed_kcal", "assumption_number"}
 )
 HISTORY_ATTEMPT_KEYS = ("provider", "model", "outcome", "retry")
-HISTORY_KINDS = frozenset({"text", "photo", "confirm", "plain", "cancel", "eat", "edit"})
+HISTORY_KINDS = frozenset({"text", "photo", "confirm", "plain", "cancel", "eat", "edit", "fix"})
 
 
 def history_entry(**fields: Any) -> dict[str, Any]:

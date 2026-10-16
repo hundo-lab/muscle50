@@ -365,12 +365,13 @@ def test_meal_slot_from_the_time_and_duplicate_guard(
     _catalog(capsys)
     _llm_config(home)
     _ok(capsys, "nutrition", "log", "--meal", "lunch", "--item", "햇반", "1", "pack")
-    document = meal(_item("햇반", 1, "pack"), meal_type=None)
-    replies, _err, _fake = _session(monkeypatch, capsys, FakeProvider(document), text(1, "햇반 하나 먹었어"))
+    # A different food in a slot that already has a meal: recorded as another meal, said at the very top.
+    document = meal(_item("닭가슴살", 1, "pack"), meal_type=None)
+    replies, _err, _fake = _session(monkeypatch, capsys, FakeProvider(document), text(1, "닭가슴살 하나 먹었어"))
     assert replies[0].split("\n")[:3] == [
+        "이미 기록된 점심(2026-10-06-lunch-1)이 있어 하나 더 기록합니다.",
         "이렇게 기록할까요? (점심, 10-06)",
         "(끼니: 지금 시각 기준)",
-        "이미 기록된 점심(2026-10-06-lunch-1)이 있어 하나 더 기록합니다.",
     ]
     replies, _err, _fake = _session(monkeypatch, capsys, FakeProvider(), text(2, "/ok_7f3a"))
     assert replies[0].startswith("Recorded meal 2026-10-06-lunch-2.")
@@ -487,7 +488,8 @@ def test_photo_estimate_shows_range_estimated_and_plain_stores_no_values(
     )
     _session(monkeypatch, capsys, FakeProvider(), text(2, "/ok_7f3a"))
     replies, _err, _fake = _session(monkeypatch, capsys, FakeProvider(_photo_meal()), photo(3, "저녁"))
-    assert "이미 기록된 저녁(2026-10-06-dinner-1)이 있어 하나 더 기록합니다." in replies[0]
+    # the same dish again: the overlap notice replaces the "another meal" notice; /plain_ still records another meal
+    assert replies[0].startswith("오늘 저녁(2026-10-06-dinner-1)에 이미 같은 음식이 있습니다: 제육볶음 정식\n")
     replies, _err, _fake = _session(monkeypatch, capsys, FakeProvider(), text(4, "/plain_91c0"))
     estimated = json.loads(_ok(capsys, "nutrition", "meal", "show", "2026-10-06-dinner-1", "--json"))
     item = estimated["items"][0]

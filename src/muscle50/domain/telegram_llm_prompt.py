@@ -204,6 +204,8 @@ LLM_USAGE_TEXT = "사용법: /llm [claude|codex|default]\n예: /llm codex"
 COMMAND_ARGUMENT_TEXT = "이 명령은 인자를 받지 않습니다: /{name}"
 EDIT_UNCLEAR_TEXT = "무엇을 고칠지 알지 못했습니다. 기록을 보고(/day) /show, /void 또는 /log로 고쳐 주세요."
 EDIT_NO_MEAL_TEXT = "고칠 식사를 찾지 못했습니다. /day로 기록을 확인하세요."
+OVERLAP_SAME_TEXT = "이미 같은 내용이 기록되어 있습니다. 하나 더 기록하려면 /ok를 보내세요."
+OVERLAP_MANY_TEXT = "고칠 곳이 여러 개라 바로 고치기는 없습니다. 기록은 /show로 확인하세요."
 EDIT_NO_RECENT_TEXT = "방금 기록한 식사를 찾지 못했습니다(기록이 없거나 이미 취소했습니다). /day로 기록을 확인하세요."
 EDIT_NO_OPEN_TEXT = "고칠 열린 제안이 없습니다(이미 처리했거나 취소했거나 유효 시간이 지났습니다). 다시 보내 주세요."
 EDIT_CATALOG_ESTIMATE_TEXT = (
@@ -257,6 +259,10 @@ def photo_failed_head(meal_type: MealType, day_text: str) -> str:
 
 def superseded_line(token: str) -> str:
     return f"이전 제안(/ok_{token})은 취소했습니다."
+
+
+def overlap_text(when: str, meal_type: MealType, meal_id: str, names: Sequence[str]) -> str:
+    return f"{when} {MEAL_NAMES[meal_type]}({meal_id})에 이미 같은 음식이 있습니다: {', '.join(names)}"
 
 
 def duplicate_text(meal_type: MealType, meal_ids: Sequence[str]) -> str:

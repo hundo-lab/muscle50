@@ -14,10 +14,11 @@ import re
 import unicodedata
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 from muscle50.domain.llm_today_totals import NUTRIENT_NAMES, amount_text
-from muscle50.domain.nutrition import Meal, MealItem, MealType, NutrientField
+from muscle50.domain.nutrition import GENERAL_MEAL_FOOD_ID, Meal, MealItem, MealType, NutrientField, QuantityUnit
 from muscle50.domain.telegram_llm import NutrientRanges, Proposal
 from muscle50.domain.telegram_llm_prompt import MEAL_NAMES
 
@@ -188,3 +189,101 @@ def open_proposal_block(proposal: Proposal) -> str:
     else:
         where = f"{proposal.day:%m-%d} {len(proposal.meals)}끼" if proposal.day else f"{len(proposal.meals)}끼"
     return "\n".join([f"/ok_{proposal.token} | {where}", *proposal.outline])
+
+
+# --- a new meal that overlaps a recorded one of the same day and type -----------------------------------------------
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """One item a proposal would record: a catalog food with an amount, or a general item with a memo."""
+
+    food_id: str | None
+    """The catalog food ID; None for a general item."""
+    memo: str | None
+    ranges: NutrientRanges
+    quantity: Decimal | None
+    unit: QuantityUnit | None
+
+
+@dataclass(frozen=True)
+class Overlap:
+    """A candidate (by position) that an already recorded item of that meal also is."""
+
+    index: int
+    meal: Meal
+    item: MealItem
+    identical: bool
+    """The recorded item already has the candidate's values (the amount, or the estimate of the same memo)."""
+
+
+def _same_food(item: MealItem, candidate: Candidate) -> bool:
+    """The same catalog food ID, or the same general memo after normalizing (an empty memo never matches).
+
+    The reserved `general-meal` profile is every general item's food ID, so it never counts as a food match.
+    """
+    if candidate.food_id is not None:
+        return (
+            candidate.food_id != GENERAL_MEAL_FOOD_ID
+            and not item.is_general
+            and item.food_profile_id == candidate.food_id
+        )
+    memo = normalize_memo(candidate.memo)
+    return bool(memo) and item.is_general and normalize_memo(item_memo(item)) == memo
+
+
+def _identical(item: MealItem, candidate: Candidate) -> bool:
+    if candidate.food_id is not None:
+        return item.quantity == candidate.quantity and item.quantity_unit is candidate.unit
+    # A proposal without values never replaces recorded values (that would lose them).
+    return not candidate.ranges or general_ranges(item) == candidate.ranges
+
+
+def find_overlaps(existing: Sequence[Meal], candidates: Sequence[Candidate]) -> tuple[Overlap, ...]:
+    """The candidates that are already recorded in one of the ``existing`` meals (same day and meal type).
+
+    Deterministic: a catalog food by ID, a general item by normalized memo. Each candidate is reported once, with
+    the first recorded item it equals.
+    """
+    found = []
+    for index, candidate in enumerate(candidates):
+        match = next(((meal, item) for meal in existing for item in meal.items if _same_food(item, candidate)), None)
+        if match is not None:
+            found.append(Overlap(index, match[0], match[1], _identical(match[1], candidate)))
+    return tuple(found)
+
+
+@dataclass(frozen=True)
+class FixPlan:
+    """What makes the recorded meal equal to the proposal: items to replace and new items to add."""
+
+    meal: Meal
+    replacements: tuple[Overlap, ...]
+    """Overlapping items whose values differ (one `replace-item` each)."""
+    additions: tuple[int, ...]
+    """Candidates that overlap nothing (one `add-item` for all of them together)."""
+
+    @property
+    def operations(self) -> int:
+        return len(self.replacements) + (1 if self.additions else 0)
+
+
+def plan_fix(overlaps: Sequence[Overlap], candidate_count: int) -> FixPlan | None:
+    """The fix for a single-meal proposal whose overlaps all lie in one recorded meal; None otherwise.
+
+    An overlapping item with the same values needs no operation: it is already recorded. `/fix_` is offered only
+    when exactly one operation is left (`FixPlan.operations`).
+    """
+    if len({overlap.meal.meal_id for overlap in overlaps}) != 1:
+        return None
+    overlapping = {overlap.index for overlap in overlaps}
+    return FixPlan(
+        overlaps[0].meal,
+        tuple(overlap for overlap in overlaps if not overlap.identical),
+        tuple(index for index in range(candidate_count) if index not in overlapping),
+    )
+
+
+def overlap_name(item: MealItem) -> str:
+    """The recorded food as the overlap notice names it: a general item's memo, a catalog food's name."""
+    return (item_memo(item) or item.food_name) if item.is_general else item.food_name

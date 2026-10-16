@@ -8,6 +8,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from importlib.resources import files
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -19,17 +20,26 @@ from muscle50.domain.telegram_llm import (
     EditAction,
     Intent,
     LlmOutputError,
+    LlmState,
     Portion,
+    Proposal,
+    ProposalCommand,
+    ProposalKind,
+    ProposalState,
     Refers,
     parse_interpretation,
+    parse_llm_command,
 )
 from muscle50.domain.telegram_llm_check import CheckCode, check_estimate
 from muscle50.domain.telegram_llm_corrections import (
+    Candidate,
+    find_overlaps,
     general_ranges,
     match_items,
     merge_estimate,
     normalize_memo,
     pick_meals,
+    plan_fix,
     recent_meal_ids,
     recent_meals_block,
 )
@@ -42,6 +52,7 @@ from muscle50.domain.telegram_llm_meals import (
     portions_reference,
     portions_text,
 )
+from muscle50.infrastructure.telegram.llm_state_store import JsonLlmStateStore
 
 KCAL, PROTEIN = NutrientField.CALORIES_KCAL, NutrientField.PROTEIN_G
 CARBS, FAT = NutrientField.CARBOHYDRATE_G, NutrientField.FAT_G
@@ -403,3 +414,122 @@ def test_the_stored_estimate_is_read_back_as_ranges_and_the_blocks_are_determini
         "3. 닭가슴살 (chicken-breast) 1 pack"
     )
     assert recent_meals_block([meal]) == block
+
+
+# --- overlap with a recorded meal and the one-command fix -------------------------------------------------------------
+
+MEAL_ID = "2026-10-06-breakfast-1"
+
+
+def recorded() -> Meal:
+    return make_meal(
+        MEAL_ID,
+        MealType.BREAKFAST,
+        general(MEAL_ID, 1, "깻잎닭갈비 삼각김밥 1개", "visual_estimate:kcal=185-185,protein=5-5"),
+        catalog(MEAL_ID, 2, "chicken-breast", "닭가슴살"),
+        general(MEAL_ID, 3, None),
+    )
+
+
+def memo_candidate(
+    memo: str | None, ranges: Any = ((KCAL, Decimal(185), Decimal(185)), (PROTEIN, Decimal(5), Decimal(5)))
+) -> Candidate:
+    return Candidate(None, memo, ranges, None, None)
+
+
+def food_candidate(food_id: str, quantity: int = 1) -> Candidate:
+    return Candidate(food_id, None, (), Decimal(quantity), QuantityUnit.PACK)
+
+
+def test_overlap_is_a_catalog_food_id_or_an_equal_normalized_memo() -> None:
+    meal = recorded()
+    found = find_overlaps(
+        [meal], [food_candidate("chicken-breast"), memo_candidate("깻잎닭갈비삼각김밥, 1개"), memo_candidate("라면")]
+    )
+    assert [(overlap.index, overlap.item.sequence) for overlap in found] == [(0, 2), (1, 1)]
+    assert find_overlaps([], [food_candidate("chicken-breast")]) == ()
+
+
+def test_the_general_meal_profile_and_an_empty_memo_never_overlap() -> None:
+    meal = recorded()
+    # every general item has the reserved food ID: it must not make two different dishes overlap
+    assert find_overlaps([meal], [food_candidate("general-meal")]) == ()
+    assert find_overlaps([meal], [memo_candidate("전혀 다른 음식")]) == ()
+    assert find_overlaps([meal], [memo_candidate(None), memo_candidate(""), memo_candidate("  ")]) == ()
+    # the recorded general item without a memo (item 3) is not matched by an empty memo either
+
+
+def test_a_catalog_candidate_is_not_matched_by_a_general_item_and_a_memo_not_by_a_catalog_item() -> None:
+    meal = make_meal(MEAL_ID, MealType.BREAKFAST, catalog(MEAL_ID, 1, "chicken-breast", "닭가슴살"))
+    assert find_overlaps([meal], [memo_candidate("닭가슴살")]) == ()
+
+
+def test_plan_fix_counts_the_commands_needed() -> None:
+    meal = recorded()
+    same = [food_candidate("chicken-breast"), memo_candidate("깻잎닭갈비 삼각김밥 1개")]
+    plan = plan_fix(find_overlaps([meal], same), len(same))
+    assert plan is not None and plan.operations == 0  # identical values: already recorded
+    changed = [food_candidate("chicken-breast", 2)]
+    plan = plan_fix(find_overlaps([meal], changed), 1)
+    assert plan is not None and plan.operations == 1 and plan.replacements[0].item.sequence == 2 and not plan.additions
+    added = [food_candidate("chicken-breast"), food_candidate("hetbahn-210"), food_candidate("banana")]
+    plan = plan_fix(find_overlaps([meal], added), 3)
+    assert plan is not None and plan.operations == 1 and plan.additions == (1, 2) and not plan.replacements
+    two = [
+        food_candidate("chicken-breast", 2),
+        memo_candidate("깻잎닭갈비 삼각김밥 1개", ((KCAL, Decimal(190), Decimal(200)),)),
+    ]
+    plan = plan_fix(find_overlaps([meal], two), 2)
+    assert plan is not None and plan.operations == 2
+    one_and_one = [food_candidate("chicken-breast", 2), food_candidate("hetbahn-210")]
+    plan = plan_fix(find_overlaps([meal], one_and_one), 2)
+    assert plan is not None and plan.operations == 2  # a replace and an add
+
+
+def test_a_proposal_without_values_never_replaces_recorded_values() -> None:
+    meal = recorded()
+    plan = plan_fix(find_overlaps([meal], [memo_candidate("깻잎닭갈비 삼각김밥 1개", ())]), 1)
+    assert plan is not None and plan.operations == 0
+
+
+def test_overlaps_in_several_recorded_meals_have_no_single_fix() -> None:
+    other = make_meal(
+        "2026-10-06-breakfast-2", MealType.BREAKFAST, catalog("2026-10-06-breakfast-2", 1, "banana", "바나나")
+    )
+    candidates = [food_candidate("chicken-breast", 2), food_candidate("banana", 3)]
+    overlaps = find_overlaps([recorded(), other], candidates)
+    assert len(overlaps) == 2 and plan_fix(overlaps, 2) is None
+
+
+# --- the command and the state file ------------------------------------------------------------------------------
+
+
+def test_fix_is_a_proposal_command_like_ok_and_no() -> None:
+    assert parse_llm_command("/fix_91c0", bot_username="bot") == ProposalCommand("fix", "91c0")
+    assert parse_llm_command("/fix_91c0@Bot", bot_username="bot") == ProposalCommand("fix", "91c0")
+    assert parse_llm_command("/fix_91c0 extra", bot_username="bot") is None
+    assert parse_llm_command("/fix_xyz1", bot_username="bot") is None
+
+
+def test_the_state_file_keeps_outline_and_fix_and_loads_files_without_them(tmp_path: Path) -> None:
+    store = JsonLlmStateStore(tmp_path / "state.json")
+    proposal = Proposal(
+        "91c0",
+        1,
+        ProposalKind.MEAL,
+        10,
+        20,
+        ProposalState.OPEN,
+        argv_ok=("nutrition", "log"),
+        outline=("1. 일반식 (메모: 삼각김밥) | 추정: kcal 180~200",),
+        fix_argv=("nutrition", "meal", "add-item", "2026-10-06-breakfast-1"),
+        fix_change="아침 추가",
+    )
+    store.save(LlmState(None, (proposal,)))
+    assert store.load().proposals[0] == proposal
+    document = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    for key in ("outline", "fix_argv", "fix_change"):
+        del document["proposals"][0][key]  # a file written by v2.2
+    (tmp_path / "state.json").write_text(json.dumps(document), encoding="utf-8", newline="\n")
+    old = store.load().proposals[0]
+    assert (old.outline, old.fix_argv, old.fix_change) == ((), (), "")

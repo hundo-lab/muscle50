@@ -125,14 +125,19 @@ from muscle50.domain.telegram_llm_check import (
 )
 from muscle50.domain.telegram_llm_corrections import (
     RECENT_MEALS,
+    Candidate,
+    FixPlan,
     ItemRef,
+    find_overlaps,
     general_ranges,
     item_memo,
     item_summary,
     match_items,
     merge_estimate,
     open_proposal_block,
+    overlap_name,
     pick_meals,
+    plan_fix,
     ranges_summary,
     recent_meal_ids,
     recent_meals_block,
@@ -168,6 +173,8 @@ from muscle50.domain.telegram_llm_prompt import (
     MENU_EMPTY_TEXT,
     MENU_NUMBER_UNKNOWN_TEXT,
     MENU_SLOT_UNKNOWN_TEXT,
+    OVERLAP_MANY_TEXT,
+    OVERLAP_SAME_TEXT,
     PHOTO_DOWNLOAD_FAILED_TEXT,
     PHOTO_KIND_UNCLEAR_TEXT,
     PHOTO_TOO_LARGE_TEXT,
@@ -291,6 +298,21 @@ class ProposalItemView:
 
 
 @dataclass(frozen=True)
+class OverlapView:
+    """A proposed meal whose food is already recorded in that day's meal of the same type."""
+
+    meal_type: MealType
+    meal_id: str
+    names: tuple[str, ...]
+    when: str
+    """`오늘`, or `MM-DD` for another day."""
+    fix: bool
+    """`/fix_` is offered: the recorded meal can be made equal to the proposal with exactly one command."""
+    hint: str | None = None
+    """Why there is no `/fix_` (the same content is already recorded, or it takes several changes)."""
+
+
+@dataclass(frozen=True)
 class MealProposalView:
     token: str
     meal_type: MealType
@@ -306,6 +328,7 @@ class MealProposalView:
     """Web searches made for this proposal (`웹 검색 N회` when above 0)."""
     superseded: str | None = None
     """The token of the open proposal this one replaces (cancelled in the same save)."""
+    overlap: OverlapView | None = None
 
 
 @dataclass(frozen=True)
@@ -313,6 +336,7 @@ class MealBlockView:
     meal_type: MealType
     duplicates: tuple[str, ...]
     items: tuple[ProposalItemView, ...]
+    overlap: OverlapView | None = None
 
 
 @dataclass(frozen=True)
@@ -819,14 +843,16 @@ class TelegramLlmHandler:
         commands = []
         blocks = []
         for meal_type, items in meals.items():
-            duplicates = self._existing_meals(chat_id, day, meal_type)
+            existing = self._existing_meals(chat_id, day, meal_type)
+            duplicates = tuple(meal.meal_id for meal in existing)
             head = ("nutrition", "log", "--date", day.isoformat(), "--meal", meal_type.value)
             tail = ("--additional",) if duplicates else ()
             argv_ok = (*head, *(arg for entry in items for arg in entry.argv(source, reference, True)), *tail)
             argv_plain = (*head, *(arg for entry in items for arg in entry.argv(source, reference, False)), *tail)
             has_estimate = any(entry.estimate for entry in items)
             commands.append(MealCommand(meal_type, argv_ok, argv_plain if has_estimate else ()))
-            blocks.append(MealBlockView(meal_type, duplicates, _item_views(items)))
+            overlap = self._overlap(day, meal_type, existing, items, fixable=False)
+            blocks.append(MealBlockView(meal_type, duplicates, _item_views(items), overlap[0]))
         proposal = self._new_proposal(
             chat_id,
             ProposalKind.MEAL,
@@ -893,7 +919,11 @@ class TelegramLlmHandler:
         searches: int = 0,
         cancel: str | None = None,
     ) -> None:
-        duplicates = self._existing_meals(chat_id, day, meal_type)
+        existing = self._existing_meals(chat_id, day, meal_type)
+        duplicates = tuple(meal.meal_id for meal in existing)
+        overlap, fix_argv, fix_change = self._overlap(
+            day, meal_type, existing, entries, fixable=True, source=source, reference=reference
+        )
         head = ("nutrition", "log", "--date", day.isoformat(), "--meal", meal_type.value)
         tail = ("--additional",) if duplicates else ()
         argv_ok = (*head, *(arg for entry in entries for arg in entry.argv(source, reference, True)), *tail)
@@ -909,6 +939,8 @@ class TelegramLlmHandler:
             meal_type=meal_type,
             day=day,
             outline=_outline(views),
+            fix_argv=fix_argv,
+            fix_change=fix_change,
         )
         exchange.proposal = proposal.token
         view = MealProposalView(
@@ -924,6 +956,7 @@ class TelegramLlmHandler:
             failed_photo,
             searches,
             cancel,
+            overlap,
         )
         exchange.reply = self._replies.proposal(view)
 
@@ -944,13 +977,52 @@ class TelegramLlmHandler:
             failed_photo=True,
         )
 
-    def _existing_meals(self, chat_id: int, day: date, meal_type: MealType) -> tuple[str, ...]:
+    def _existing_meals(self, chat_id: int, day: date, meal_type: MealType) -> tuple[Meal, ...]:
         try:
             meals = self._meals.list_eaten_between(*local_day_bounds(day, self._local_timezone(day)))
         except Exception as exc:  # a missing or unreadable DB: `nutrition log` itself refuses a duplicate
             self._log(f"chat {chat_id}: existing meals not read ({type(exc).__name__})")
             return ()
-        return tuple(meal.meal_id for meal in meals if meal.meal_type is meal_type)
+        return tuple(meal for meal in meals if meal.meal_type is meal_type)
+
+    def _overlap(
+        self,
+        day: date,
+        meal_type: MealType,
+        existing: Sequence[Meal],
+        entries: Sequence[_Entry],
+        *,
+        fixable: bool,
+        source: NutritionSourceType = NutritionSourceType.LANGUAGE_ESTIMATE,
+        reference: str = "",
+    ) -> tuple[OverlapView | None, tuple[str, ...], str]:
+        """The overlap notice of a proposed meal and, for a single-meal proposal, its one `/fix_` command.
+
+        Deterministic: a catalog food by ID, a general item by normalized memo. `/fix_` makes the recorded meal equal
+        to the proposal and is offered only when exactly one command does it (a replace of one differing item, or
+        one add of all the new items); several commands, or nothing to change, are hinted instead.
+        """
+        candidates = [
+            Candidate(
+                entry.food_id, entry.memo if entry.food_id is None else None, entry.estimate, entry.quantity, entry.unit
+            )
+            for entry in entries
+        ]
+        overlaps = find_overlaps(existing, candidates)
+        if not overlaps:
+            return None, (), ""
+        when = "오늘" if day == self._today() else f"{day:%m-%d}"
+        names = tuple(dict.fromkeys(overlap_name(overlap.item) for overlap in overlaps))
+        plan = plan_fix(overlaps, len(entries)) if fixable else None
+        argv: tuple[str, ...] = ()
+        change = ""
+        if plan is not None and plan.operations == 1:
+            argv, change = _fix_command(plan, entries, source, reference)
+        hint = None
+        if fixable and not argv:
+            hint = OVERLAP_SAME_TEXT if plan is not None and plan.operations == 0 else OVERLAP_MANY_TEXT
+        view = OverlapView(meal_type, overlaps[0].meal.meal_id, names, when, bool(argv), hint)
+        return view, argv, change
 
     # --- menus (captures and suggestions) ----------------------------------------------------------------
 
@@ -1490,7 +1562,7 @@ class TelegramLlmHandler:
     # --- proposal commands -------------------------------------------------------------------------------
 
     def _proposal_command(self, chat_id: int, update_id: int, command: ProposalCommand) -> LlmAction:
-        kind = {"ok": "confirm", "plain": "plain", "no": "cancel", "eat": "eat"}[command.action]
+        kind = {"ok": "confirm", "plain": "plain", "no": "cancel", "eat": "eat", "fix": "fix"}[command.action]
         typed = f"/{command.action}_{command.token}" + (f"_{command.number}" if command.number is not None else "")
         state = self._proposals.load()
         proposal = next(
@@ -1507,6 +1579,8 @@ class TelegramLlmHandler:
             return self._simple(chat_id, update_id, kind, CANCELLED_TEXT, proposal=proposal.token, typed=typed)
         if command.action == "eat":
             return self._eat(chat_id, update_id, proposal, command.number or 0)
+        if command.action == "fix":
+            return self._fix(chat_id, update_id, proposal)
         refused = self._migration_refusal(chat_id)
         if refused is not None:  # not consumed: it can be confirmed once the migration is applied
             return self._simple(chat_id, update_id, kind, refused, proposal=proposal.token, typed=typed)
@@ -1625,7 +1699,23 @@ class TelegramLlmHandler:
             return PROPOSAL_EXPIRED_TEXT
         if command.action == "plain" and not proposal.plain_available:
             return PROPOSAL_NO_PLAIN_TEXT.format(token=proposal.token)
+        if command.action == "fix" and (proposal.kind is not ProposalKind.MEAL or not proposal.fix_argv):
+            return PROPOSAL_WRONG_KIND_TEXT
         return None
+
+    def _fix(self, chat_id: int, update_id: int, overlap: Proposal) -> LlmAction:
+        """`/fix_<token>`: the recorded meal is corrected instead of recording another one. Nothing is written
+        here: a new edit proposal (`/ok_` runs the stored command) replaces the overlap proposal in one state save,
+        so the overlap proposal's `/ok_` and `/fix_` stop working."""
+        meal_id = overlap.fix_argv[3]  # nutrition meal replace-item|add-item <meal_id> ...
+        proposal = self._new_proposal(
+            chat_id, ProposalKind.EDIT, cancel=overlap.token, argv_ok=overlap.fix_argv, meal_id=meal_id, day=overlap.day
+        )
+        exchange = _Exchange(intent="fix", proposal=proposal.token)
+        exchange.reply = self._replies.edit(EditView(proposal.token, overlap.fix_change, " ".join(overlap.fix_argv)))
+        self._record(chat_id, exchange, update_id=update_id, kind="fix", text=f"/fix_{overlap.token}")
+        self._log(f"chat {chat_id}: proposal {overlap.token} fixed into edit proposal {proposal.token}")
+        return LlmReply(tuple(self._replies.messages(exchange.reply)))
 
     def _eat(self, chat_id: int, update_id: int, menu: Proposal, number: int) -> LlmAction:
         if not 1 <= number <= len(menu.choices) or menu.meal_type is None or menu.day is None:
@@ -2064,6 +2154,37 @@ def _item_views(entries: Sequence[_Entry]) -> tuple[ProposalItemView, ...]:
         )
         for entry in entries
     )
+
+
+def _fix_command(
+    plan: FixPlan, entries: Sequence[_Entry], source: NutritionSourceType, reference: str
+) -> tuple[tuple[str, ...], str]:
+    """The single command that makes the recorded meal equal to the proposal, and what it changes."""
+    meal = plan.meal
+    name = f"{MEAL_NAMES[meal.meal_type]} {meal.meal_id}"
+    if plan.replacements:
+        overlap = plan.replacements[0]
+        entry = entries[overlap.index]
+        number = overlap.item.sequence
+        argv = (
+            "nutrition",
+            "meal",
+            "replace-item",
+            meal.meal_id,
+            "--item-number",
+            str(number),
+            *entry.argv(source, reference, True),
+        )
+        return argv, f"{name} item {number}: {item_summary(overlap.item)} → {entry.display()}"
+    added = [entries[index] for index in plan.additions]
+    argv = (
+        "nutrition",
+        "meal",
+        "add-item",
+        meal.meal_id,
+        *(arg for entry in added for arg in entry.argv(source, reference, True)),
+    )
+    return argv, f"{name}: 추가 {', '.join(entry.display() for entry in added)}"
 
 
 def _outline(views: Sequence[ProposalItemView], *, indent: str = "") -> tuple[str, ...]:

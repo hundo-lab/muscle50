@@ -19,12 +19,13 @@ from muscle50.application.telegram_llm import (
     MenuLineView,
     MenuView,
     MultiMealProposalView,
+    OverlapView,
     ProposalItemView,
     ReplyText,
 )
 from muscle50.domain.llm_today_totals import amount_text, display_amount
 from muscle50.domain.menu_ranking import RankMode
-from muscle50.domain.nutrition import NutrientField
+from muscle50.domain.nutrition import MealType, NutrientField
 from muscle50.domain.telegram_llm import NutrientRanges
 from muscle50.domain.telegram_llm_check import CHECK_REASON_TEXTS, OUTCOME_HISTORY_TEXTS, RecheckOutcome
 from muscle50.domain.telegram_llm_prompt import (
@@ -34,6 +35,7 @@ from muscle50.domain.telegram_llm_prompt import (
     MEAL_NAMES,
     duplicate_text,
     multi_proposal_head,
+    overlap_text,
     photo_failed_head,
     proposal_head,
     superseded_line,
@@ -55,6 +57,7 @@ _KIND_NAMES = {
     "cancel": "취소",
     "eat": "메뉴 고르기",
     "edit": "수정 확인",
+    "fix": "고치기 선택",
 }
 MEAL_NAMES_BY_VALUE = {meal.value: name for meal, name in MEAL_NAMES.items()}
 _INTENT_NAMES = {
@@ -66,6 +69,7 @@ _INTENT_NAMES = {
     "chat": "잡담",
     "unclear": "모름",
     "eat": "메뉴 고르기",
+    "fix": "고치기 선택",
 }
 
 
@@ -104,14 +108,14 @@ class TelegramLlmReplies:
 
 def proposal_reply(view: MealProposalView) -> ReplyText:
     day = view.day.isoformat()[5:]
+    # What the proposal does to an already recorded meal is the first thing the user reads.
+    lines = _overlap_lines(view.overlap, view.duplicates, view.meal_type)
     if view.failed_photo:
-        lines = [photo_failed_head(view.meal_type, day)]
+        lines.append(photo_failed_head(view.meal_type, day))
     else:
-        lines = [proposal_head(view.meal_type, day, view.label)]
+        lines.append(proposal_head(view.meal_type, day, view.label))
     if view.slot_from_time:
         lines.append("(끼니: 지금 시각 기준)")
-    if view.duplicates:
-        lines.append(duplicate_text(view.meal_type, view.duplicates))
     for number, item in enumerate(view.items, start=1):
         lines.extend(_item_lines(number, item, indent=""))
     lines.extend(view.dropped)
@@ -121,16 +125,21 @@ def proposal_reply(view: MealProposalView) -> ReplyText:
         lines.append(superseded_line(view.superseded))
     token = view.token
     plain = f"   일반식만 기록(값 없이): /plain_{token}" if view.plain else ""
-    return ReplyText("\n".join(lines), (f"기록: /ok_{token}{plain}   취소: /no_{token}",))
+    overlap = view.overlap
+    if overlap is None:
+        return ReplyText("\n".join(lines), (f"기록: /ok_{token}{plain}   취소: /no_{token}",))
+    fix = f"기존 {MEAL_NAMES[overlap.meal_type]} 고치기: /fix_{token}   " if overlap.fix else ""
+    return ReplyText("\n".join(lines), (f"{fix}하나 더 기록: /ok_{token}{plain}   취소: /no_{token}",))
 
 
 def multi_proposal_reply(view: MultiMealProposalView) -> ReplyText:
     """Two or more meals: one block per meal; one `/ok_` records them all, meal by meal."""
-    lines = [multi_proposal_head(view.day.isoformat()[5:], len(view.meals), view.label)]
+    lines: list[str] = []
+    for block in view.meals:
+        lines.extend(_overlap_lines(block.overlap, block.duplicates, block.meal_type, hints=False))
+    lines.append(multi_proposal_head(view.day.isoformat()[5:], len(view.meals), view.label))
     for block in view.meals:
         lines.append(MEAL_NAMES[block.meal_type])
-        if block.duplicates:
-            lines.append(f"  {duplicate_text(block.meal_type, block.duplicates)}")
         for number, item in enumerate(block.items, start=1):
             lines.extend(_item_lines(number, item, indent="  "))
     if view.searches:
@@ -139,7 +148,21 @@ def multi_proposal_reply(view: MultiMealProposalView) -> ReplyText:
         lines.append(superseded_line(view.superseded))
     token = view.token
     plain = f"   값 없이 일반식만 기록: /plain_{token}" if view.plain else ""
-    return ReplyText("\n".join(lines), (f"기록: /ok_{token}{plain}   취소: /no_{token}",))
+    record = "기록(겹치는 끼니는 하나 더)" if any(block.overlap for block in view.meals) else "기록"
+    return ReplyText("\n".join(lines), (f"{record}: /ok_{token}{plain}   취소: /no_{token}",))
+
+
+def _overlap_lines(
+    overlap: OverlapView | None, duplicates: Sequence[str], meal_type: MealType, *, hints: bool = True
+) -> list[str]:
+    """The first lines of a proposal that lands in a day's meal of the same type: the overlap notice (with why
+    there is no `/fix_`), or the `--additional` notice when nothing overlaps."""
+    if overlap is not None:
+        lines = [overlap_text(overlap.when, overlap.meal_type, overlap.meal_id, overlap.names)]
+        if hints and overlap.hint:
+            lines.append(overlap.hint)
+        return lines
+    return [duplicate_text(meal_type, duplicates)] if duplicates else []
 
 
 def _item_lines(number: int, item: ProposalItemView, *, indent: str) -> list[str]:

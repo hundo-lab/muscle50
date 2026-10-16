@@ -429,7 +429,11 @@ def test_each_meal_decides_its_own_additional_flag(
     bot._llm_config(home)
     bot._session(monkeypatch, capsys, bot.FakeProvider(), bot.text(1, "/log lunch 닭가슴살 100 g"))
     replies, _provider = propose(monkeypatch, capsys, home, THREE_MEALS, prepared=True, update_id=2)
-    assert "점심\n  이미 기록된 점심(2026-10-06-lunch-1)이 있어 하나 더 기록합니다." in replies[0]
+    # the notice for a slot that already has a meal is a top line (one per slot), not a line inside the block
+    assert replies[0].startswith(
+        "이미 기록된 점심(2026-10-06-lunch-1)이 있어 하나 더 기록합니다.\n이렇게 기록할까요? (10-06, 3끼)"
+    )
+    assert "점심\n  1. 일반식 (메모: 소고기활전복 미역국)" in replies[0]
     meals = {meal["meal_type"]: meal["argv_ok"] for meal in state_proposals(home)[0]["meals"]}
     assert meals["lunch"][-1] == "--additional" and "--additional" not in meals["breakfast"]
     bot._session(monkeypatch, capsys, bot.FakeProvider(), bot.text(3, "/ok_7f3a"))
