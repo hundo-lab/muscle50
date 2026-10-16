@@ -223,6 +223,9 @@ muscle50 nutrition meal show 2026-10-02-breakfast-1
 muscle50 nutrition meal add-item 2026-10-02-breakfast-1 --item hetbahn-white-210 210 g
 muscle50 nutrition meal remove-item 2026-10-02-breakfast-1 --item-number 3
 muscle50 nutrition meal replace-item 2026-10-02-breakfast-1 --item-number 2 --item hetbahn-white-210 105 g
+# 일반식 item을 추정값(과 메모)이 든 일반식으로 바꾸기. 옛 item과 옛 추정은 지워지지 않고 기록으로 남음
+muscle50 nutrition meal replace-item 2026-10-02-dinner-1 --item-number 2 --general --general-note "삼각김밥 1개" `
+  --general-estimate language_estimate:kcal=185-185,protein=5-5 --general-estimate-ref "직접 입력; 라벨"
 # 식사 전체 고치기(meal ID와 item snapshot 유지; 기존 row를 바꾸지 않고 기록을 append)
 muscle50 nutrition meal void 2026-10-02-snack-1 --reason "double entry"   # 집계에서 제외(되돌릴 수 없음)
 muscle50 nutrition meal edit 2026-10-02-dinner-1 --date 2026-10-01 --time 21:30   # 날짜/종류/시간 (--meal, --no-time)
@@ -245,7 +248,9 @@ source의 item을 원래 snapshot 그대로 target에 붙이고 source를 void�
 거부합니다(아무것도 기록하지 않음). 상세: `docs/nutrition-logging.md`, `docs/food-name-lookup.md`,
 `docs/nutrition-meal-corrections.md`.
 `--general [--general-note TEXT]`은 "일반식을 먹었다"는 기록만 남깁니다(`log`/`meal add-item`/`meal replace-item` 공통,
-여러 번 쓸 수 있고 메모는 그 `--general` 바로 뒤, 최대 100자 한 줄). 영양값을 추정하지 않으므로 일반식이 있는 날의 합계는
+여러 번 쓸 수 있고 메모는 그 `--general` 바로 뒤, 최대 100자 한 줄). `meal replace-item`에는 `--general-estimate SPEC`과
+`--general-estimate-ref TEXT`도 있어(둘 다 선택, 각각 `--general`, `--general-estimate`가 있어야 함) 일반식 item의 추정 범위와
+메모를 새 값으로 바꿉니다(옵션을 쓰지 않은 `replace-item` 출력은 그대로). 영양값을 추정하지 않으므로 일반식이 있는 날의 합계는
 incomplete이고 부족 판단이나 행동 안내가 나오지 않습니다. `일반식`/`general-meal`은 예약 이름이라 `food add`로 만들 수
 없습니다(migration 없음). 상세: `docs/nutrition-general-meal.md`.
 
@@ -387,6 +392,20 @@ CLI(`claude -p` 또는 `codex exec`)를 본인 구독으로 실행하며 API 키
   사용량을 늘리므로 끄려면 `"web_search": false`입니다.
 - (v2.2) 추정 숫자는 kcal·단백질·탄수·지방 사이의 관계와 가정에 적힌 숫자로 한 번 **재확인**합니다. 맞지 않으면 같은 제공자에
   **한 번만** 다시 묻고, 그래도 맞지 않으면 그 item에 "(값 확인 필요)"를 붙여 보여 줍니다.
+- (v2.3) **방금 기록한 식사 고치기**: "삼각김밥 지방 2g이네", "아침 1식 닭가슴살 2팩으로 바꿔줘"처럼 말하면 새 식사를 만들지
+  않고 기존 식사를 고치는 **제안**을 보여 주며, `/ok` 뒤에만 고쳐집니다. "방금 거"는 이 chat의 마지막으로 기록한 식사
+  둘 중 하나로 정해지고(둘 다 맞거나 아무것도 안 맞으면 후보만 보여 주고 쓰지 않음), "아침 1식"은 그날 아침의 첫 기록입니다.
+  일반식 item은 메모로 찾고(모호하면 후보만) 추정 범위와 메모를 고칠 수 있습니다. 아직 `/ok` 전인 제안을 고치는 말은 새
+  제안을 만들고 이전 제안은 취소합니다.
+- (v2.3) **같은 끼니에 같은 음식**을 또 말하면 하나 더 기록하지 않고 `/fix_<토큰>`(기존 식사 고치기. 기록한 값이 제안 값으로
+  바뀌며 두 값을 보여 준 뒤 `/ok`), `/ok_<토큰>`(하나 더 기록), `/no_<토큰>`(취소)를 고르게 합니다. 겹치지 않는 다른 음식은
+  이전처럼 하나 더 기록하되 그 사실을 제안 맨 위에 적습니다. 최근 메뉴 캡처·제안에 있는 항목은 이름으로 말해 고를 수
+  있습니다("위 사진에 있는 ○○ 먹었어").
+- (v2.3) 영양정보 **라벨**에서 읽은 값은 한 값이어도 재확인하지 않고 `라벨: kcal 185, 단백질 5 g`으로 보입니다. 양을 말하지
+  않은 일반식은 가정한 무게를 재료별 그램으로 보여 줍니다(`양 가정: 닭 150~200 g, 감자 100~150 g`).
+- (v2.3) **누적**은 영양소마다 하나의 범위입니다(`kcal 600~620`, 추정이 없으면 한 숫자). 값을 모르는 항목은 0으로 더하지
+  않고 `값 모르는 항목 N개 빠짐`으로 적습니다. 어제 같은 다른 날을 기록하면 그날의 누적(`10-14 누적`)을 보여 줍니다. 숫자는
+  CLI와 같은 반올림입니다(1.95 g는 2 g). 범위를 근거로 한 부족·초과 판단은 하지 않습니다.
 - 질문 답은 muscle50 결과 JSON에 있는 숫자만 쓸 수 있고, 다른 숫자가 섞이면 보내지 않고 기존 명령 답장을 보냅니다.
 - `/llm`(제공자 확인·변경), `/memory`(다음 호출에 넘어갈 기억), `/forget`(이 chat의 기억 삭제, 기록은 남음),
   `/history [N|YYYY-MM-DD]`(대화 기록). PC에서는 `muscle50 telegram history [--last N | --date YYYY-MM-DD] [--json]`
