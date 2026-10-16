@@ -27,6 +27,7 @@ muscle50 nutrition log --meal lunch --general --general-note 구내식당
 muscle50 nutrition log --meal dinner --general --item chicken-breast 100 g
 muscle50 nutrition meal add-item 2026-10-08-dinner-1 --general
 muscle50 nutrition meal replace-item 2026-10-08-dinner-1 --item-number 2 --general --general-note 배달
+muscle50 nutrition meal replace-item 2026-10-08-dinner-1 --item-number 2 --general --general-note "삼각김밥 1개" --general-estimate language_estimate:kcal=185-185,protein=5-5 --general-estimate-ref "직접 입력; 라벨"
 ```
 
 - `--general` takes no value and can be repeated. `--item` and `--general` share one ordered list,
@@ -41,6 +42,16 @@ muscle50 nutrition meal replace-item 2026-10-08-dinner-1 --item-number 2 --gener
   `one of the arguments --item --general is required`).
 - `meal replace-item` takes exactly one of `--item FOOD QTY UNIT` or `--general`
   (`--general-note` only with `--general`, otherwise exit 2 `argument --general-note: requires --general`).
+- `meal replace-item ... --general [--general-note TEXT] --general-estimate SPEC [--general-estimate-ref TEXT]`
+  (Telegram LLM v2.3) replaces a general item by one with an estimate. SPEC, the reference default and its
+  100-character limit are those of `nutrition log --general-estimate`. These two are plain options of
+  `replace-item` (no ordering rule): `--general-estimate` needs `--general` and `--general-estimate-ref` needs
+  `--general-estimate`, otherwise exit 2 (`argument --general-estimate: requires --general`,
+  `argument --general-estimate-ref: requires --general-estimate`, nothing written). A malformed SPEC, min > max, a source
+  other than `visual_estimate`/`language_estimate`, a voided meal or an unknown item number keep their exit 1 texts.
+  The estimate is never edited: the new item carries the new estimate fact and the old item gets its removal row, with its
+  facts staying stored (append-only). `replace-item` without the two options prints the same bytes as before; only its
+  `--help` and the usage line of its errors gain them.
 - The duplicate-meal guard, `--additional`, `--date` and `--time` work as for catalog items: a general
   meal is a meal of that type.
 - Telegram: `/log lunch 일반식 [메모]`; see `docs/telegram-bot.md` "Nutrition General Meal v1".
