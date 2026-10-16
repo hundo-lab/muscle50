@@ -18,6 +18,7 @@ from pathlib import Path
 
 from muscle50.domain.nutrition import Meal
 from muscle50.infrastructure.sqlite.nutrition_repository import (
+    _has_table,
     _load_meal,
     _meal_ids_eaten_between,
     _require_aware,
@@ -51,6 +52,23 @@ class SqliteNutritionReader:
                     raise NutritionReadError(f"meal {meal_id!r} disappeared during listing")
                 meals.append(meal)
         return tuple(meals)
+
+    def get_active(self, meal_id: str) -> Meal | None:
+        """One meal by ID; None when there is no such meal or it was voided (or merged into another meal).
+
+        Read-only like the listing. A database before migration 9 has no void table and every meal is active.
+        """
+        with self._read_transaction() as connection:
+            if (
+                _has_table(connection, "nutrition_meal_voids")
+                and connection.execute("SELECT 1 FROM nutrition_meal_voids WHERE meal_id = ?", (meal_id,)).fetchone()
+                is not None
+            ):
+                return None
+            try:
+                return _load_meal(connection, meal_id)
+            except ValueError as exc:
+                raise NutritionReadError(f"stored meal {meal_id!r} cannot be read: {exc}") from exc
 
     @contextmanager
     def _read_transaction(self) -> Iterator[sqlite3.Connection]:

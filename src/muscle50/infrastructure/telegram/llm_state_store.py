@@ -118,6 +118,9 @@ def _proposal_document(proposal: Proposal) -> dict[str, Any]:
             }
             for meal in proposal.meals
         ],
+        "outline": list(proposal.outline),
+        "fix_argv": list(proposal.fix_argv),
+        "fix_change": proposal.fix_change,
     }
 
 
@@ -173,6 +176,10 @@ def _proposal(item: dict[str, Any]) -> Proposal:
             )
             for meal in item.get("meals", [])
         ),
+        # Keys of v2.3: a state file written before them still loads.
+        outline=_strings(item.get("outline", [])),
+        fix_argv=_strings(item.get("fix_argv", [])),
+        fix_change=str(item.get("fix_change", "")),
     )
 
 

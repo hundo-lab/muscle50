@@ -36,6 +36,7 @@ from muscle50.domain.telegram_llm_prompt import (
     multi_proposal_head,
     photo_failed_head,
     proposal_head,
+    superseded_line,
     web_search_line,
 )
 from muscle50.presentation.telegram_format import BotReply, reply_messages
@@ -93,6 +94,10 @@ class TelegramLlmReplies:
         lines.append("끼니와 음식 이름을 더 구체적으로 적어 다시 보내 주세요.")
         return ReplyText("\n".join(lines))
 
+    def item_candidates(self, lines: Sequence[str]) -> ReplyText:
+        head = "어느 음식인지 하나로 정하지 못해 아무것도 바꾸지 않았습니다. 후보:"
+        return ReplyText("\n".join([head, *lines, "음식 이름을 더 구체적으로 적어 다시 보내 주세요."]))
+
     def history(self, entries: Sequence[dict[str, Any]]) -> ReplyText:
         return ReplyText(history_text(entries))
 
@@ -112,6 +117,8 @@ def proposal_reply(view: MealProposalView) -> ReplyText:
     lines.extend(view.dropped)
     if view.searches:
         lines.append(web_search_line(view.searches))
+    if view.superseded:
+        lines.append(superseded_line(view.superseded))
     token = view.token
     plain = f"   일반식만 기록(값 없이): /plain_{token}" if view.plain else ""
     return ReplyText("\n".join(lines), (f"기록: /ok_{token}{plain}   취소: /no_{token}",))
@@ -128,6 +135,8 @@ def multi_proposal_reply(view: MultiMealProposalView) -> ReplyText:
             lines.extend(_item_lines(number, item, indent="  "))
     if view.searches:
         lines.append(web_search_line(view.searches))
+    if view.superseded:
+        lines.append(superseded_line(view.superseded))
     token = view.token
     plain = f"   값 없이 일반식만 기록: /plain_{token}" if view.plain else ""
     return ReplyText("\n".join(lines), (f"기록: /ok_{token}{plain}   취소: /no_{token}",))

@@ -50,6 +50,7 @@ from muscle50.application.telegram_bot import (
 from muscle50.domain.llm_number_guard import allowed_numbers, unknown_numbers
 from muscle50.domain.llm_settings import PROVIDER_COMPANIES, LlmSettings, ProviderName
 from muscle50.domain.llm_today_totals import (
+    NUTRIENT_NAMES,
     TODAY_LABEL,
     TodayTotals,
     amount_text,
@@ -61,6 +62,7 @@ from muscle50.domain.menu_ranking import UNREADABLE, KcalContext, MenuRanking, R
 from muscle50.domain.nutrition import (
     FoodNutritionProfile,
     Meal,
+    MealItem,
     MealType,
     NutrientField,
     NutritionSourceType,
@@ -95,6 +97,7 @@ from muscle50.domain.telegram_llm import (
     ProposalCommand,
     ProposalKind,
     ProposalState,
+    Refers,
     SuggestCategory,
     SuggestResult,
     Tense,
@@ -113,11 +116,26 @@ from muscle50.domain.telegram_llm import (
     resolve_date_expression,
 )
 from muscle50.domain.telegram_llm_check import (
+    CHECK_REASON_TEXTS,
     CheckCode,
     CheckFailure,
     RecheckOutcome,
     check_estimate,
     recheck_note,
+)
+from muscle50.domain.telegram_llm_corrections import (
+    RECENT_MEALS,
+    ItemRef,
+    general_ranges,
+    item_memo,
+    item_summary,
+    match_items,
+    merge_estimate,
+    open_proposal_block,
+    pick_meals,
+    ranges_summary,
+    recent_meal_ids,
+    recent_meals_block,
 )
 from muscle50.domain.telegram_llm_meals import (
     catalog_prompt,
@@ -131,10 +149,15 @@ from muscle50.domain.telegram_llm_meals import (
 )
 from muscle50.domain.telegram_llm_prompt import (
     CANCELLED_TEXT,
+    CHECK_LINE_HEAD,
+    CHECK_MARKER,
     COMMAND_ARGUMENT_TEXT,
     DATE_OTHER_TEXT,
     DOCUMENT_IMAGE_TEXT,
+    EDIT_CATALOG_ESTIMATE_TEXT,
     EDIT_NO_MEAL_TEXT,
+    EDIT_NO_OPEN_TEXT,
+    EDIT_NO_RECENT_TEXT,
     EDIT_UNCLEAR_TEXT,
     FORGET_TEXT,
     HISTORY_USAGE_TEXT,
@@ -176,6 +199,8 @@ from muscle50.domain.telegram_llm_prompt import (
 
 HISTORY_DEFAULT = 5
 HISTORY_MAX = 20
+HISTORY_SCAN = 200
+"""The newest history lines read to find the chat's last recorded meals (a bounded read: a month file can be big)."""
 _RECORDED_MEAL = re.compile(r"Recorded meal (\S+)\.")
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 _TOPIC_COMMANDS = {Topic.TRAINING: "/today", Topic.NUTRITION: "/status", Topic.BODY: "/inbody"}
@@ -196,6 +221,10 @@ class TelegramFileApi(Protocol):
 
 class MealsOfDay(Protocol):
     def list_eaten_between(self, start_inclusive: datetime, end_exclusive: datetime) -> tuple[Meal, ...]: ...
+
+    def get_active(self, meal_id: str) -> Meal | None:
+        """One meal by ID; None when it does not exist or was voided (read-only)."""
+        ...
 
 
 class FoodCatalog(FoodLookup, Protocol):
@@ -275,6 +304,8 @@ class MealProposalView:
     failed_photo: bool = False
     searches: int = 0
     """Web searches made for this proposal (`웹 검색 N회` when above 0)."""
+    superseded: str | None = None
+    """The token of the open proposal this one replaces (cancelled in the same save)."""
 
 
 @dataclass(frozen=True)
@@ -295,6 +326,7 @@ class MultiMealProposalView:
     searches: int = 0
     label: str | None = None
     """`사진 추정` for a photo, as in the single-meal proposal head."""
+    superseded: str | None = None
 
 
 @dataclass(frozen=True)
@@ -343,6 +375,8 @@ class LlmReplies(Protocol):
 
     def candidates(self, meal_ids: Sequence[str]) -> ReplyText: ...
 
+    def item_candidates(self, lines: Sequence[str]) -> ReplyText: ...
+
     def history(self, entries: Sequence[dict[str, Any]]) -> ReplyText: ...
 
 
@@ -360,6 +394,8 @@ class _Exchange:
     summary: str | None = None
     recheck: dict[str, Any] | None = None
     """`{"reasons": [...], "outcome": ...}` when the numeric re-check found something (None: nothing failed)."""
+    data: tuple[tuple[str, Any], ...] = ()
+    """The `[데이터]` pairs of the interpret call; the numeric re-ask sends the same ones."""
 
 
 class TelegramLlmHandler:
@@ -450,13 +486,14 @@ class TelegramLlmHandler:
     ) -> LlmAction:
         words = text if text is not None else (caption or "")
         exchange = _Exchange()
+        exchange.data = self._interpret_data(chat_id, words, text_only=photo is None)
         call = self._call(
             chat_id,
             SchemaName.INTERPRET,
             PromptTask.INTERPRET,
             words,
             photo,
-            self._catalog_data(chat_id, words),
+            exchange.data,
             parse_interpretation,
             web_search=self._web_search_on(),
         )
@@ -545,6 +582,14 @@ class TelegramLlmHandler:
         if day is None:
             exchange.reply = ReplyText(DATE_OTHER_TEXT)
             return
+        cancel: str | None = None
+        if photo is None and interpretation.refers_to is Refers.OPEN_PROPOSAL:
+            # The message corrects the proposal that is still open: the corrected one replaces it (never a stray meal).
+            opened = self._open_meal_proposal(chat_id)
+            if opened is None:
+                exchange.reply = ReplyText(EDIT_NO_OPEN_TEXT)
+                return
+            cancel = opened.token
         entries = self._link_items(chat_id, interpretation)
         if not entries:
             exchange.reply = ReplyText(usage_text("log"))
@@ -565,6 +610,7 @@ class TelegramLlmHandler:
             estimate_source(photo_digest is not None),
             self._reference(used, photo_digest),
             label,
+            cancel=cancel,
         )
 
     # --- linking ---------------------------------------------------------------------------------------------
@@ -679,7 +725,7 @@ class TelegramLlmHandler:
             PromptTask.INTERPRET,
             words,
             photo,
-            self._catalog_data(chat_id, words),
+            exchange.data,
             parse_interpretation,
             web_search=self._web_search_on() and first.provider is ProviderName.CLAUDE,
             recheck_note=recheck_note([(entry.index, failure) for entry, failure in failures]),
@@ -738,8 +784,13 @@ class TelegramLlmHandler:
         source: NutritionSourceType,
         reference: str,
         label: str | None,
+        *,
+        cancel: str | None = None,
     ) -> None:
-        """One meal: the v2 proposal. Two or more meals: one proposal that `/ok_` records meal by meal."""
+        """One meal: the v2 proposal. Two or more meals: one proposal that `/ok_` records meal by meal.
+
+        ``cancel``: the token of the open proposal this one corrects; it is cancelled in the same state save.
+        """
         meals: dict[MealType, list[_Entry]] = {}
         slot_from_time = False
         for group in group_meals(entries, default_meal):
@@ -762,6 +813,7 @@ class TelegramLlmHandler:
                 label,
                 slot_from_time,
                 searches=searches,
+                cancel=cancel,
             )
             return
         commands = []
@@ -775,10 +827,23 @@ class TelegramLlmHandler:
             has_estimate = any(entry.estimate for entry in items)
             commands.append(MealCommand(meal_type, argv_ok, argv_plain if has_estimate else ()))
             blocks.append(MealBlockView(meal_type, duplicates, _item_views(items)))
-        proposal = self._new_proposal(chat_id, ProposalKind.MEAL, meals=tuple(commands), day=day)
+        proposal = self._new_proposal(
+            chat_id,
+            ProposalKind.MEAL,
+            cancel=cancel,
+            meals=tuple(commands),
+            day=day,
+            outline=_multi_outline(blocks),
+        )
         exchange.proposal = proposal.token
         view = MultiMealProposalView(
-            proposal.token, day, tuple(blocks), any(command.argv_plain for command in commands), searches, label
+            proposal.token,
+            day,
+            tuple(blocks),
+            any(command.argv_plain for command in commands),
+            searches,
+            label,
+            cancel,
         )
         exchange.reply = self._replies.multi_proposal(view)
 
@@ -826,6 +891,7 @@ class TelegramLlmHandler:
         *,
         failed_photo: bool = False,
         searches: int = 0,
+        cancel: str | None = None,
     ) -> None:
         duplicates = self._existing_meals(chat_id, day, meal_type)
         head = ("nutrition", "log", "--date", day.isoformat(), "--meal", meal_type.value)
@@ -833,13 +899,16 @@ class TelegramLlmHandler:
         argv_ok = (*head, *(arg for entry in entries for arg in entry.argv(source, reference, True)), *tail)
         has_estimate = any(entry.estimate for entry in entries)
         argv_plain = (*head, *(arg for entry in entries for arg in entry.argv(source, reference, False)), *tail)
+        views = _item_views(entries)
         proposal = self._new_proposal(
             chat_id,
             ProposalKind.MEAL,
+            cancel=cancel,
             argv_ok=argv_ok,
             argv_plain=argv_plain if has_estimate else (),
             meal_type=meal_type,
             day=day,
+            outline=_outline(views),
         )
         exchange.proposal = proposal.token
         view = MealProposalView(
@@ -849,11 +918,12 @@ class TelegramLlmHandler:
             label,
             slot_from_time,
             duplicates,
-            _item_views(entries),
+            views,
             tuple(dropped),
             has_estimate,
             failed_photo,
             searches,
+            cancel,
         )
         exchange.reply = self._replies.proposal(view)
 
@@ -1171,60 +1241,35 @@ class TelegramLlmHandler:
     # --- meal edits ------------------------------------------------------------------------------------------
 
     def _edit(self, chat_id: int, interpretation: Interpretation, exchange: _Exchange) -> None:
+        """A correction of a recorded meal as an edit proposal (nothing is written before `/ok`).
+
+        The LLM only extracts words; the meal and the item are found here and never guessed: a target that is not
+        exactly one meal (or item) gives the candidates and writes nothing.
+        """
         edit = interpretation.edit
         if edit.action is None:
             exchange.reply = ReplyText(EDIT_UNCLEAR_TEXT)
             return
-        day = resolve_date_expression(interpretation.date_expression, self._today())
-        if day is None:
-            exchange.reply = ReplyText(DATE_OTHER_TEXT)
-            return
-        try:
-            meals = self._meals.list_eaten_between(*local_day_bounds(day, self._local_timezone(day)))
-        except Exception as exc:
-            self._log(f"chat {chat_id}: meals not read for an edit ({type(exc).__name__})")
-            meals = ()
-        if interpretation.meal_type is not None:
-            meals = tuple(meal for meal in meals if meal.meal_type is interpretation.meal_type)
-        if not meals:
-            exchange.reply = ReplyText(EDIT_NO_MEAL_TEXT)
+        pool = self._edit_pool(chat_id, interpretation, exchange)
+        if pool is None:
             return
         action = edit.action
         if action in (EditAction.VOID_MEAL, EditAction.CHANGE_MEAL_TYPE, EditAction.ADD_ITEM):
-            if len(meals) != 1:
-                exchange.reply = self._replies.candidates([meal.meal_id for meal in meals])
-                return
-            meal = meals[0]
-            name = f"{MEAL_NAMES[meal.meal_type]} {meal.meal_id}"
-            if action is EditAction.VOID_MEAL:
-                argv: tuple[str, ...] = ("nutrition", "meal", "void", meal.meal_id, "--reason=Telegram 문장으로 취소")
-                change = f"{name} 기록 취소(void)"
-            elif action is EditAction.CHANGE_MEAL_TYPE:
-                if edit.new_meal_type is None:
-                    exchange.reply = ReplyText(EDIT_UNCLEAR_TEXT)
-                    return
-                argv = ("nutrition", "meal", "edit", meal.meal_id, "--meal", edit.new_meal_type.value)
-                change = f"{name}: 끼니 {MEAL_NAMES[meal.meal_type]} → {MEAL_NAMES[edit.new_meal_type]}"
-            else:
-                added = self._edit_entry(edit.new_food_text, edit.new_quantity, edit.new_unit, None)
-                if isinstance(added, str):
-                    exchange.reply = ReplyText(added)
-                    return
-                argv = ("nutrition", "meal", "add-item", meal.meal_id, *added[0])
-                change = f"{name}: 추가 {added[1]}"
-            self._store_edit(chat_id, exchange, meal.meal_id, argv, change)
+            self._edit_meal(chat_id, interpretation, pool, exchange)
             return
-        target = self._edit_target(meals, edit.target_food_text)
+        target = self._edit_item(pool, edit.target_food_text, exchange)
         if target is None:
-            exchange.reply = self._replies.candidates([meal.meal_id for meal in meals])
             return
-        meal, number = target
-        item = next(entry for entry in meal.items if entry.sequence == number)
+        meal, item = target.meal, target.item
+        number = item.sequence
         before = _item_text(item)
         name = f"{MEAL_NAMES[meal.meal_type]} {meal.meal_id} item {number}"
         if action is EditAction.REMOVE_ITEM:
             remove: tuple[str, ...] = ("nutrition", "meal", "remove-item", meal.meal_id, "--item-number", str(number))
-            self._store_edit(chat_id, exchange, meal.meal_id, remove, f"{name}: {before} 빼기")
+            self._store_edit(chat_id, exchange, meal, remove, f"{name}: {before} 빼기")
+            return
+        if action is EditAction.CHANGE_ESTIMATE:
+            self._edit_estimate(chat_id, interpretation, meal, item, name, before, exchange)
             return
         if action is EditAction.CHANGE_QUANTITY:
             if item.is_general or item.food_profile_id is None:
@@ -1248,20 +1293,175 @@ class TelegramLlmHandler:
             str(number),
             *replacement[0],
         )
-        self._store_edit(chat_id, exchange, meal.meal_id, replace_argv, f"{name}: {before} → {replacement[1]}")
+        self._store_edit(chat_id, exchange, meal, replace_argv, f"{name}: {before} → {replacement[1]}")
 
-    def _edit_target(self, meals: Sequence[Meal], target_text: str | None) -> tuple[Meal, int] | None:
-        if target_text is None:
-            items = [(meal, item.sequence) for meal in meals for item in meal.items]
-            return items[0] if len(items) == 1 else None
+    def _edit_pool(self, chat_id: int, interpretation: Interpretation, exchange: _Exchange) -> tuple[Meal, ...] | None:
+        """The meals a correction may be about, or None with the reply already set.
+
+        `last_recorded`: the chat's last recorded meals (at most two). Otherwise the day's active meals, narrowed by
+        the meal type and by the ordinal (`아침 1식` is the 1st active breakfast, not the ID suffix). An ordinal
+        always means the day's meals; an ordinal without a meal type is never resolved.
+        """
+        edit = interpretation.edit
+        if interpretation.refers_to is Refers.LAST_RECORDED and edit.ordinal is None:
+            recent = self._recent_meals(chat_id)
+            if interpretation.meal_type is not None:
+                recent = tuple(meal for meal in recent if meal.meal_type is interpretation.meal_type)
+            if not recent:
+                exchange.reply = ReplyText(EDIT_NO_RECENT_TEXT)
+                return None
+            return recent
+        day = resolve_date_expression(interpretation.date_expression, self._today())
+        if day is None:
+            exchange.reply = ReplyText(DATE_OTHER_TEXT)
+            return None
         try:
-            food_id = ResolveFoodReference(self._catalog).execute(target_text, label="")
+            day_meals = self._meals.list_eaten_between(*local_day_bounds(day, self._local_timezone(day)))
+        except Exception as exc:
+            self._log(f"chat {chat_id}: meals not read for an edit ({type(exc).__name__})")
+            day_meals = ()
+        if edit.ordinal is not None and interpretation.meal_type is None and day_meals:
+            exchange.reply = self._replies.candidates([meal.meal_id for meal in day_meals])
+            return None
+        meals = pick_meals(day_meals, interpretation.meal_type, edit.ordinal)
+        if not meals:
+            exchange.reply = ReplyText(EDIT_NO_MEAL_TEXT)
+            return None
+        return meals
+
+    def _exact_food_id(self, text: str | None) -> str | None:
+        """The catalog food the words name exactly (None when there is none or the name is ambiguous)."""
+        if text is None:
+            return None
+        try:
+            return ResolveFoodReference(self._catalog).execute(text, label="")
         except NutritionLoggingError:
             return None
-        if food_id is None:
+
+    def _edit_meal(
+        self, chat_id: int, interpretation: Interpretation, pool: Sequence[Meal], exchange: _Exchange
+    ) -> None:
+        """`void_meal`, `change_meal_type` and `add_item`: the one meal of the pool (the words narrow it)."""
+        edit = interpretation.edit
+        action = edit.action
+        matched = tuple(pool)
+        if edit.target_food_text is not None and action is not EditAction.ADD_ITEM:
+            refs = match_items(pool, food_id=self._exact_food_id(edit.target_food_text), text=edit.target_food_text)
+            with_item = {ref.meal.meal_id for ref in refs}
+            if with_item:
+                matched = tuple(meal for meal in pool if meal.meal_id in with_item)
+        if len(matched) != 1:
+            exchange.reply = self._replies.candidates([meal.meal_id for meal in matched])
+            return
+        meal = matched[0]
+        name = f"{MEAL_NAMES[meal.meal_type]} {meal.meal_id}"
+        if action is EditAction.VOID_MEAL:
+            argv: tuple[str, ...] = ("nutrition", "meal", "void", meal.meal_id, "--reason=Telegram 문장으로 취소")
+            change = f"{name} 기록 취소(void)"
+        elif action is EditAction.CHANGE_MEAL_TYPE:
+            if edit.new_meal_type is None:
+                exchange.reply = ReplyText(EDIT_UNCLEAR_TEXT)
+                return
+            argv = ("nutrition", "meal", "edit", meal.meal_id, "--meal", edit.new_meal_type.value)
+            change = f"{name}: 끼니 {MEAL_NAMES[meal.meal_type]} → {MEAL_NAMES[edit.new_meal_type]}"
+        else:
+            added = self._edit_entry(edit.new_food_text, edit.new_quantity, edit.new_unit, None)
+            if isinstance(added, str):
+                exchange.reply = ReplyText(added)
+                return
+            argv = ("nutrition", "meal", "add-item", meal.meal_id, *added[0])
+            change = f"{name}: 추가 {added[1]}"
+        self._store_edit(chat_id, exchange, meal, argv, change)
+
+    def _edit_item(self, pool: Sequence[Meal], target_text: str | None, exchange: _Exchange) -> ItemRef | None:
+        """The one item the words name, or None with the candidates replied (nothing is guessed)."""
+        everything = [ItemRef(meal, item) for meal in pool for item in meal.items]
+        if target_text is None:
+            refs = everything
+        else:
+            refs = list(match_items(pool, food_id=self._exact_food_id(target_text), text=target_text))
+        if len(refs) == 1:
+            return refs[0]
+        meal_ids = list(dict.fromkeys(ref.meal.meal_id for ref in refs))
+        if len(meal_ids) > 1 or (not refs and len(pool) > 1):
+            exchange.reply = self._replies.candidates(meal_ids or [meal.meal_id for meal in pool])
             return None
-        matches = [(meal, item.sequence) for meal in meals for item in meal.items if item.food_profile_id == food_id]
-        return matches[0] if len(matches) == 1 else None
+        listed = refs or everything
+        exchange.reply = self._replies.item_candidates(
+            [f"{ref.meal.meal_id} item {ref.item.sequence}: {item_summary(ref.item)}" for ref in listed]
+        )
+        return None
+
+    def _edit_estimate(
+        self,
+        chat_id: int,
+        interpretation: Interpretation,
+        meal: Meal,
+        item: MealItem,
+        name: str,
+        before: str,
+        exchange: _Exchange,
+    ) -> None:
+        """`change_estimate`: replace a general item by one with the merged estimate and/or the new memo.
+
+        Only the nutrients the user named change; the others keep their stored range (a nutrient that was never
+        known stays unknown). The merged estimate runs the usual numeric checks; a failure only marks the proposal
+        (`값 확인 필요`, no re-ask) and the reference.
+        """
+        edit = interpretation.edit
+        if not item.is_general:
+            exchange.reply = ReplyText(EDIT_CATALOG_ESTIMATE_TEXT)
+            return
+        current = general_ranges(item)
+        merged = merge_estimate(current, edit.estimate)
+        memo = clean_memo(edit.new_memo) if edit.new_memo else item_memo(item)
+        fact = item.general_estimate
+        label = edit.from_label and bool(edit.estimate) and all(low == high for _n, low, high in edit.estimate)
+        codes: tuple[CheckCode, ...] = ()
+        args: list[str] = ["--general"]
+        if memo:
+            args.append(f"--general-note={memo}")
+        if merged and fact is not None and not edit.estimate:
+            # A memo-only edit sends the stored estimate again, with its own source and reference.
+            args.append(f"--general-estimate={format_general_estimate(fact.provenance.source_type, merged)}")
+            args.append(f"--general-estimate-ref={fact.provenance.source_reference}")
+        elif merged:
+            codes = tuple(
+                dict.fromkeys(
+                    failure.code for failure in check_estimate(merged, assumption=None, quantity=None, label=label)
+                )
+            )
+            call = exchange.calls[-1]
+            reference = estimate_reference(
+                f"telegram-llm edit ({call.provider.value} {call.model or 'default'})",
+                None,
+                None,
+                check_needed=bool(codes),
+                label=label,
+            )
+            args.append(f"--general-estimate={format_general_estimate(estimate_source(False), merged)}")
+            args.append(f"--general-estimate-ref={reference}")
+        lines = [f"{name}: {before}"]
+        old = {nutrient: (low, high) for nutrient, low, high in current}
+        for nutrient, low, high in edit.estimate:
+            unit = "" if nutrient is NutrientField.CALORIES_KCAL else " g"
+            was = f"{_range_text(old[nutrient])}{unit}" if nutrient in old else "알 수 없음"
+            line = f"  {NUTRIENT_NAMES[nutrient]} {was} → {_range_text((low, high))}{unit}"
+            lines.append(line + (" (라벨)" if label else "") + (f" {CHECK_MARKER}" if codes else ""))
+        if edit.new_memo and memo != item_memo(item):
+            lines.append(f"  메모: {item_memo(item) or '없음'} → {memo}")
+        if codes:
+            lines.append(f"  {CHECK_LINE_HEAD}{', '.join(CHECK_REASON_TEXTS[code] for code in codes)}")
+        argv = (
+            "nutrition",
+            "meal",
+            "replace-item",
+            meal.meal_id,
+            "--item-number",
+            str(item.sequence),
+            *args,
+        )
+        self._store_edit(chat_id, exchange, meal, argv, "\n".join(lines))
 
     def _edit_entry(
         self, food_text: str | None, quantity: Decimal | None, unit: QuantityUnit | None, current_food: str | None
@@ -1280,8 +1480,10 @@ class TelegramLlmHandler:
         argv = ("--item", entry.food_id, amount_text(entry.quantity), entry.unit.value)
         return argv, entry.display()
 
-    def _store_edit(self, chat_id: int, exchange: _Exchange, meal_id: str, argv: tuple[str, ...], change: str) -> None:
-        proposal = self._new_proposal(chat_id, ProposalKind.EDIT, argv_ok=argv, meal_id=meal_id)
+    def _store_edit(self, chat_id: int, exchange: _Exchange, meal: Meal, argv: tuple[str, ...], change: str) -> None:
+        # The edit proposal records the meal's own day, so the totals after `/ok` are that day's.
+        day = meal.eaten_at.astimezone(self._local_timezone(meal.eaten_at.date())).date()
+        proposal = self._new_proposal(chat_id, ProposalKind.EDIT, argv_ok=argv, meal_id=meal.meal_id, day=day)
         exchange.proposal = proposal.token
         exchange.reply = self._replies.edit(EditView(proposal.token, change, " ".join(argv)))
 
@@ -1588,6 +1790,53 @@ class TelegramLlmHandler:
             self._log(f"chat {chat_id}: catalog list cut: {prompt.shown} of {prompt.total}")
         return (("카탈로그", prompt.text),)
 
+    def _interpret_data(self, chat_id: int, words: str, *, text_only: bool) -> tuple[tuple[str, Any], ...]:
+        """The `[데이터]` pairs of an interpret call: the catalog and, for a text message, the chat's last recorded
+        meals and its open meal proposal (a block with nothing in it is left out)."""
+        data = list(self._catalog_data(chat_id, words))
+        if not text_only:
+            return tuple(data)
+        recent = self._recent_meals(chat_id)
+        if recent:
+            data.append(("직전 기록", recent_meals_block(recent)))
+        opened = self._open_meal_proposal(chat_id)
+        if opened is not None and opened.outline:
+            data.append(("열린 제안", open_proposal_block(opened)))
+        return tuple(data)
+
+    def _recent_meals(self, chat_id: int) -> tuple[Meal, ...]:
+        """The chat's last `RECENT_MEALS` recorded meals that are still active, newest first.
+
+        From the history (confirm, plain and edit lines, no time limit), so it survives a restart. History writes are
+        best effort: a lost line means the meal is not known here.
+        """
+        try:
+            entries = self._history.read(last=HISTORY_SCAN)
+            found: list[Meal] = []
+            for meal_id in recent_meal_ids(entries, chat_id=chat_id):
+                meal = self._meals.get_active(meal_id)
+                if meal is not None:
+                    found.append(meal)
+                if len(found) == RECENT_MEALS:
+                    break
+        except Exception as exc:
+            self._log(f"chat {chat_id}: recent meals not read ({type(exc).__name__})")
+            return ()
+        return tuple(found)
+
+    def _open_meal_proposal(self, chat_id: int) -> Proposal | None:
+        """The chat's newest meal proposal that can still be confirmed (open, not expired), or None."""
+        now = int(self._now().timestamp())
+        open_ones = [
+            proposal
+            for proposal in self._proposals.load().proposals
+            if proposal.chat_id == chat_id
+            and proposal.kind is ProposalKind.MEAL
+            and proposal.state is ProposalState.OPEN
+            and now < proposal.expires_unix
+        ]
+        return max(open_ones, key=lambda proposal: proposal.created_unix, default=None)
+
     def _memory_block(self, chat_id: int) -> str | None:
         try:
             memory = self._memory.get(chat_id)
@@ -1658,10 +1907,19 @@ class TelegramLlmHandler:
         except Exception as exc:
             self._log(f"chat {chat_id}: history write failed ({type(exc).__name__})")
 
-    def _new_proposal(self, chat_id: int, kind: ProposalKind, **fields: Any) -> Proposal:
+    def _new_proposal(self, chat_id: int, kind: ProposalKind, *, cancel: str | None = None, **fields: Any) -> Proposal:
+        """Store a new open proposal in one state save; ``cancel`` is an open proposal of this chat that it replaces,
+        left cancelled by the same save (so at no point are both open)."""
         state = self._proposals.load()
         now = int(self._now().timestamp())
         proposals = prune_proposals(state.proposals, now)
+        if cancel is not None:
+            proposals = tuple(
+                item.with_state(ProposalState.CANCELLED)
+                if item.token == cancel and item.chat_id == chat_id and item.state is ProposalState.OPEN
+                else item
+                for item in proposals
+            )
         used = {proposal.token for proposal in proposals}
         token = self._new_token()
         for _attempt in range(100):
@@ -1808,6 +2066,25 @@ def _item_views(entries: Sequence[_Entry]) -> tuple[ProposalItemView, ...]:
     )
 
 
+def _outline(views: Sequence[ProposalItemView], *, indent: str = "") -> tuple[str, ...]:
+    """The item lines of a meal proposal as the LLM sees them while it is open (`1. 일반식 (메모: ...) | 라벨: ...`)."""
+    lines = []
+    for number, view in enumerate(views, start=1):
+        text = f"{indent}{number}. {view.text}"
+        if view.estimate:
+            text += f" | {'라벨' if view.label else '추정'}: {ranges_summary(view.estimate)}"
+        lines.append(text)
+    return tuple(lines)
+
+
+def _multi_outline(blocks: Sequence[MealBlockView]) -> tuple[str, ...]:
+    lines: list[str] = []
+    for block in blocks:
+        lines.append(MEAL_NAMES[block.meal_type])
+        lines.extend(_outline(block.items, indent="  "))
+    return tuple(lines)
+
+
 def _failures(entries: Sequence[_Entry]) -> list[tuple[_Entry, CheckFailure]]:
     """The failed numeric checks of the entries that will be stored as general estimates."""
     return [
@@ -1853,6 +2130,11 @@ def _replace_ranges(
     if protein is not None:
         by_field[NutrientField.PROTEIN_G] = protein
     return tuple((nutrient, *by_field[nutrient]) for nutrient in NutrientField if nutrient in by_field)
+
+
+def _range_text(bounds: tuple[Decimal, Decimal]) -> str:
+    low, high = bounds
+    return amount_text(low) if low == high else f"{amount_text(low)}~{amount_text(high)}"
 
 
 def _item_text(item: Any) -> str:

@@ -204,6 +204,11 @@ LLM_USAGE_TEXT = "사용법: /llm [claude|codex|default]\n예: /llm codex"
 COMMAND_ARGUMENT_TEXT = "이 명령은 인자를 받지 않습니다: /{name}"
 EDIT_UNCLEAR_TEXT = "무엇을 고칠지 알지 못했습니다. 기록을 보고(/day) /show, /void 또는 /log로 고쳐 주세요."
 EDIT_NO_MEAL_TEXT = "고칠 식사를 찾지 못했습니다. /day로 기록을 확인하세요."
+EDIT_NO_RECENT_TEXT = "방금 기록한 식사를 찾지 못했습니다(기록이 없거나 이미 취소했습니다). /day로 기록을 확인하세요."
+EDIT_NO_OPEN_TEXT = "고칠 열린 제안이 없습니다(이미 처리했거나 취소했거나 유효 시간이 지났습니다). 다시 보내 주세요."
+EDIT_CATALOG_ESTIMATE_TEXT = (
+    "카탈로그 음식의 값은 여기서 고칠 수 없습니다(food fact add로 등록하세요). 아무것도 바꾸지 않았습니다."
+)
 QUESTION_TOPICS_TEXT = "무엇을 묻는지 알지 못했습니다. /today, /status, /inbody로 확인할 수 있습니다."
 REASON_NOT_IN_CATALOG = "카탈로그에 없음"
 REASON_AMBIGUOUS = "이름이 여러 음식에 맞음"
@@ -248,6 +253,10 @@ def proposal_head(meal_type: MealType, day_text: str, label: str | None) -> str:
 
 def photo_failed_head(meal_type: MealType, day_text: str) -> str:
     return f"사진을 해석하지 못했습니다. 일반식으로만 기록할까요? ({MEAL_NAMES[meal_type]}, {day_text})"
+
+
+def superseded_line(token: str) -> str:
+    return f"이전 제안(/ok_{token})은 취소했습니다."
 
 
 def duplicate_text(meal_type: MealType, meal_ids: Sequence[str]) -> str:

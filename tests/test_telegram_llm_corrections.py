@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import json
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from importlib.resources import files
 from typing import Any
@@ -12,7 +13,8 @@ from typing import Any
 import pytest
 from test_telegram_llm_domain import NULL_ESTIMATE, interpretation
 
-from muscle50.domain.nutrition import MealType, NutrientField
+from muscle50.application.nutrition_logging import general_meal_item, parse_general_estimate
+from muscle50.domain.nutrition import Meal, MealItem, MealType, NutrientField, QuantityUnit
 from muscle50.domain.telegram_llm import (
     EditAction,
     Intent,
@@ -22,6 +24,15 @@ from muscle50.domain.telegram_llm import (
     parse_interpretation,
 )
 from muscle50.domain.telegram_llm_check import CheckCode, check_estimate
+from muscle50.domain.telegram_llm_corrections import (
+    general_ranges,
+    match_items,
+    merge_estimate,
+    normalize_memo,
+    pick_meals,
+    recent_meal_ids,
+    recent_meals_block,
+)
 from muscle50.domain.telegram_llm_meals import (
     CHECK_NEEDED_NOTE,
     ESTIMATE_REFERENCE_MAX,
@@ -52,7 +63,7 @@ def broken(path: tuple[Any, ...], value: Any) -> dict[str, Any]:
     return document
 
 
-# --- schema and parser keys ----------------------------------------------------------------------------------
+# --- schema and parser keys ---
 
 
 def test_the_schema_and_the_parser_have_the_same_keys_at_every_level() -> None:
@@ -163,7 +174,7 @@ def test_change_estimate_needs_an_estimate_or_a_new_memo() -> None:
     assert parse_interpretation(document).edit.new_memo == "새 메모"
 
 
-# --- label values --------------------------------------------------------------------------------------------
+# --- label values ---
 
 
 def test_is_label_estimate_needs_the_flag_and_only_single_values() -> None:
@@ -206,7 +217,7 @@ def test_portion_numbers_are_allowed_in_the_assumption() -> None:
     assert codes(ranges, assumption="닭 150 g 기준") == [CheckCode.ASSUMPTION_NUMBER]
 
 
-# --- estimate reference --------------------------------------------------------------------------------------
+# --- estimate reference ---
 
 
 BASE = "telegram-llm photo sha256:1a2b3c4d5e6f (claude sonnet)"
@@ -243,7 +254,7 @@ def test_portions_are_written_in_grams() -> None:
     assert portions_text(portions) == "닭 150~200 g, 밥 100.5 g"
 
 
-# --- the dish name stays in the memo -------------------------------------------------------------------------
+# --- the dish name stays in the memo ---
 
 
 @pytest.mark.parametrize(
@@ -259,3 +270,136 @@ def test_portions_are_written_in_grams() -> None:
 )
 def test_dish_memo_starts_from_the_users_dish_name(food_text: str, memo: str | None, expected: str) -> None:
     assert dish_memo(food_text, memo) == expected
+
+
+# --- the chat's last recorded meals, the meal and the item ---
+
+KST = timezone(timedelta(hours=9))
+
+
+def entry(
+    kind: str, *, chat: int = 111, exit_code: int | None = 0, meal_id: str | None = None, meal_ids: Any = None
+) -> Any:
+    result: dict[str, Any] | None = None
+    if exit_code is not None:
+        result = {"exit_code": exit_code, "meal_id": meal_id}
+        if meal_ids is not None:
+            result["meal_ids"] = meal_ids
+    return {"chat_id": chat, "kind": kind, "result": result}
+
+
+def test_recent_meal_ids_are_newest_first_for_this_chat_and_successful_records_only() -> None:
+    entries = [
+        entry("confirm", meal_id="2026-10-06-breakfast-1"),
+        entry("confirm", chat=222, meal_id="2026-10-06-lunch-1"),  # another chat
+        entry("text", meal_id="2026-10-06-lunch-9"),  # not a record
+        entry("confirm", exit_code=1, meal_id=None),  # failed
+        entry("cancel", exit_code=None),
+        entry("plain", meal_id="2026-10-06-lunch-1"),
+        entry("confirm", meal_id="x", meal_ids=["2026-10-06-dinner-1", "2026-10-06-snack-1"], exit_code=0),
+        entry("edit", meal_id="2026-10-06-breakfast-1"),  # an edit repeats the meal it corrected
+    ]
+    assert recent_meal_ids(entries, chat_id=111) == (
+        "2026-10-06-breakfast-1",
+        "2026-10-06-snack-1",
+        "2026-10-06-dinner-1",
+        "2026-10-06-lunch-1",
+    )
+    assert recent_meal_ids([], chat_id=111) == ()
+    assert recent_meal_ids([entry("fix", meal_id="2026-10-06-lunch-1")], chat_id=111) == ()
+
+
+def make_meal(meal_id: str, meal_type: MealType, *items: MealItem) -> Meal:
+    return Meal(meal_id, datetime(2026, 10, 6, 8, 0, tzinfo=KST), meal_type, "synthetic", items=items)
+
+
+def general(meal_id: str, sequence: int, memo: str | None, spec: str | None = None) -> MealItem:
+    estimate = parse_general_estimate(spec, None, datetime(2026, 10, 6, 8, 0, tzinfo=KST), label="") if spec else None
+    return general_meal_item(meal_id, sequence, memo, label="", estimate=estimate)
+
+
+def catalog(meal_id: str, sequence: int, food_id: str, name: str) -> MealItem:
+    return MealItem(meal_id, sequence, name, Decimal(1), QuantityUnit.PACK, food_profile_id=food_id)
+
+
+def test_the_nth_meal_follows_the_recording_number_not_the_id_text() -> None:
+    numbers = (1, 2, 10)
+    day = [
+        make_meal(f"2026-10-06-breakfast-{n}", MealType.BREAKFAST, general(f"2026-10-06-breakfast-{n}", 1, "a"))
+        for n in numbers
+    ]
+    # a text sort would put -10 before -2
+    shuffled = [day[2], day[0], day[1]]
+    assert pick_meals(shuffled, MealType.BREAKFAST, 2)[0].meal_id == "2026-10-06-breakfast-2"
+    assert pick_meals(shuffled, MealType.BREAKFAST, 3)[0].meal_id == "2026-10-06-breakfast-10"
+    assert pick_meals(shuffled, MealType.BREAKFAST, 4) == ()
+    assert len(pick_meals(shuffled, MealType.BREAKFAST, None)) == 3
+    assert len(pick_meals(shuffled, None, 1)) == 3  # an ordinal without a type narrows nothing
+    assert pick_meals(shuffled, MealType.LUNCH, None) == ()
+    only_second = [day[1], day[2]]  # the first breakfast was voided: "1식" is the next active one
+    assert pick_meals(only_second, MealType.BREAKFAST, 1)[0].meal_id == "2026-10-06-breakfast-2"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (" 깻잎닭갈비 삼각김밥, 1개! ", "깻잎닭갈비삼각김밥1개"),
+        ("ＫＩＭＢＡＰ（한 줄）", "kimbap한줄"),
+        ("", ""),
+        (None, ""),
+    ],
+)
+def test_normalize_memo(text: str | None, expected: str) -> None:
+    assert normalize_memo(text) == expected
+
+
+def test_match_items_prefers_an_exact_memo_then_a_contained_one_and_unions_the_catalog() -> None:
+    meal = make_meal(
+        "2026-10-06-breakfast-1",
+        MealType.BREAKFAST,
+        general("2026-10-06-breakfast-1", 1, "삼각김밥"),
+        general("2026-10-06-breakfast-1", 2, "참치마요 삼각김밥 1개"),
+        catalog("2026-10-06-breakfast-1", 3, "chicken-breast", "닭가슴살"),
+        general("2026-10-06-breakfast-1", 4, None),
+    )
+
+    def found(food_id: str | None, text: str | None) -> list[int]:
+        return [ref.item.sequence for ref in match_items([meal], food_id=food_id, text=text)]
+
+    assert found(None, "삼각 김밥") == [1]  # the exact memo wins over the longer one that merely contains it
+    assert found(None, "참치마요") == [2]  # no exact memo: the memo that contains it
+    assert found(None, "삼각김밥 1개") == [2]
+    assert found(None, "김") == []  # one character is not searched
+    assert found("chicken-breast", None) == [3]
+    assert found("chicken-breast", "참치마요") == [2, 3]  # the union, in item order
+    assert found(None, None) == [] and found(None, "존재하지않음") == []
+    assert found("general-meal", None) == []  # the reserved profile is never a catalog match
+
+
+def test_merge_estimate_replaces_only_the_named_nutrients() -> None:
+    current = ((KCAL, Decimal(180), Decimal(200)), (PROTEIN, Decimal(5), Decimal(6)))
+    merged = merge_estimate(current, ((FAT, Decimal(2), Decimal(2)), (KCAL, Decimal(185), Decimal(185))))
+    assert merged == (
+        (KCAL, Decimal(185), Decimal(185)),
+        (PROTEIN, Decimal(5), Decimal(6)),
+        (FAT, Decimal(2), Decimal(2)),
+    )
+    assert merge_estimate((), ((FAT, Decimal(2), Decimal(2)),)) == (
+        (FAT, Decimal(2), Decimal(2)),
+    )  # carbs stay unknown
+    assert merge_estimate(current, ()) == current
+
+
+def test_the_stored_estimate_is_read_back_as_ranges_and_the_blocks_are_deterministic() -> None:
+    meal_id = "2026-10-06-breakfast-1"
+    item = general(meal_id, 1, "삼각김밥", "visual_estimate:kcal=185-185,protein=5-5,carbs=37-37")
+    assert general_ranges(item) == LABEL
+    assert general_ranges(general(meal_id, 2, "모름")) == ()
+    meal = make_meal(meal_id, MealType.BREAKFAST, item, catalog(meal_id, 3, "chicken-breast", "닭가슴살"))
+    block = recent_meals_block([meal])
+    assert block == (
+        "2026-10-06-breakfast-1 | 아침\n"
+        "1. 일반식 (메모: 삼각김밥) | kcal 185, 단백질 5 g, 탄수화물 37 g\n"
+        "3. 닭가슴살 (chicken-breast) 1 pack"
+    )
+    assert recent_meals_block([meal]) == block

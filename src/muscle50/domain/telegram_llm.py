@@ -670,6 +670,12 @@ class Proposal:
     """How the menu was made (`메뉴 캡처 추정`, `메뉴 제안 추정`), shown in the `/eat_` proposal."""
     meals: tuple[MealCommand, ...] = ()
     """A multi-meal proposal (two or more meals): one command per meal, run in order; `argv_ok` stays empty."""
+    outline: tuple[str, ...] = ()
+    """The item lines of a meal proposal as the user saw them (the LLM gets them while the proposal is open)."""
+    fix_argv: tuple[str, ...] = ()
+    """A meal proposal that overlaps a recorded meal: the one correction command `/fix_` proposes (empty: none)."""
+    fix_change: str = ""
+    """What `fix_argv` changes, in the words of the edit proposal."""
 
     @property
     def plain_available(self) -> bool:

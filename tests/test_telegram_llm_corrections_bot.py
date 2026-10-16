@@ -5,15 +5,30 @@ AC1-AC13 of docs/specs/telegram-llm-corrections.md."""
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
+import sqlite3
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 import test_telegram_llm_bot as bot
 import test_telegram_llm_meals_bot as meals
+from test_telegram_llm_domain import NULL_EDIT, NULL_ESTIMATE, interpretation
 from test_telegram_llm_meals_bot import catalog_item, dishes, est, item
+
+import muscle50.cli as cli
+from muscle50.application.telegram_bot import IncomingMessage, IncomingUpdate
+from muscle50.domain.telegram_llm_prompt import (
+    EDIT_CATALOG_ESTIMATE_TEXT,
+    EDIT_NO_MEAL_TEXT,
+    EDIT_NO_OPEN_TEXT,
+    EDIT_NO_RECENT_TEXT,
+    PROPOSAL_CANCELLED_TEXT,
+)
+from muscle50.infrastructure.sqlite.nutrition_reader import SqliteNutritionReader
 
 home = bot.home  # the autouse fixture of the bot tests: temporary MUSCLE50_HOME, fake clock, no network
 
@@ -35,7 +50,7 @@ def say(
     return replies, provider
 
 
-# --- AC11: the totals are those of the logged day ------------------------------------------------------------
+# --- AC11: the totals are those of the logged day ---
 
 
 def test_a_past_day_is_confirmed_with_that_days_totals_and_today_keeps_its_label(
@@ -59,7 +74,7 @@ def test_a_past_day_is_confirmed_with_that_days_totals_and_today_keeps_its_label
     assert meals.meal_tables(home)["nutrition_meals"]
 
 
-# --- AC1: label values ---------------------------------------------------------------------------------------
+# --- AC1: label values ---
 
 PHOTO_DIGEST = hashlib.sha256(bot.PHOTO).hexdigest()[:12]
 LABEL_ESTIMATE = est((185, 185), (5, 5), carbs_min=37, carbs_max=37)
@@ -211,3 +226,319 @@ def test_a_stated_amount_has_no_portion_line_and_a_memo_with_the_name_is_unchang
     replies, _provider = say(monkeypatch, capsys, document, 1, "점심 김밥 두줄 반")
     assert "양 가정" not in replies[0] and "1. 일반식 (메모: 김밥 2.5줄)" in replies[0]
     assert "양:" not in meals.state_proposals(home)[0]["argv_ok"][-1]
+
+
+# --- AC2, AC4, AC5: correcting what was just recorded --------------------------------------------------------
+
+
+def edit_doc(action: str, *, refers: str | None = "last_recorded", meal_type: str | None = None, **fields: Any) -> Any:
+    edit = {**NULL_EDIT, "action": action, **fields}
+    return interpretation(intent="meal_edit", refers_to=refers, items=[], meal_type=meal_type, edit=edit)
+
+
+def record_label_meal(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path, *, update_id: int = 1
+) -> None:
+    """The first two messages of the 2026-10-14 replay: a label photo, then `/ok`."""
+    send_photo(monkeypatch, capsys, update_id, label_photo())
+    bot._session(monkeypatch, capsys, bot.FakeProvider(), bot.text(update_id + 1, "/ok_7f3a"))
+
+
+FAT_FIX = edit_doc(
+    "change_estimate",
+    target_food_text="삼각김밥",
+    estimate={**NULL_ESTIMATE, "fat_min": 2, "fat_max": 2},
+    from_label=True,
+)
+FAT_FIX_PROPOSAL = "\n".join(
+    [
+        "이렇게 고칠까요?",
+        "아침 2026-10-06-breakfast-1 item 1: 일반식 (메모: 깻잎닭갈비 삼각김밥 1개)",
+        "  지방 알 수 없음 → 2 g (라벨)",
+        "고치기: /ok_91c0   취소: /no_91c0",
+    ]
+)
+
+
+def test_a_follow_up_after_a_record_becomes_an_edit_and_never_a_new_meal(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    record_label_meal(monkeypatch, capsys, home)
+    before = meals.meal_tables(home)
+    replies, provider = say(monkeypatch, capsys, FAT_FIX, 3, "삼각김밥 지방 2g 이네 사진에 나와있어")
+    assert replies == [FAT_FIX_PROPOSAL]
+    assert meals.meal_tables(home) == before  # nothing is written before /ok
+    prompt = provider.requests[0][0].prompt
+    assert "<직전 기록>\n2026-10-06-breakfast-1 | 아침\n1. 일반식 (메모: 깻잎닭갈비 삼각김밥 1개) | kcal 185," in prompt
+    proposals = meals.state_proposals(home)
+    assert [proposal["state"] for proposal in proposals] == ["used", "open"]
+    edit_proposal = proposals[1]
+    assert edit_proposal["kind"] == "edit" and edit_proposal["day"] == "2026-10-06"
+    assert edit_proposal["argv_ok"] == [
+        *("nutrition", "meal", "replace-item", "2026-10-06-breakfast-1", "--item-number", "1", "--general"),
+        "--general-note=깻잎닭갈비 삼각김밥 1개",
+        "--general-estimate=language_estimate:kcal=185-185,protein=5-5,carbs=37-37,fat=2-2",
+        "--general-estimate-ref=telegram-llm edit (claude sonnet); 라벨",
+    ]
+    replies, _provider = say(monkeypatch, capsys, None, 4, "/ok_91c0")
+    assert replies[0].startswith("Replaced item 1 of meal 2026-10-06-breakfast-1 with item 3.")
+    assert "\n확인: /show 2026-10-06-breakfast-1\n오늘 누적" in replies[0]
+    assert {row[0] for row in bot._tables(home)["nutrition_meals"]} == {"2026-10-06-breakfast-1"}  # no second meal
+    tables = bot._tables(home)
+    assert len(tables["nutrition_meal_item_removals"]) == 1
+    estimate_facts = [row for row in tables["nutrition_facts"] if str(row[0]).endswith(":estimate")]
+    assert len(estimate_facts) == 2  # the old label fact stays next to the new one
+    assert "F 2-2 g" in bot._ok(capsys, "nutrition", "day")
+    history = bot._history(home)
+    assert history[-1]["kind"] == "edit"
+    assert history[-1]["result"] == {"exit_code": 0, "meal_id": "2026-10-06-breakfast-1"}
+
+
+def test_a_memo_only_edit_sends_the_stored_estimate_again_with_its_own_reference(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    record_label_meal(monkeypatch, capsys, home)
+    memo_only = edit_doc("change_estimate", target_food_text="삼각김밥", new_memo="참치마요 삼각김밥 1개")
+    replies, _provider = say(monkeypatch, capsys, memo_only, 3, "그거 참치마요야")
+    assert replies[0].split("\n")[1:3] == [
+        "아침 2026-10-06-breakfast-1 item 1: 일반식 (메모: 깻잎닭갈비 삼각김밥 1개)",
+        "  메모: 깻잎닭갈비 삼각김밥 1개 → 참치마요 삼각김밥 1개",
+    ]
+    argv = meals.state_proposals(home)[1]["argv_ok"]
+    assert argv[7:] == [
+        "--general-note=참치마요 삼각김밥 1개",
+        "--general-estimate=visual_estimate:kcal=185-185,protein=5-5,carbs=37-37",
+        f"--general-estimate-ref=telegram-llm photo sha256:{PHOTO_DIGEST} (claude sonnet); 라벨",
+    ]
+
+
+def test_a_changed_estimate_that_fails_a_check_is_marked_and_not_asked_again(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    record_label_meal(monkeypatch, capsys, home)
+    wrong = edit_doc(
+        "change_estimate",
+        target_food_text="삼각김밥",
+        estimate={**NULL_ESTIMATE, "fat_min": 30, "fat_max": 30},
+        from_label=True,
+    )
+    replies, provider = say(monkeypatch, capsys, wrong, 3, "지방 30g")
+    assert len(provider.requests) == 1  # no re-ask for an edit
+    assert "  지방 알 수 없음 → 30 g (라벨) (값 확인 필요)" in replies[0]
+    assert "값 확인 필요: 열량과 영양소 합이 맞지 않음" in replies[0]
+    argv = meals.state_proposals(home)[1]["argv_ok"]
+    assert argv[-1] == "--general-estimate-ref=telegram-llm edit (claude sonnet); 라벨; 값 확인 필요"
+
+
+def test_a_catalog_item_is_never_given_an_estimate(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    record_label_meal(monkeypatch, capsys, home)
+    before = meals.meal_tables(home)
+    document = edit_doc(
+        "change_estimate", target_food_text="닭가슴살", estimate={**NULL_ESTIMATE, "fat_min": 3, "fat_max": 3}
+    )
+    replies, _provider = say(monkeypatch, capsys, document, 3, "닭가슴살 지방 3g")
+    assert replies == [EDIT_CATALOG_ESTIMATE_TEXT]
+    assert meals.meal_tables(home) == before and len(meals.state_proposals(home)) == 1
+
+
+def test_the_last_recorded_is_the_last_two_meals_and_exactly_one_may_match(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    record_label_meal(monkeypatch, capsys, home)  # breakfast: a label item and chicken
+    lunch = dishes(item("국밥", "lunch", estimate=est((600, 700), (20, 30))))
+    say(monkeypatch, capsys, lunch, 3, "점심 국밥")
+    say(monkeypatch, capsys, None, 4, "/ok_91c0")
+    dinner = dishes(item("파스타", "dinner", estimate=est((700, 800), (20, 30))))
+    say(monkeypatch, capsys, dinner, 5, "저녁 파스타")
+    say(monkeypatch, capsys, None, 6, "/ok_c2e1")
+    before = meals.meal_tables(home)
+    # three meals exist; only the last two are "just recorded": the breakfast is not offered
+    both = edit_doc("change_estimate", target_food_text="국밥", new_memo="국밥 큰 것")
+    replies, provider = say(monkeypatch, capsys, both, 7, "국밥 큰 거야")
+    block = provider.requests[0][0].prompt.split("<직전 기록>\n")[1].split("\n\n")[0]
+    assert block.startswith("2026-10-06-dinner-1 | 저녁") and "2026-10-06-lunch-1 | 점심" in block
+    assert "breakfast-1" not in block
+    # exactly one of the two matches the words: that meal
+    assert replies[0].split("\n")[1] == "점심 2026-10-06-lunch-1 item 1: 일반식 (메모: 국밥)"
+    # nothing matches: candidates, nothing written
+    none = edit_doc("change_estimate", target_food_text="김치찌개", new_memo="김치찌개 큰 것")
+    replies, _provider = say(monkeypatch, capsys, none, 8, "김치찌개 큰 거야")
+    assert replies[0].split("\n")[1:3] == ["/show 2026-10-06-dinner-1", "/show 2026-10-06-lunch-1"]
+    # a whole-meal action with nothing to tell the two apart matches both: candidates, never "the newest"
+    replies, _provider = say(monkeypatch, capsys, edit_doc("void_meal"), 9, "방금 거 취소")
+    assert replies[0].split("\n")[1:3] == ["/show 2026-10-06-dinner-1", "/show 2026-10-06-lunch-1"]
+    assert meals.meal_tables(home) == before
+
+
+def test_no_recent_meal_gives_a_fixed_reply_and_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    before = meals.meal_tables(home)
+    replies, _provider = say(monkeypatch, capsys, FAT_FIX, 1, "방금 거 지방 2g")
+    assert replies == [EDIT_NO_RECENT_TEXT] and meals.meal_tables(home) == before
+    record_label_meal(monkeypatch, capsys, home, update_id=2)
+    bot._ok(capsys, "nutrition", "meal", "void", "2026-10-06-breakfast-1")  # the recorded meal was voided
+    replies, _provider = say(monkeypatch, capsys, FAT_FIX, 4, "방금 거 지방 2g")
+    assert replies == [EDIT_NO_RECENT_TEXT]
+
+
+def test_a_recent_meal_is_found_after_a_restart_without_any_time_limit(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    record_label_meal(monkeypatch, capsys, home)
+    later = bot.NOW + timedelta(days=3)
+    monkeypatch.setattr(cli, "_now", lambda: later)
+    late = IncomingUpdate(3, IncomingMessage(bot.ALLOWED, "지방 2g이래", int(later.timestamp())))
+    provider = bot.FakeProvider(FAT_FIX)
+    replies, _err, _fake = bot._session(monkeypatch, capsys, provider, late)
+    assert replies[0].startswith("이렇게 고칠까요?\n아침 2026-10-06-breakfast-1 item 1:")
+    assert "2026-10-06-breakfast-1 | 아침" in provider.requests[0][0].prompt
+
+
+def with_ordinal(document: dict[str, Any], ordinal: int) -> dict[str, Any]:
+    clone = copy.deepcopy(document)
+    clone["edit"]["target_meal_ordinal"] = ordinal
+    return clone
+
+
+def test_the_nth_meal_of_a_type_counts_only_active_meals(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    for _ in range(2):
+        bot._ok(capsys, "nutrition", "log", "--meal", "breakfast", "--additional", "--item", "햇반", "1", "pack")
+    bot._ok(capsys, "nutrition", "meal", "void", "2026-10-06-breakfast-1")
+    base = edit_doc("change_quantity", refers=None, meal_type="breakfast", target_food_text="햇반", new_quantity=2)
+    replies, _provider = say(monkeypatch, capsys, with_ordinal(base, 1), 1, "아침 1식 햇반 2개로")
+    assert "아침 2026-10-06-breakfast-2 item 1: 햇반 1 pack → 햇반 (hetbahn-210) 2 pack" in replies[0]
+    replies, _provider = say(monkeypatch, capsys, with_ordinal(base, 2), 2, "아침 2식 햇반 2개로")
+    assert replies == [EDIT_NO_MEAL_TEXT]
+    without_type = with_ordinal(base, 1)
+    without_type["meal_type"] = None
+    replies, _provider = say(monkeypatch, capsys, without_type, 3, "1식 햇반 2개로")
+    assert replies[0].split("\n")[1:2] == ["/show 2026-10-06-breakfast-2"]
+
+
+def test_a_general_item_is_found_by_its_memo_and_an_ambiguous_one_lists_the_items(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    bot._ok(
+        capsys,
+        *("nutrition", "log", "--meal", "breakfast"),
+        *("--general", "--general-note=깻잎닭갈비 삼각김밥 1개", "--general", "--general-note=참치마요 삼각김밥 1개"),
+    )
+    before = meals.meal_tables(home)
+    document = edit_doc("remove_item", refers=None, meal_type="breakfast", target_food_text="삼각김밥")
+    replies, _provider = say(monkeypatch, capsys, document, 1, "삼각김밥 빼줘")
+    assert replies == [
+        "\n".join(
+            [
+                "어느 음식인지 하나로 정하지 못해 아무것도 바꾸지 않았습니다. 후보:",
+                "2026-10-06-breakfast-1 item 1: 일반식 (메모: 깻잎닭갈비 삼각김밥 1개)",
+                "2026-10-06-breakfast-1 item 2: 일반식 (메모: 참치마요 삼각김밥 1개)",
+                "음식 이름을 더 구체적으로 적어 다시 보내 주세요.",
+            ]
+        )
+    ]
+    assert meals.meal_tables(home) == before
+    document = edit_doc("remove_item", refers=None, meal_type="breakfast", target_food_text="참치마요")
+    replies, _provider = say(monkeypatch, capsys, document, 2, "참치마요 빼줘")
+    assert replies[0].split("\n")[1] == "아침 2026-10-06-breakfast-1 item 2: 일반식 (메모: 참치마요 삼각김밥 1개) 빼기"
+
+
+# --- AC7: correcting a proposal that is still open -----------------------------------------------------------
+
+
+def test_correcting_an_open_proposal_replaces_it_in_one_save(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    first = dishes(catalog_item("닭가슴살", "lunch", 2, "pack"))
+    say(monkeypatch, capsys, first, 1, "점심 닭가슴살 2팩")
+    corrected = dishes(catalog_item("닭가슴살", "lunch", 1, "pack"), refers_to="open_proposal")
+    replies, provider = say(monkeypatch, capsys, corrected, 2, "아니 2팩 아니고 1팩")
+    assert replies == [
+        "\n".join(
+            [
+                "이렇게 기록할까요? (점심, 10-06)",
+                "1. 닭가슴살 (chicken-breast) 1 pack",
+                "이전 제안(/ok_7f3a)은 취소했습니다.",
+                "기록: /ok_91c0   취소: /no_91c0",
+            ]
+        )
+    ]
+    prompt = provider.requests[0][0].prompt
+    assert "<열린 제안>\n/ok_7f3a | 점심 10-06\n1. 닭가슴살 (chicken-breast) 2 pack" in prompt
+    states = {proposal["token"]: proposal["state"] for proposal in meals.state_proposals(home)}
+    assert states == {"7f3a": "cancelled", "91c0": "open"}  # one save: never both open
+    replies, _provider = say(monkeypatch, capsys, None, 3, "/ok_7f3a")
+    assert replies == [PROPOSAL_CANCELLED_TEXT]
+    assert not meals.meal_tables(home)["nutrition_meals"]
+    say(monkeypatch, capsys, None, 4, "/ok_91c0")
+    stored = json.loads(bot._ok(capsys, "nutrition", "meal", "show", "2026-10-06-lunch-1", "--json"))
+    assert stored["items"][0]["quantity"] == "1"
+
+
+def test_correcting_with_no_open_proposal_creates_no_meal(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    corrected = dishes(catalog_item("닭가슴살", "lunch", 1, "pack"), refers_to="open_proposal")
+    replies, _provider = say(monkeypatch, capsys, corrected, 1, "아니 1팩")
+    assert replies == [EDIT_NO_OPEN_TEXT]
+    assert not (home / "config" / meals.STATE).exists()
+    # a used proposal is not "open" either
+    say(monkeypatch, capsys, dishes(catalog_item("닭가슴살", "lunch", 2, "pack")), 2, "점심 닭가슴살 2팩")
+    say(monkeypatch, capsys, None, 3, "/ok_7f3a")
+    replies, provider = say(monkeypatch, capsys, corrected, 4, "아니 1팩")
+    assert replies == [EDIT_NO_OPEN_TEXT] and "<열린 제안>\n" not in provider.requests[0][0].prompt
+
+
+# --- the read-only lookup of one active meal ---
+
+
+def test_get_active_is_read_only_and_none_for_a_voided_or_unknown_meal(
+    capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    bot._ok(capsys, "nutrition", "log", "--meal", "breakfast", "--item", "햇반", "1", "pack")
+    bot._ok(capsys, "nutrition", "log", "--meal", "lunch", "--item", "햇반", "1", "pack")
+    database = home / "db" / "muscle50.sqlite3"
+    reader = SqliteNutritionReader(database)
+    before = database.read_bytes()
+    meal = reader.get_active("2026-10-06-breakfast-1")
+    assert meal is not None and meal.meal_type.value == "breakfast" and meal.items[0].food_profile_id == "hetbahn-210"
+    assert reader.get_active("2026-10-06-dinner-9") is None
+    bot._ok(capsys, "nutrition", "meal", "void", "2026-10-06-lunch-1")
+    assert reader.get_active("2026-10-06-lunch-1") is None
+    assert database.read_bytes() != before  # only the void command wrote; the reads below do not
+    after_void = database.read_bytes()
+    reader.get_active("2026-10-06-breakfast-1")
+    assert database.read_bytes() == after_void
+
+
+def test_get_active_reads_a_database_without_the_void_and_revision_tables(
+    capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    bot._ok(capsys, "nutrition", "log", "--meal", "breakfast", "--item", "햇반", "1", "pack")
+    database = home / "db" / "muscle50.sqlite3"
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute("DROP TABLE nutrition_meal_voids")
+        connection.execute("DROP TABLE nutrition_meal_revisions")
+        connection.commit()
+    finally:
+        connection.close()
+    meal = SqliteNutritionReader(database).get_active("2026-10-06-breakfast-1")
+    assert meal is not None and meal.meal_id == "2026-10-06-breakfast-1"
