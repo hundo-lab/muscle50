@@ -916,3 +916,26 @@ def test_no_menu_block_without_a_menu_and_a_photo_message_gets_none(
     show_menu(monkeypatch, capsys, home)
     _replies, provider = send_photo(monkeypatch, capsys, 2, label_photo())
     assert "<최근 메뉴>\n" not in provider.requests[0][0].prompt  # text messages only
+
+
+def test_an_edit_of_a_past_meal_shows_that_days_totals(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    bot._ok(capsys, "nutrition", "log", "--date", "2026-10-05", "--meal", "dinner", "--item", "햇반", "2", "pack")
+    document = edit_doc(
+        "change_quantity",
+        refers=None,
+        meal_type="dinner",
+        target_food_text="햇반",
+        new_quantity=1,
+    )
+    document["date_expression"] = "yesterday"
+    replies, _provider = say(monkeypatch, capsys, document, 1, "어제 저녁 햇반 1팩이야")
+    assert replies[0].startswith(
+        "이렇게 고칠까요?\n저녁 2026-10-05-dinner-1 item 1: 햇반 2 pack → 햇반 (hetbahn-210) 1 pack"
+    )
+    assert meals.state_proposals(home)[0]["day"] == "2026-10-05"
+    replies, _provider = say(monkeypatch, capsys, None, 2, "/ok_7f3a")
+    assert "\n확인: /show 2026-10-05-dinner-1\n10-05 누적:\n  kcal 315\n" in replies[0]
+    assert "오늘 누적" not in replies[0]
