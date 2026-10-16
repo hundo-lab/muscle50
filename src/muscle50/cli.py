@@ -500,6 +500,12 @@ def _add_nutrition_parser(commands: argparse._SubParsersAction[argparse.Argument
             "never used for nutrition)"
         ),
     )
+    replace_item.add_argument(
+        "--general-estimate", metavar="SPEC", help=_GENERAL_ESTIMATE_HELP.replace(" just before it", "")
+    )
+    replace_item.add_argument(
+        "--general-estimate-ref", metavar="TEXT", help=_GENERAL_ESTIMATE_REF_HELP.replace(" just before it", "")
+    )
     replace_item.add_argument("--json", action="store_true", help="print the edited meal as JSON")
     replace_item.set_defaults(meal_entry_usage_error=replace_item.error)
     _add_meal_correction_parsers(meal_commands)
@@ -652,6 +658,10 @@ def _check_meal_entry_arguments(args: argparse.Namespace) -> None:
             usage_error("one of the arguments --item --general is required")
     elif args.general_note is not None and not args.general:
         usage_error("argument --general-note: requires --general")
+    elif getattr(args, "general_estimate", None) is not None and not args.general:
+        usage_error("argument --general-estimate: requires --general")
+    elif getattr(args, "general_estimate_ref", None) is not None and args.general_estimate is None:
+        usage_error("argument --general-estimate-ref: requires --general-estimate")
 
 
 def _add_item_number_argument(parser: argparse.ArgumentParser, what: str) -> None:
@@ -1351,7 +1361,12 @@ def _nutrition_meal(args: argparse.Namespace, meals: SqliteMealRepository, foods
         headline = f"Removed item {args.item_number} from meal {intake.meal.meal_id}."
     elif args.meal_command == "replace-item":
         replacement = (
-            _general_entry(args.general_note, label="")
+            _general_entry(
+                args.general_note,
+                label="",
+                estimate=args.general_estimate,
+                estimate_ref=args.general_estimate_ref,
+            )
             if args.general
             else _resolve_entries(foods, (_meal_entry(1, args.item),), numbered=False)[0]
         )
