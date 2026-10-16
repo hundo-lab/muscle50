@@ -179,7 +179,7 @@ def test_a_label_with_a_real_range_is_an_ordinary_estimate(
     assert "라벨:" not in replies[0] and "추정: kcal 185, 단백질 5~8 g" in replies[0]
 
 
-# --- AC10: assumed portions and the dish name in the memo ------------------------------------------
+# --- AC10: assumed portions and the dish name in the memo ---
 
 
 def stew(**fields: Any) -> dict[str, Any]:
@@ -237,7 +237,7 @@ def test_a_stated_amount_has_no_portion_line_and_a_memo_with_the_name_is_unchang
     assert "양:" not in meals.state_proposals(home)[0]["argv_ok"][-1]
 
 
-# --- AC2, AC4, AC5: correcting what was just recorded ----------------------------------------------
+# --- AC2, AC4, AC5: correcting what was just recorded ---
 
 
 def edit_doc(action: str, *, refers: str | None = "last_recorded", meal_type: str | None = None, **fields: Any) -> Any:
@@ -465,7 +465,7 @@ def test_a_general_item_is_found_by_its_memo_and_an_ambiguous_one_lists_the_item
     assert replies[0].split("\n")[1] == "아침 2026-10-06-breakfast-1 item 2: 일반식 (메모: 참치마요 삼각김밥 1개) 빼기"
 
 
-# --- AC7: correcting a proposal that is still open -------------------------------------------------
+# --- AC7: correcting a proposal that is still open ---
 
 
 def test_correcting_an_open_proposal_replaces_it_in_one_save(
@@ -553,7 +553,7 @@ def test_get_active_reads_a_database_without_the_void_and_revision_tables(
     assert meal is not None and meal.meal_id == "2026-10-06-breakfast-1"
 
 
-# --- AC3: the same food again in a slot that already has it ----------------------------------------
+# --- AC3: the same food again in a slot that already has it ---
 
 
 def tuna_rice_ball(estimate: dict[str, Any] | None = None, **fields: Any) -> dict[str, Any]:
@@ -793,3 +793,126 @@ def test_a_pending_migration_refuses_the_fix_confirmation_without_consuming_it(
     replies, _provider = say(monkeypatch, capsys, None, 5, "/ok_c2e1")
     assert replies == [pending_migration_text((latest,))]
     assert meals.state_proposals(home)[2]["state"] == "open"
+
+
+# --- AC12: a recently shown menu item picked by name ---
+
+STEW_MENU = interpretation(
+    intent="menu",
+    photo_kind="menu_capture",
+    items=[],
+    meal_type=None,
+    menu={
+        "slots_visible": ["lunch"],
+        "items": [
+            bot._menu_item("한식", "얼큰순살감자탕", (900, 1100), (40, 55), printed_kcal=1022),
+            bot._menu_item("분식", "김밥", (300, 400), (8, 12)),
+        ],
+    },
+)
+
+
+def picked(name: str, ref: int | None, **fields: Any) -> dict[str, Any]:
+    """The user's meal message that names a menu item; the model's own estimate is deliberately different."""
+    return dishes(
+        bot._item(
+            name,
+            None,
+            None,
+            kind="general",
+            memo=name,
+            meal_type="lunch",
+            estimate=est((600, 900), (30, 45)),
+            menu_ref=ref,
+            **fields,
+        )
+    )
+
+
+def show_menu(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path) -> None:
+    prepare(capsys, home)
+    bot._session(monkeypatch, capsys, bot.FakeProvider(STEW_MENU), bot.photo(1, "점심 메뉴"))
+
+
+def test_a_menu_item_picked_by_name_takes_the_menus_values_and_provenance(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    show_menu(monkeypatch, capsys, home)
+    before = meals.meal_tables(home)
+    replies, provider = say(
+        monkeypatch, capsys, picked("얼큰순살감자탕", 1), 2, "점심으로 위 사진에 있는 얼큰순살감자탕 먹었어"
+    )
+    block = provider.requests[0][0].prompt.split("<최근 메뉴>\n")[1].split("\n\n")[0]
+    assert block == "\n".join(
+        [
+            "/eat_7f3a 점심 (메뉴 캡처 추정)",
+            "1. 한식 얼큰순살감자탕 | kcal 1022, 단백질 40~55 g (메뉴판 표기 포함)",
+            "2. 분식 김밥 | kcal 300~400, 단백질 8~12 g",
+        ]
+    )
+    assert len(provider.requests) == 1  # a single printed value from a list the user saw: no re-ask
+    assert replies == [
+        "\n".join(
+            [
+                "이렇게 기록할까요? (점심, 10-06)",
+                "1. 일반식 (메모: 한식 얼큰순살감자탕)",
+                "   추정: kcal 1022, 단백질 40~55 g (estimated) (메뉴판 표기)",
+                "기록: /ok_91c0   일반식만 기록(값 없이): /plain_91c0   취소: /no_91c0",
+            ]
+        )
+    ]
+    assert meals.meal_tables(home) == before
+    argv = meals.state_proposals(home)[1]["argv_ok"]
+    assert argv[6:] == [
+        *("--general", "--general-note=한식 얼큰순살감자탕"),
+        "--general-estimate=visual_estimate:kcal=1022-1022,protein=40-55",
+        f"--general-estimate-ref=telegram-llm photo sha256:{PHOTO_DIGEST} (claude sonnet); 메뉴판 표기",
+    ]
+    say(monkeypatch, capsys, None, 3, "/ok_91c0")
+    stored = json.loads(bot._ok(capsys, "nutrition", "meal", "show", "2026-10-06-lunch-1", "--json"))
+    assert stored["items"][0]["nutrients"]["calories_kcal"]["minimum"] == "1022"
+
+
+def test_a_menu_reference_that_does_not_check_out_is_ignored(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    show_menu(monkeypatch, capsys, home)
+    for update_id, name, ref in ((2, "얼큰순살감자탕", 3), (3, "얼큰순살감자탕", 0), (4, "된장찌개", 1)):
+        replies, _provider = say(monkeypatch, capsys, picked(name, ref), update_id, f"{name} 먹었어")
+        assert f"1. 일반식 (메모: {name})" in replies[0]
+        assert "kcal 600~900, 단백질 30~45 g (estimated)" in replies[0] and "메뉴판 표기" not in replies[0]
+    # the model's numbers are used as for any estimate, not the menu's
+    assert "kcal=600-900" in meals.state_proposals(home)[-1]["argv_ok"][8]
+
+
+def test_the_menu_is_offered_for_four_hours_after_it_was_made_and_not_when_cancelled(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    show_menu(monkeypatch, capsys, home)
+    # 118 minutes later: the menu proposal itself expired at 60 minutes, but it is still a recent menu
+    later = bot.NOW + timedelta(minutes=118)
+    monkeypatch.setattr(cli, "_now", lambda: later)
+    update = IncomingUpdate(2, IncomingMessage(bot.ALLOWED, "얼큰순살감자탕 먹었어", int(later.timestamp())))
+    provider = bot.FakeProvider(picked("얼큰순살감자탕", 1))
+    replies, _err, _fake = bot._session(monkeypatch, capsys, provider, update)
+    assert "<최근 메뉴>\n" in provider.requests[0][0].prompt and "추정: kcal 1022" in replies[0]
+    # past four hours it is not offered, and a stale reference is ignored
+    much_later = bot.NOW + timedelta(hours=4, minutes=1)
+    monkeypatch.setattr(cli, "_now", lambda: much_later)
+    update = IncomingUpdate(3, IncomingMessage(bot.ALLOWED, "얼큰순살감자탕 먹었어", int(much_later.timestamp())))
+    provider = bot.FakeProvider(picked("얼큰순살감자탕", 1))
+    replies, _err, _fake = bot._session(monkeypatch, capsys, provider, update)
+    assert "<최근 메뉴>\n" not in provider.requests[0][0].prompt and "추정: kcal 600~900" in replies[0]
+    # a cancelled menu is not offered either
+    monkeypatch.setattr(cli, "_now", lambda: bot.NOW)
+    say(monkeypatch, capsys, None, 4, "/no_7f3a")
+    _replies, provider = say(monkeypatch, capsys, picked("얼큰순살감자탕", None), 5, "얼큰순살감자탕 먹었어")
+    assert "<최근 메뉴>\n" not in provider.requests[0][0].prompt
+
+
+def test_no_menu_block_without_a_menu_and_a_photo_message_gets_none(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    show_menu(monkeypatch, capsys, home)
+    _replies, provider = send_photo(monkeypatch, capsys, 2, label_photo())
+    assert "<최근 메뉴>\n" not in provider.requests[0][0].prompt  # text messages only

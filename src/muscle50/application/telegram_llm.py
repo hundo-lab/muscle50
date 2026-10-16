@@ -133,6 +133,8 @@ from muscle50.domain.telegram_llm_corrections import (
     item_memo,
     item_summary,
     match_items,
+    menu_block,
+    menu_name_matches,
     merge_estimate,
     open_proposal_block,
     overlap_name,
@@ -141,6 +143,7 @@ from muscle50.domain.telegram_llm_corrections import (
     ranges_summary,
     recent_meal_ids,
     recent_meals_block,
+    recent_menu,
 )
 from muscle50.domain.telegram_llm_meals import (
     catalog_prompt,
@@ -295,6 +298,8 @@ class ProposalItemView:
     """The estimate is a label value: `라벨:` instead of `추정:` and no `(estimated)`."""
     portions: str | None = None
     """`닭 150~200 g, 감자 100~150 g`: the assumed grams (shown as `양 가정:`)."""
+    printed: bool = False
+    """The values are the menu's printed numbers (`(메뉴판 표기)`)."""
 
 
 @dataclass(frozen=True)
@@ -420,6 +425,8 @@ class _Exchange:
     """`{"reasons": [...], "outcome": ...}` when the numeric re-check found something (None: nothing failed)."""
     data: tuple[tuple[str, Any], ...] = ()
     """The `[데이터]` pairs of the interpret call; the numeric re-ask sends the same ones."""
+    menu: Proposal | None = None
+    """The recent menu offered to the LLM (`menu_ref` points into its choices); None for a photo message."""
 
 
 class TelegramLlmHandler:
@@ -510,7 +517,7 @@ class TelegramLlmHandler:
     ) -> LlmAction:
         words = text if text is not None else (caption or "")
         exchange = _Exchange()
-        exchange.data = self._interpret_data(chat_id, words, text_only=photo is None)
+        exchange.data = self._interpret_data(chat_id, words, exchange, text_only=photo is None)
         call = self._call(
             chat_id,
             SchemaName.INTERPRET,
@@ -614,7 +621,7 @@ class TelegramLlmHandler:
                 exchange.reply = ReplyText(EDIT_NO_OPEN_TEXT)
                 return
             cancel = opened.token
-        entries = self._link_items(chat_id, interpretation)
+        entries = self._link_items(chat_id, interpretation, exchange.menu)
         if not entries:
             exchange.reply = ReplyText(usage_text("log"))
             return
@@ -639,17 +646,26 @@ class TelegramLlmHandler:
 
     # --- linking ---------------------------------------------------------------------------------------------
 
-    def _link_items(self, chat_id: int, interpretation: Interpretation) -> list[_Entry]:
-        """One entry per item that is not just a meal word: a catalog entry or a general estimate (never dropped)."""
+    def _link_items(self, chat_id: int, interpretation: Interpretation, menu: Proposal | None = None) -> list[_Entry]:
+        """One entry per item that is not just a meal word: a catalog entry or a general estimate (never dropped).
+
+        ``menu``: the recent menu the LLM was shown; an item whose `menu_ref` names one of its choices (and whose
+        name agrees) takes that choice's memo and values. A reference that does not check out is ignored.
+        """
         entries: list[_Entry] = []
-        meal_words = 0
+        meal_words = ignored = 0
         for index, item in enumerate(interpretation.items, start=1):
             if is_meal_word(item.food_text):
                 meal_words += 1
                 continue
-            entries.append(self._link_item(index, item))
+            picked = _menu_entry(index, item, menu)
+            if picked is None and item.menu_ref is not None:
+                ignored += 1
+            entries.append(picked if picked is not None else self._link_item(index, item))
         if meal_words:
             self._log(f"chat {chat_id}: {meal_words} meal-word items left out")
+        if ignored:
+            self._log(f"chat {chat_id}: {ignored} menu references ignored")
         return entries
 
     def _link_item(self, index: int, item: InterpretItem) -> _Entry:
@@ -757,7 +773,7 @@ class TelegramLlmHandler:
             provider=first.provider,
         )
         exchange.calls.append(second)
-        answer = self._usable_second_answer(chat_id, second, photo_digest)
+        answer = self._usable_second_answer(chat_id, second, photo_digest, exchange.menu)
         if answer is None:
             outcome = RecheckOutcome.REASK_FAILED
             detail = "unusable answer" if second.ok else second.outcome.replace("_", " ")
@@ -780,7 +796,7 @@ class TelegramLlmHandler:
         return final
 
     def _usable_second_answer(
-        self, chat_id: int, second: LlmCallResult, photo_digest: str | None
+        self, chat_id: int, second: LlmCallResult, photo_digest: str | None, menu: Proposal | None
     ) -> tuple[Interpretation, date, list[_Entry]] | None:
         """The re-ask's answer when it is still an eaten meal log with a date and items; else None."""
         if not second.ok:
@@ -793,7 +809,7 @@ class TelegramLlmHandler:
         day = resolve_date_expression(candidate.date_expression, self._today())
         if day is None:
             return None
-        entries = self._link_items(chat_id, candidate)
+        entries = self._link_items(chat_id, candidate, menu)
         return (candidate, day, entries) if entries else None
 
     # --- storing proposals ---------------------------------------------------------------------------------
@@ -1880,9 +1896,11 @@ class TelegramLlmHandler:
             self._log(f"chat {chat_id}: catalog list cut: {prompt.shown} of {prompt.total}")
         return (("카탈로그", prompt.text),)
 
-    def _interpret_data(self, chat_id: int, words: str, *, text_only: bool) -> tuple[tuple[str, Any], ...]:
+    def _interpret_data(
+        self, chat_id: int, words: str, exchange: _Exchange, *, text_only: bool
+    ) -> tuple[tuple[str, Any], ...]:
         """The `[데이터]` pairs of an interpret call: the catalog and, for a text message, the chat's last recorded
-        meals and its open meal proposal (a block with nothing in it is left out)."""
+        meals, its open meal proposal and its recent menu (a block with nothing in it is left out)."""
         data = list(self._catalog_data(chat_id, words))
         if not text_only:
             return tuple(data)
@@ -1892,6 +1910,9 @@ class TelegramLlmHandler:
         opened = self._open_meal_proposal(chat_id)
         if opened is not None and opened.outline:
             data.append(("열린 제안", open_proposal_block(opened)))
+        exchange.menu = recent_menu(self._proposals.load().proposals, chat_id=chat_id, now_unix=self._now_unix())
+        if exchange.menu is not None:
+            data.append(("최근 메뉴", menu_block(exchange.menu)))
         return tuple(data)
 
     def _recent_meals(self, chat_id: int) -> tuple[Meal, ...]:
@@ -2077,6 +2098,9 @@ class TelegramLlmHandler:
     def _today(self) -> date:
         return self._now().date()
 
+    def _now_unix(self) -> int:
+        return int(self._now().timestamp())
+
     def _at(self) -> str:
         return self._now().replace(microsecond=0).isoformat()
 
@@ -2110,6 +2134,11 @@ class _Entry:
     """The values are single values read from a nutrition label (shown as `라벨:`, stored as an estimate)."""
     portions: tuple[Portion, ...] = ()
     """The grams the LLM assumed per component (shown as `양 가정:`, kept in the estimate reference)."""
+    menu_source: NutritionSourceType | None = None
+    """A recent menu item the user picked by name: its source type, reference and printed flag replace the
+    proposal's, and the values are not re-checked (they come from a list the user already saw)."""
+    menu_reference: str | None = None
+    printed: bool = False
 
     def argv(self, source: NutritionSourceType, reference: str, with_estimate: bool) -> tuple[str, ...]:
         if self.food_id is not None and self.quantity is not None and self.unit is not None:
@@ -2118,8 +2147,10 @@ class _Entry:
         if self.memo:
             args.append(f"--general-note={self.memo}")
         if with_estimate and self.estimate:
-            args.append(f"--general-estimate={format_general_estimate(source, self.estimate)}")
-            if reference:
+            args.append(f"--general-estimate={format_general_estimate(self.menu_source or source, self.estimate)}")
+            if self.menu_reference is not None:
+                args.append(f"--general-estimate-ref={estimate_reference(self.menu_reference, None, None)}")
+            elif reference:
                 note = estimate_reference(
                     reference,
                     self.source,
@@ -2151,6 +2182,7 @@ def _item_views(entries: Sequence[_Entry]) -> tuple[ProposalItemView, ...]:
             entry.check,
             entry.label,
             portions_text(entry.portions) if entry.food_id is None else None,
+            entry.printed,
         )
         for entry in entries
     )
@@ -2187,6 +2219,32 @@ def _fix_command(
     return argv, f"{name}: 추가 {', '.join(entry.display() for entry in added)}"
 
 
+def _menu_entry(index: int, item: InterpretItem, menu: Proposal | None) -> _Entry | None:
+    """The entry for an item the user picked from the recent menu by name, or None when `menu_ref` is unset or does
+    not check out (no menu, a number out of range, or a name that does not agree with the menu item's)."""
+    ref = item.menu_ref
+    if ref is None or menu is None or not 1 <= ref <= len(menu.choices):
+        return None
+    choice = menu.choices[ref - 1]
+    if not menu_name_matches(item.food_text, choice.memo):
+        return None
+    where = "메뉴판 표기" if choice.printed else "메뉴 항목"
+    return _Entry(
+        None,
+        None,
+        None,
+        choice.memo,
+        choice.ranges,
+        False,
+        None,
+        index=index,
+        meal_type=item.meal_type,
+        menu_source=menu.source or NutritionSourceType.VISUAL_ESTIMATE,
+        menu_reference=f"{menu.reference or 'telegram-llm menu'}; {where}",
+        printed=choice.printed,
+    )
+
+
 def _outline(views: Sequence[ProposalItemView], *, indent: str = "") -> tuple[str, ...]:
     """The item lines of a meal proposal as the LLM sees them while it is open (`1. 일반식 (메모: ...) | 라벨: ...`)."""
     lines = []
@@ -2212,6 +2270,7 @@ def _failures(entries: Sequence[_Entry]) -> list[tuple[_Entry, CheckFailure]]:
         (entry, failure)
         for entry in entries
         if entry.food_id is None and entry.estimate
+        if entry.menu_source is None
         for failure in check_estimate(
             entry.estimate,
             assumption=entry.assumption,

@@ -19,7 +19,7 @@ from typing import Any
 
 from muscle50.domain.llm_today_totals import NUTRIENT_NAMES, amount_text
 from muscle50.domain.nutrition import GENERAL_MEAL_FOOD_ID, Meal, MealItem, MealType, NutrientField, QuantityUnit
-from muscle50.domain.telegram_llm import NutrientRanges, Proposal
+from muscle50.domain.telegram_llm import NutrientRanges, Proposal, ProposalKind, ProposalState
 from muscle50.domain.telegram_llm_prompt import MEAL_NAMES
 
 RECENT_MEALS = 2
@@ -191,7 +191,7 @@ def open_proposal_block(proposal: Proposal) -> str:
     return "\n".join([f"/ok_{proposal.token} | {where}", *proposal.outline])
 
 
-# --- a new meal that overlaps a recorded one of the same day and type -----------------------------------------------
+# --- a new meal that overlaps a recorded one of the same day and type ---
 
 
 @dataclass(frozen=True)
@@ -287,3 +287,50 @@ def plan_fix(overlaps: Sequence[Overlap], candidate_count: int) -> FixPlan | Non
 def overlap_name(item: MealItem) -> str:
     """The recorded food as the overlap notice names it: a general item's memo, a catalog food's name."""
     return (item_memo(item) or item.food_name) if item.is_general else item.food_name
+
+
+# --- a menu shown in the last hours, picked by name ---
+
+MENU_WINDOW_S = 4 * 60 * 60
+"""A menu capture or suggestion is offered to the LLM for this long after it was made (its confirmation
+time-to-live is separate and unchanged)."""
+MENU_NAME_MIN = 2
+"""A menu item and the user's words must be at least this long (after normalizing) to count as the same name."""
+
+
+def recent_menu(proposals: Iterable[Proposal], *, chat_id: int, now_unix: int) -> Proposal | None:
+    """The chat's newest menu proposal that is open or used (not cancelled) and at most `MENU_WINDOW_S` old.
+
+    Its own expiry is ignored: choosing from the menu by words is allowed as long as the menu is recent.
+    """
+    recent = [
+        proposal
+        for proposal in proposals
+        if proposal.chat_id == chat_id
+        and proposal.kind is ProposalKind.MENU
+        and proposal.state in (ProposalState.OPEN, ProposalState.USED)
+        and 0 <= now_unix - proposal.created_unix <= MENU_WINDOW_S
+        and proposal.choices
+    ]
+    return max(recent, key=lambda proposal: proposal.created_unix, default=None)
+
+
+def menu_block(proposal: Proposal) -> str:
+    """`<최근 메뉴>`: the choices of a recent menu in the order the user saw them (the numbers `menu_ref` uses)."""
+    where = MEAL_NAMES[proposal.meal_type] if proposal.meal_type is not None else "끼니 미정"
+    head = f"/eat_{proposal.token} {where}" + (f" ({proposal.label})" if proposal.label else "")
+    lines = [head]
+    for number, choice in enumerate(proposal.choices, start=1):
+        text = f"{number}. {choice.memo}"
+        if choice.ranges:
+            text += f" | {ranges_summary(choice.ranges)}" + (" (메뉴판 표기 포함)" if choice.printed else "")
+        lines.append(text)
+    return "\n".join(lines)
+
+
+def menu_name_matches(food_text: str, memo: str) -> bool:
+    """The user's words and the menu item's name contain one another (a plain test: a wrong number is caught)."""
+    words, name = normalize_memo(food_text), normalize_memo(memo)
+    if len(words) < MENU_NAME_MIN or len(name) < MENU_NAME_MIN:
+        return False
+    return words in name or name in words

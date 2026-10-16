@@ -21,6 +21,7 @@ from muscle50.domain.telegram_llm import (
     Intent,
     LlmOutputError,
     LlmState,
+    MenuChoice,
     Portion,
     Proposal,
     ProposalCommand,
@@ -36,12 +37,15 @@ from muscle50.domain.telegram_llm_corrections import (
     find_overlaps,
     general_ranges,
     match_items,
+    menu_block,
+    menu_name_matches,
     merge_estimate,
     normalize_memo,
     pick_meals,
     plan_fix,
     recent_meal_ids,
     recent_meals_block,
+    recent_menu,
 )
 from muscle50.domain.telegram_llm_meals import (
     CHECK_NEEDED_NOTE,
@@ -501,7 +505,7 @@ def test_overlaps_in_several_recorded_meals_have_no_single_fix() -> None:
     assert len(overlaps) == 2 and plan_fix(overlaps, 2) is None
 
 
-# --- the command and the state file ------------------------------------------------------------------------------
+# --- the command and the state file ---
 
 
 def test_fix_is_a_proposal_command_like_ok_and_no() -> None:
@@ -533,3 +537,52 @@ def test_the_state_file_keeps_outline_and_fix_and_loads_files_without_them(tmp_p
     (tmp_path / "state.json").write_text(json.dumps(document), encoding="utf-8", newline="\n")
     old = store.load().proposals[0]
     assert (old.outline, old.fix_argv, old.fix_change) == ((), (), "")
+
+
+# --- a recent menu, picked by name ---
+
+
+def menu_proposal(token: str, created: int, state: ProposalState = ProposalState.OPEN, chat: int = 111) -> Proposal:
+    choices = (MenuChoice("한식 얼큰순살감자탕", ((KCAL, Decimal(1022), Decimal(1022)),), True),)
+    return Proposal(
+        token, chat, ProposalKind.MENU, created, created + 3600, state, choices=choices, label="메뉴 캡처 추정"
+    )
+
+
+def test_recent_menu_is_the_newest_open_or_used_menu_of_the_chat_within_four_hours() -> None:
+    now = 100_000
+    four_hours = 4 * 3600
+    proposals = [
+        menu_proposal("0001", now - 100),
+        menu_proposal("0002", now - 50, ProposalState.USED),
+        menu_proposal("0003", now - 10, ProposalState.CANCELLED),
+        menu_proposal("0004", now - 5, chat=222),
+        Proposal("0005", 111, ProposalKind.MEAL, now - 1, now + 3000, ProposalState.OPEN),
+    ]
+    found = recent_menu(proposals, chat_id=111, now_unix=now)
+    assert found is not None and found.token == "0002"  # newest open-or-used; cancelled, other chat, meal ignored
+    assert recent_menu([menu_proposal("0006", now - four_hours)], chat_id=111, now_unix=now) is not None  # edge
+    assert recent_menu([menu_proposal("0007", now - four_hours - 1)], chat_id=111, now_unix=now) is None
+    assert recent_menu([menu_proposal("0008", now + 5)], chat_id=111, now_unix=now) is None  # not from the future
+    assert recent_menu([], chat_id=111, now_unix=now) is None
+
+
+def test_menu_block_lists_the_choices_in_the_order_the_user_saw_them() -> None:
+    assert menu_block(menu_proposal("0001", 10)) == (
+        "/eat_0001 끼니 미정 (메뉴 캡처 추정)\n1. 한식 얼큰순살감자탕 | kcal 1022 (메뉴판 표기 포함)"
+    )
+    assert menu_block(menu_proposal("0001", 10)) == menu_block(menu_proposal("0001", 10))
+
+
+@pytest.mark.parametrize(
+    ("words", "name", "matches"),
+    [
+        ("얼큰순살감자탕", "한식 얼큰순살감자탕", True),
+        ("한식 얼큰순살감자탕 큰 거", "한식 얼큰순살감자탕", True),
+        ("된장찌개", "한식 얼큰순살감자탕", False),
+        ("감", "감자탕", False),  # one character is not a name
+        ("", "김밥", False),
+    ],
+)
+def test_menu_name_matching_is_plain_containment(words: str, name: str, matches: bool) -> None:
+    assert menu_name_matches(words, name) is matches
