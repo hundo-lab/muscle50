@@ -116,7 +116,8 @@ def test_the_estimate_and_the_memo_of_a_general_item_are_replaced(
         f"Replaced item 1 of meal {MEAL} with item 2.",
         "",
         f"[breakfast] {MEAL} (2026-10-14, time not recorded)",
-        "  2. 일반식 (general meal; note: 깻잎닭갈비 삼각김밥 1개): estimated kcal 185-185 | P 5-5 g | C 37-37 g | F 2-2 g",
+        "  2. 일반식 (general meal; note: 깻잎닭갈비 삼각김밥 1개): "
+        "estimated kcal 185-185 | P 5-5 g | C 37-37 g | F 2-2 g",
         "     source: visual_estimate/estimated",
     ]
     shown = json.loads(ok(capsys, "nutrition", "meal", "show", MEAL, "--json"))
