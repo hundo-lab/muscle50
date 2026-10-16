@@ -23,7 +23,7 @@ import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, tzinfo
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
 from muscle50.application.food_lookup import FoodLookup, ResolveFoodReference
@@ -49,7 +49,14 @@ from muscle50.application.telegram_bot import (
 )
 from muscle50.domain.llm_number_guard import allowed_numbers, unknown_numbers
 from muscle50.domain.llm_settings import PROVIDER_COMPANIES, LlmSettings, ProviderName
-from muscle50.domain.llm_today_totals import TodayTotals, amount_text, today_totals, totals_text
+from muscle50.domain.llm_today_totals import (
+    TODAY_LABEL,
+    TodayTotals,
+    amount_text,
+    display_amount,
+    today_totals,
+    totals_text,
+)
 from muscle50.domain.menu_ranking import UNREADABLE, KcalContext, MenuRanking, RankItem, kcal_context, rank_menu
 from muscle50.domain.nutrition import (
     FoodNutritionProfile,
@@ -1032,8 +1039,8 @@ class TelegramLlmHandler:
                 remaining = status["nutrients"][NutrientField.PROTEIN_G.value]["remaining"]
             except (KeyError, TypeError):
                 remaining = None
-            protein_remaining = remaining if isinstance(remaining, str) else None
-            kcal_budget = amount_text(context.budget) if context.budget is not None else None
+            protein_remaining = _display_text(remaining) if isinstance(remaining, str) else None
+            kcal_budget = display_amount(context.budget) if context.budget is not None else None
         view = MenuView(
             proposal.token,
             meal_type,
@@ -1306,7 +1313,7 @@ class TelegramLlmHandler:
             if outcome.exit_code == 0:
                 if edit and meal_id is not None:
                     text = f"{text}\n확인: /show {meal_id}"
-                totals = self._totals_line(chat_id)
+                totals = self._totals_line(chat_id, proposal.day)
                 if totals is not None:
                     text = f"{text}\n{totals}"
             result = {"exit_code": outcome.exit_code, "meal_id": meal_id if outcome.exit_code == 0 else None}
@@ -1365,7 +1372,7 @@ class TelegramLlmHandler:
                 blocks[-1] = f"{blocks[-1]}\n{sequence_not_run_line(not_run)}\n{SEQUENCE_HINT}"
             text = "\n\n".join(blocks)
             if recorded:
-                totals = self._totals_line(chat_id)
+                totals = self._totals_line(chat_id, proposal.day)
                 if totals is not None:
                     text = f"{text}\n{totals}" if failed is not None else f"{text}\n\n{totals}"
             result = {
@@ -1689,13 +1696,18 @@ class TelegramLlmHandler:
         except ValueError:
             return None
 
-    def _totals_line(self, chat_id: int) -> str | None:
-        status = self._read_json(chat_id, ("nutrition", "status", "--json"))
-        day = self._read_json(chat_id, ("nutrition", "day", "--json"))
-        if status is None or day is None:
+    def _totals_line(self, chat_id: int, day: date | None = None) -> str | None:
+        """The running totals of ``day`` (today when None): `오늘 누적` for today, `MM-DD 누적` for another day."""
+        shown = day if day is not None and day != self._today() else None
+        extra = ("--date", shown.isoformat()) if shown is not None else ()
+        status = self._read_json(chat_id, ("nutrition", "status", *extra, "--json"))
+        day_document = self._read_json(chat_id, ("nutrition", "day", *extra, "--json"))
+        if status is None or day_document is None:
             return None
         try:
-            return totals_text(today_totals(status, day))
+            return totals_text(
+                today_totals(status, day_document), f"{shown:%m-%d}" if shown is not None else TODAY_LABEL
+            )
         except (KeyError, TypeError, ValueError) as exc:
             self._log(f"chat {chat_id}: today totals not computed ({type(exc).__name__})")
             return None
@@ -1833,6 +1845,14 @@ def _attempts_document(call: LlmCallResult | None) -> list[dict[str, Any]] | Non
 def _recorded_meal_id(stdout: str) -> str | None:
     match = _RECORDED_MEAL.fullmatch(stdout.split("\n", 1)[0])
     return match.group(1) if match else None
+
+
+def _display_text(text: str) -> str:
+    """A decimal string of the CLI's JSON as the CLI prints it (rounded to 0.1); other text is left as it is."""
+    try:
+        return display_amount(Decimal(text))
+    except InvalidOperation:
+        return text
 
 
 def _digest(photo: bytes) -> str:

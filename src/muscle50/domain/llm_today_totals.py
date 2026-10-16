@@ -1,4 +1,4 @@
-"""Telegram LLM v2: today's running totals, confirmed values and estimated ranges kept apart.
+"""Telegram LLM v2: a day's running totals as one range per nutrient.
 
 Per nutrient, from the CLI's own JSON (`nutrition status --json` and `nutrition day --json`):
 
@@ -7,14 +7,15 @@ Per nutrient, from the CLI's own JSON (`nutrition status --json` and `nutrition 
   that carry a range (estimated general meals);
 - unknown: the count of items with neither a value nor a range.
 
-Nothing unknown becomes 0, and a day with no meals is "no record", not 0 kcal. A shape the code
-does not expect raises ValueError (the caller then leaves the totals out).
+The text adds confirmed and estimated into `low~high` (one number when they agree). Nothing unknown becomes
+0, and a day with no meals is "no record", not 0 kcal. A shape the code does not expect raises ValueError
+(the caller then leaves the totals out).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any
 
 from muscle50.domain.nutrition import NutrientField
@@ -84,30 +85,52 @@ def today_totals(status_doc: Any, day_doc: Any) -> TodayTotals:
     return TodayTotals(meal_count, tuple(totals))
 
 
-def totals_text(totals: TodayTotals) -> str:
-    """`오늘 누적: ...` with one line per nutrient (Korean bot text)."""
+TODAY_LABEL = "오늘"
+
+
+def totals_text(totals: TodayTotals, label: str = TODAY_LABEL) -> str:
+    """`<label> 누적 ...` with one line per nutrient (Korean bot text).
+
+    ``label`` is `오늘` for today and `MM-DD` for another day (the day the proposal records). The header says
+    `(추정 포함)` when some nutrient has an estimated range.
+    """
     if totals.meal_count == 0:
-        return "오늘 누적: 오늘 기록 없음 (0이 아님)"
-    return "\n".join(["오늘 누적:", *(f"  {nutrient_total_text(item)}" for item in totals.nutrients)])
+        # Today keeps the v2 sentence; another day reads `10-14 기록 없음 (0이 아님)`.
+        return "오늘 누적: 오늘 기록 없음 (0이 아님)" if label == TODAY_LABEL else f"{label} 기록 없음 (0이 아님)"
+    estimated = any(item.estimate_min is not None for item in totals.nutrients)
+    head = f"{label} 누적 (추정 포함):" if estimated else f"{label} 누적:"
+    return "\n".join([head, *(f"  {nutrient_total_text(item)}" for item in totals.nutrients)])
 
 
 def nutrient_total_text(item: NutrientTotal) -> str:
+    """One range per nutrient: low = confirmed + estimate minimums, high = confirmed + estimate maximums.
+
+    An unknown item is never added (as 0): it is counted as `(값 모르는 항목 N개 빠짐)`. No value and no
+    estimate at all reads `알 수 없음`, never 0.
+    """
     unit = "" if item.nutrient is NutrientField.CALORIES_KCAL else " g"
-    parts = []
-    if item.confirmed is not None:
-        parts.append(f"확인 {amount_text(item.confirmed)}{unit}")
-    if item.estimate_min is not None and item.estimate_max is not None:
-        parts.append(f"추정 {amount_text(item.estimate_min)}~{amount_text(item.estimate_max)}{unit}")
-    text = f"{NUTRIENT_NAMES[item.nutrient]} {' + '.join(parts) if parts else '알 수 없음'}"
+    if item.confirmed is None and item.estimate_min is None:
+        value = "알 수 없음"
+    else:
+        low = (item.confirmed or Decimal(0)) + (item.estimate_min or Decimal(0))
+        high = (item.confirmed or Decimal(0)) + (item.estimate_max or Decimal(0))
+        low_text, high_text = display_amount(low), display_amount(high)
+        value = f"{low_text}{unit}" if low_text == high_text else f"{low_text}~{high_text}{unit}"
+    text = f"{NUTRIENT_NAMES[item.nutrient]} {value}"
     if item.unknown_items:
-        text += f" (값 모르는 항목 {item.unknown_items}개)"
+        text += f" (값 모르는 항목 {item.unknown_items}개 빠짐)"
     return text
 
 
 def amount_text(value: Decimal) -> str:
-    """Plain decimal text (`1150`, `30.5`), the way the CLI JSON writes amounts."""
+    """Plain decimal text (`1150`, `30.5`), the way the CLI JSON writes amounts (exact: argv and quantities)."""
     text = format(value, "f")
     return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def display_amount(value: Decimal) -> str:
+    """A number as the CLI prints it: rounded to 0.1 (half-even), trailing zeros dropped (`1.95` -> `2`)."""
+    return amount_text(value.quantize(Decimal("0.1"), rounding=ROUND_HALF_EVEN))
 
 
 def _decimal(value: Any) -> Decimal | None:

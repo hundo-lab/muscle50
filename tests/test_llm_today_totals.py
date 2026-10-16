@@ -15,7 +15,14 @@ import pytest
 
 import muscle50.cli as cli
 from muscle50.cli import main
-from muscle50.domain.llm_today_totals import TodayTotals, today_totals, totals_text
+from muscle50.domain.llm_number_guard import allowed_numbers, unknown_numbers
+from muscle50.domain.llm_today_totals import (
+    NutrientTotal,
+    TodayTotals,
+    display_amount,
+    today_totals,
+    totals_text,
+)
 from muscle50.domain.nutrition import NutrientField
 
 KST = timezone(timedelta(hours=9))
@@ -66,10 +73,10 @@ def test_confirmed_only(capsys: pytest.CaptureFixture[str]) -> None:
     assert totals_text(_totals(capsys)) == "\n".join(
         [
             "오늘 누적:",
-            "  kcal 확인 165",
-            "  단백질 확인 34.95 g",
-            "  탄수화물 확인 0 g",
-            "  지방 알 수 없음 (값 모르는 항목 1개)",
+            "  kcal 165",
+            "  단백질 35 g",  # 34.95 is shown the way the CLI rounds it (0.1, half-even)
+            "  탄수화물 0 g",
+            "  지방 알 수 없음 (값 모르는 항목 1개 빠짐)",
         ]
     )
 
@@ -78,7 +85,7 @@ def test_estimates_only_and_mixed_with_an_unknown_general_meal(capsys: pytest.Ca
     _log(capsys, "dinner", "--general", "--general-estimate=visual_estimate:kcal=700-950,protein=30-45")
     estimated = _totals(capsys)
     assert estimated.get(NutrientField.CALORIES_KCAL).confirmed is None
-    assert totals_text(estimated).split("\n")[1:3] == ["  kcal 추정 700~950", "  단백질 추정 30~45 g"]
+    assert totals_text(estimated).split("\n")[:3] == ["오늘 누적 (추정 포함):", "  kcal 700~950", "  단백질 30~45 g"]
     _cli(capsys, "nutrition", "food", "add", *CHICKEN)
     _log(capsys, "lunch", "--item", "chicken-breast", "100", "g")
     _log(capsys, "snack", "--general", "--general-estimate=language_estimate:kcal=100.5-200,protein=5-10.25")
@@ -92,8 +99,8 @@ def test_estimates_only_and_mixed_with_an_unknown_general_meal(capsys: pytest.Ca
         1,
     )
     assert totals_text(totals).split("\n")[1:3] == [
-        "  kcal 확인 110 + 추정 800.5~1150 (값 모르는 항목 1개)",
-        "  단백질 확인 23.3 g + 추정 35~55.25 g (값 모르는 항목 1개)",
+        "  kcal 910.5~1260 (값 모르는 항목 1개 빠짐)",
+        "  단백질 58.3~78.6 g (값 모르는 항목 1개 빠짐)",
     ]
 
 
@@ -106,3 +113,75 @@ def test_voided_meal_is_left_out(capsys: pytest.CaptureFixture[str]) -> None:
 def test_unexpected_shape_is_an_error() -> None:
     with pytest.raises((ValueError, KeyError)):
         today_totals({"meal_count": "1"}, {"meals": []})
+
+
+# --- v2.3: one range per nutrient, the logged day, CLI display rounding ---------------------------------------------
+
+
+def _total(nutrient: NutrientField, confirmed: str | None, low: str | None, high: str | None, unknown: int = 0) -> Any:
+    return NutrientTotal(
+        nutrient,
+        Decimal(confirmed) if confirmed is not None else None,
+        Decimal(low) if low is not None else None,
+        Decimal(high) if high is not None else None,
+        unknown,
+    )
+
+
+def _all_nutrients(**by_nutrient: Any) -> TodayTotals:
+    nutrients = []
+    for nutrient in NutrientField:
+        nutrients.append(by_nutrient.get(nutrient.name) or _total(nutrient, "1", None, None))
+    return TodayTotals(1, tuple(nutrients))
+
+
+def test_the_range_adds_confirmed_values_to_the_estimate_bounds() -> None:
+    totals = _all_nutrients(CALORIES_KCAL=_total(NutrientField.CALORIES_KCAL, "240", "360", "380"))
+    assert totals_text(totals).split("\n")[:2] == ["오늘 누적 (추정 포함):", "  kcal 600~620"]
+
+
+def test_equal_bounds_are_one_number_and_no_estimate_means_no_marker() -> None:
+    totals = _all_nutrients(CALORIES_KCAL=_total(NutrientField.CALORIES_KCAL, "240", "360", "360"))
+    assert totals_text(totals).split("\n")[:2] == ["오늘 누적 (추정 포함):", "  kcal 600"]
+    assert totals_text(_all_nutrients()).split("\n")[0] == "오늘 누적:"
+
+
+def test_an_unknown_item_is_counted_and_never_added_as_zero() -> None:
+    totals = _all_nutrients(
+        FAT_G=_total(NutrientField.FAT_G, None, None, None, 2),
+        CARBOHYDRATE_G=_total(NutrientField.CARBOHYDRATE_G, "37", None, None, 1),
+    )
+    lines = totals_text(totals).split("\n")
+    assert lines[3] == "  탄수화물 37 g (값 모르는 항목 1개 빠짐)"
+    assert lines[4] == "  지방 알 수 없음 (값 모르는 항목 2개 빠짐)"
+
+
+def test_another_day_is_labelled_with_its_date_and_an_empty_day_is_not_zero() -> None:
+    totals = _all_nutrients(PROTEIN_G=_total(NutrientField.PROTEIN_G, "20", "3", "5"))
+    assert totals_text(totals, "10-14").split("\n")[0] == "10-14 누적 (추정 포함):"
+    assert totals_text(TodayTotals(0, ()), "10-14") == "10-14 기록 없음 (0이 아님)"
+    assert totals_text(TodayTotals(0, ())) == "오늘 누적: 오늘 기록 없음 (0이 아님)"
+
+
+@pytest.mark.parametrize(
+    ("value", "shown"),
+    [
+        ("1.95", "2"),  # the failing case of 2026-10-15: CLI says `P 2 g`
+        ("0.05", "0"),
+        ("0.15", "0.2"),
+        ("0.25", "0.2"),
+        ("34.95", "35"),
+        ("1150", "1150"),
+        ("30.5", "30.5"),
+        ("0.04", "0"),
+    ],
+)
+def test_display_amount_rounds_like_the_cli(value: str, shown: str) -> None:
+    assert display_amount(Decimal(value)) == shown
+
+
+def test_a_quoted_range_passes_the_number_guard_and_an_invented_sum_does_not() -> None:
+    totals = _all_nutrients(CALORIES_KCAL=_total(NutrientField.CALORIES_KCAL, "240", "360", "380"))
+    allowed = allowed_numbers([totals_text(totals)])
+    assert unknown_numbers("오늘 kcal은 600에서 620 사이예요.", allowed) == ()
+    assert unknown_numbers("오늘 kcal은 611이에요.", allowed) == (Decimal(611),)

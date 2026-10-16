@@ -272,10 +272,10 @@ def test_meal_proposal_writes_nothing_until_ok_then_rows_equal_cli(
             cli_reply.removesuffix("\n"),
             "취소: /void 2026-10-06-lunch-1",
             "오늘 누적:",
-            "  kcal 확인 480",
-            "  단백질 확인 39 g",
-            "  탄수화물 확인 70 g",
-            "  지방 확인 3 g",
+            "  kcal 480",
+            "  단백질 39 g",
+            "  탄수화물 70 g",
+            "  지방 3 g",
         ]
     )
     assert replies == [expected]
@@ -497,7 +497,7 @@ def test_photo_estimate_shows_range_estimated_and_plain_stores_no_values(
     assert re.fullmatch(r"telegram-llm photo sha256:[0-9a-f]{12} \(claude sonnet\)", reference)
     plain = json.loads(_ok(capsys, "nutrition", "meal", "show", "2026-10-06-dinner-2", "--json"))
     assert plain["items"][0]["facts"] == [] and plain["items"][0]["note"] == "제육볶음 정식"
-    assert "  kcal 추정 700~950 (값 모르는 항목 1개)" in replies[0]
+    assert "  kcal 700~950 (값 모르는 항목 1개 빠짐)" in replies[0]
     kept = list((home / "telegram" / "photos" / "2026-10").iterdir())
     assert len(kept) == 1 and kept[0].read_bytes() == PHOTO
 
@@ -702,10 +702,10 @@ def test_menu_ranked_by_remaining_then_eat_then_ok_or_plain(
         [
             "오늘 점심 메뉴예요. 남은 양: 단백질 51 g, kcal 1670 (/status)",
             "오늘 누적:",
-            "  kcal 확인 330",
-            "  단백질 확인 69 g",
-            "  탄수화물 확인 0 g",
-            "  지방 확인 3 g",
+            "  kcal 330",
+            "  단백질 69 g",
+            "  탄수화물 0 g",
+            "  지방 3 g",
             "추천 순서 (메뉴 값은 사진 추정, estimated)",
             "1. 한식: 제육볶음, 잡곡밥   단백질 35~50 g, kcal 750~950",
             "2. 간편식: 닭가슴살 샐러드   단백질 25~35 g, kcal 400 (메뉴판 표기)",

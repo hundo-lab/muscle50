@@ -22,7 +22,7 @@ from muscle50.application.telegram_llm import (
     ProposalItemView,
     ReplyText,
 )
-from muscle50.domain.llm_today_totals import amount_text
+from muscle50.domain.llm_today_totals import amount_text, display_amount
 from muscle50.domain.menu_ranking import RankMode
 from muscle50.domain.nutrition import NutrientField
 from muscle50.domain.telegram_llm import NutrientRanges
@@ -166,7 +166,7 @@ def menu_reply(view: MenuView) -> ReplyText:
     elif ranking.mode is RankMode.RANGE:
         assert ranking.budget_low is not None and ranking.budget_high is not None
         head = (
-            f"{what} 남은 kcal 약 {amount_text(ranking.budget_low)}~{amount_text(ranking.budget_high)} "
+            f"{what} 남은 kcal 약 {display_amount(ranking.budget_low)}~{display_amount(ranking.budget_high)} "
             "(추정 포함) (/status)"
         )
     else:

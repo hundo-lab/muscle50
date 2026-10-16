@@ -170,8 +170,8 @@ def test_ok_runs_one_nutrition_log_per_meal_and_the_rows_equal_the_cli(
     for meal_id in ("2026-10-06-breakfast-1", "2026-10-06-lunch-1", "2026-10-06-dinner-1"):
         assert f"Recorded meal {meal_id}." in reply and f"취소: /void {meal_id}" in reply
     assert reply.index("breakfast-1") < reply.index("lunch-1") < reply.index("dinner-1")
-    assert reply.count("\n\n") >= 3 and "오늘 누적:" in reply and reply.split("\n\n")[-1].startswith("오늘 누적:")
-    assert "추정" in reply.split("\n\n")[-1]  # estimates are shown apart in the totals
+    assert reply.count("\n\n") >= 3 and reply.split("\n\n")[-1].startswith("오늘 누적 (추정 포함):")
+    assert "~" in reply.split("\n\n")[-1]  # estimates are added into one range per nutrient
     assert "chat 111: proposal 7f3a confirmed (3 meals)" in err
     after = meal_tables(home)
     # the same three argvs typed in the CLI on a twin home give the same rows
