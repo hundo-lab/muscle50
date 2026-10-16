@@ -54,7 +54,7 @@ from muscle50.domain.llm_today_totals import (
     TODAY_LABEL,
     TodayTotals,
     amount_text,
-    display_amount,
+    display_remaining,
     today_totals,
     totals_text,
 )
@@ -1208,7 +1208,7 @@ class TelegramLlmHandler:
             except (KeyError, TypeError):
                 remaining = None
             protein_remaining = _display_text(remaining) if isinstance(remaining, str) else None
-            kcal_budget = display_amount(context.budget) if context.budget is not None else None
+            kcal_budget = display_remaining(context.budget) if context.budget is not None else None
         view = MenuView(
             proposal.token,
             meal_type,
@@ -2207,7 +2207,7 @@ def _fix_command(
             str(number),
             *entry.argv(source, reference, True),
         )
-        return argv, f"{name} item {number}: {item_summary(overlap.item)} → {entry.display()}"
+        return argv, _replace_change(name, number, overlap.item, entry)
     added = [entries[index] for index in plan.additions]
     argv = (
         "nutrition",
@@ -2216,7 +2216,32 @@ def _fix_command(
         meal.meal_id,
         *(arg for entry in added for arg in entry.argv(source, reference, True)),
     )
-    return argv, f"{name}: 추가 {', '.join(entry.display() for entry in added)}"
+    return argv, f"{name}: 추가 {'; '.join(_valued(entry) for entry in added)}"
+
+
+def _valued(entry: _Entry) -> str:
+    """An entry as the user is asked to confirm it: its name and, for an estimate, the values it would store."""
+    if entry.food_id is not None or not entry.estimate:
+        return entry.display()
+    text = f"{entry.display()}: {ranges_summary(entry.estimate)}"
+    if entry.label:
+        text += " (라벨)"
+    return f"{text} {CHECK_MARKER}" if entry.check else text
+
+
+def _replace_change(name: str, number: int, old: MealItem, entry: _Entry) -> str:
+    """What `/fix_` replaces. A general item has the same name on both sides, so the values that change (the stored
+    range and the proposed one, with its label or check marker) are shown on a line of their own."""
+    head = f"{name} item {number}: {item_summary(old)}"
+    if entry.food_id is not None:
+        return f"{head} → {entry.display()}"
+    was = ranges_summary(general_ranges(old)) or "값 없음"
+    now = ranges_summary(entry.estimate) or "값 없음"
+    line = f"  {was} → {now}" + (" (라벨)" if entry.label else "") + (f" {CHECK_MARKER}" if entry.check else "")
+    lines = [head, line]
+    if entry.check:
+        lines.append(f"  {CHECK_LINE_HEAD}{', '.join(CHECK_REASON_TEXTS[code] for code in entry.check)}")
+    return "\n".join(lines)
 
 
 def _menu_entry(index: int, item: InterpretItem, menu: Proposal | None) -> _Entry | None:
@@ -2341,7 +2366,7 @@ def _recorded_meal_id(stdout: str) -> str | None:
 def _display_text(text: str) -> str:
     """A decimal string of the CLI's JSON as the CLI prints it (rounded to 0.1); other text is left as it is."""
     try:
-        return display_amount(Decimal(text))
+        return display_remaining(Decimal(text))
     except InvalidOperation:
         return text
 

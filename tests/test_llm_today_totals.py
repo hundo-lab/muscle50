@@ -20,6 +20,7 @@ from muscle50.domain.llm_today_totals import (
     NutrientTotal,
     TodayTotals,
     display_amount,
+    display_remaining,
     today_totals,
     totals_text,
 )
@@ -185,3 +186,12 @@ def test_a_quoted_range_passes_the_number_guard_and_an_invented_sum_does_not() -
     allowed = allowed_numbers([totals_text(totals)])
     assert unknown_numbers("오늘 kcal은 600에서 620 사이예요.", allowed) == ()
     assert unknown_numbers("오늘 kcal은 611이에요.", allowed) == (Decimal(611),)
+
+
+@pytest.mark.parametrize(
+    ("value", "shown"),
+    [("0.04", "<0.1"), ("0.05", "<0.1"), ("0.06", "0.1"), ("0", "0"), ("34.95", "35"), ("1670", "1670")],
+)
+def test_a_positive_remaining_amount_that_rounds_to_zero_reads_less_than_0_1(value: str, shown: str) -> None:
+    """Like the CLI's status gap: `0 g to go` would claim the target is met while it is not."""
+    assert display_remaining(Decimal(value)) == shown

@@ -133,6 +133,13 @@ def display_amount(value: Decimal) -> str:
     return amount_text(value.quantize(Decimal("0.1"), rounding=ROUND_HALF_EVEN))
 
 
+def display_remaining(value: Decimal) -> str:
+    """A remaining amount as the CLI prints a gap: a positive value that rounds to 0 reads `<0.1`, never `0`."""
+    if value > 0 and value.quantize(Decimal("0.1"), rounding=ROUND_HALF_EVEN) == 0:
+        return "<0.1"
+    return display_amount(value)
+
+
 def _decimal(value: Any) -> Decimal | None:
     if value is None:
         return None

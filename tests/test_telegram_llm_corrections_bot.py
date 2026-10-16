@@ -620,8 +620,8 @@ def test_fix_makes_an_edit_proposal_and_kills_the_overlap_commands(
         "\n".join(
             [
                 "이렇게 고칠까요?",
-                f"아침 {MEAL_1} item 1: 일반식 (메모: 깻잎닭갈비 삼각김밥 1개)"
-                " → 일반식 (메모: 깻잎닭갈비 삼각김밥 1개)",
+                f"아침 {MEAL_1} item 1: 일반식 (메모: 깻잎닭갈비 삼각김밥 1개)",
+                "  kcal 185, 단백질 5 g, 탄수화물 37 g → kcal 180~200, 단백질 5~6 g",
                 "고치기: /ok_c2e1   취소: /no_c2e1",
             ]
         )
@@ -939,3 +939,90 @@ def test_an_edit_of_a_past_meal_shows_that_days_totals(
     replies, _provider = say(monkeypatch, capsys, None, 2, "/ok_7f3a")
     assert "\n확인: /show 2026-10-05-dinner-1\n10-05 누적:\n  kcal 315\n" in replies[0]
     assert "오늘 누적" not in replies[0]
+
+
+# --- review fixes: what /fix_ shows, the ordinal with last_recorded, the CLI's "<0.1", determinism ---
+
+
+def test_fix_shows_the_values_it_replaces_with_their_label_and_check_markers(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    record_label_meal(monkeypatch, capsys, home)
+    label = tuna_rice_ball(estimate=est((190, 190), (5, 5), carbs_min=37, carbs_max=37), from_label=True)
+    say(monkeypatch, capsys, dishes(label), 3, "아침에 삼각김밥 먹었어")
+    replies, _provider = say(monkeypatch, capsys, None, 4, "/fix_91c0")
+    assert replies[0].split("\n")[1:3] == [
+        f"아침 {MEAL_1} item 1: 일반식 (메모: 깻잎닭갈비 삼각김밥 1개)",
+        "  kcal 185, 단백질 5 g, 탄수화물 37 g → kcal 190, 단백질 5 g, 탄수화물 37 g (라벨)",
+    ]
+    # a proposal that still fails a check after the re-ask is marked in the fix too, with the reason
+    wide = tuna_rice_ball(estimate=est((100, 900), (5, 6)))
+    bot._session(
+        monkeypatch, capsys, bot.FakeProvider(dishes(wide), dishes(wide)), bot.text(5, "아침에 삼각김밥 또 먹었어")
+    )
+    replies, _provider = say(monkeypatch, capsys, None, 6, "/fix_44d2")
+    lines = replies[0].split("\n")
+    assert lines[2] == "  kcal 185, 단백질 5 g, 탄수화물 37 g → kcal 100~900, 단백질 5~6 g (값 확인 필요)"
+    assert lines[3] == "  값 확인 필요: 범위가 너무 넓음"
+    assert meals.state_proposals(home)[-1]["argv_ok"][-1].endswith("; 값 확인 필요")
+
+
+def test_an_ordinal_means_that_days_meals_even_when_the_model_also_says_last_recorded(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    bot._ok(capsys, "nutrition", "log", "--meal", "breakfast", "--item", "햇반", "1", "pack")  # not in the history
+    lunch = dishes(item("국밥", "lunch", estimate=est((600, 700), (20, 30))))
+    say(monkeypatch, capsys, lunch, 1, "점심 국밥")
+    say(monkeypatch, capsys, None, 2, "/ok_7f3a")
+    dinner = dishes(item("파스타", "dinner", estimate=est((700, 800), (20, 30))))
+    say(monkeypatch, capsys, dinner, 3, "저녁 파스타")
+    say(monkeypatch, capsys, None, 4, "/ok_91c0")
+    document = edit_doc(
+        "change_quantity", refers="last_recorded", meal_type="breakfast", target_food_text="햇반", new_quantity=2
+    )
+    replies, provider = say(monkeypatch, capsys, with_ordinal(document, 1), 5, "방금 아침 1식 햇반 2개로")
+    assert "2026-10-06-breakfast-1" not in provider.requests[0][0].prompt.split("<직전 기록>\n")[1].split("\n\n")[0]
+    assert "아침 2026-10-06-breakfast-1 item 1: 햇반 1 pack → 햇반 (hetbahn-210) 2 pack" in replies[0]
+    # without the ordinal the same words look only at the two recent meals, where there is no breakfast
+    replies, _provider = say(monkeypatch, capsys, document, 6, "방금 아침 햇반 2개로")
+    assert replies == [EDIT_NO_RECENT_TEXT]
+
+
+def test_a_tiny_remaining_amount_reads_less_than_0_1_like_the_cli_status(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    bot._ok(capsys, "nutrition", "target", "set", "kcal", "--exact", "330.04")
+    bot._ok(capsys, "nutrition", "target", "set", "protein", "--exact", "69.04")
+    bot._ok(capsys, "nutrition", "log", "--meal", "breakfast", "--item", "chicken-breast", "300", "g")
+    assert "below target, <0.1 g to go" in bot._ok(capsys, "nutrition", "status")  # what the CLI prints
+    replies, _err, _fake = bot._session(monkeypatch, capsys, bot.FakeProvider(bot.MENU), bot.photo(1))
+    assert replies[0].split("\n")[0] == "오늘 점심 메뉴예요. 남은 양: 단백질 <0.1 g, kcal <0.1 (/status)"
+
+
+def replay_label_correction(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], root: Path
+) -> tuple[list[list[str]], list[list[str]]]:
+    """The 3-message replay on a fresh home; returns every reply and the argv of every stored proposal."""
+    monkeypatch.setenv("MUSCLE50_HOME", str(root))
+    v1._configure(root)
+    tokens = iter(["7f3a", "91c0", "c2e1"])
+    monkeypatch.setattr(cli, "_new_proposal_token", lambda: next(tokens))
+    prepare(capsys, root)
+    replies: list[list[str]] = []
+    first, _provider = send_photo(monkeypatch, capsys, 1, label_photo())
+    replies.append(first)
+    for update_id, document, words in ((2, None, "/ok_7f3a"), (3, FAT_FIX, "지방 2g"), (4, None, "/ok_91c0")):
+        sent, _provider = say(monkeypatch, capsys, document, update_id, words)
+        replies.append(sent)
+    return replies, [proposal["argv_ok"] for proposal in meals.state_proposals(root)]
+
+
+def test_the_same_scripted_inputs_give_the_same_replies_and_argv_on_twin_homes(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path, tmp_path: Path
+) -> None:
+    first = replay_label_correction(monkeypatch, capsys, tmp_path / "first")
+    second = replay_label_correction(monkeypatch, capsys, tmp_path / "second")
+    assert first == second and len(first[1]) == 2
