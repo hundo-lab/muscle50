@@ -10,7 +10,10 @@ held here:
 - Stale messages: a message sent more than `STALE_MARGIN_S` before `run` started is not run.
 - Migrations: a command whose CLI handler migrates is refused while the code has a migration the
   database lacks (the bot never applies one; that is a human gate).
-- Network and API errors are logged and retried with backoff; `run` stops only on Ctrl+C.
+- Network and API errors are logged and retried with backoff; `run` stops on Ctrl+C, on a damaged or
+  unwritable state file, on a rejected token and (v2.4) after `MAX_UNEXPECTED_IN_A_ROW` unexpected errors in
+  a row. One unexpected error while handling a message is logged and the next message is handled; the
+  failed update is already remembered, so it is never run again.
 - v1.1 summaries: `/today`, `/status`, `/daily` and `/unknown` run the CLI's `--json` form once and
   reply with a short summary of that document (`ReplySummaries`); `full` is the v1 text. `/refresh`
   runs `garmin refresh` and reports the activity's UNKNOWN set count read before and after it.
@@ -67,6 +70,9 @@ STALE_MARGIN_S = 60
 POLL_TIMEOUT_S = 10
 SEND_ATTEMPTS = 3
 BACKOFF_S: tuple[float, ...] = (5, 10, 20, 40, 60)
+MAX_UNEXPECTED_IN_A_ROW = 5
+"""v2.4: this many unexpected errors in a row (updates that failed with an exception, or `getUpdates` calls that
+raised something other than `TelegramUnavailableError`) look like a bug that repeats, so the bot stops."""
 # v1.2 bare `/refresh`. The same rule as `sync_garmin_recovery.MAX_CONSECUTIVE_DATE_FAILURES`: this many
 # failed activities in a row look like a Garmin-side limit or outage, so the rest are not requested.
 MAX_CONSECUTIVE_REFRESH_FAILURES = 3
@@ -94,6 +100,10 @@ class TelegramTokenRejectedError(TelegramUnavailableError):
 
 class TelegramStateError(RuntimeError):
     """The handled-updates state file cannot be read or written."""
+
+
+class TelegramRunStoppedError(RuntimeError):
+    """v2.4: `MAX_UNEXPECTED_IN_A_ROW` unexpected errors in a row. The message is Korean and holds no token."""
 
 
 class SummaryUnavailableError(ValueError):
@@ -335,6 +345,7 @@ class RunTelegramBot:
         clock: Callable[[], float],
         poll_timeout_s: int = POLL_TIMEOUT_S,
         llm: LlmMessageHandler | None = None,
+        on_idle: Callable[[], None] | None = None,
     ) -> None:
         self._api = api
         self._handled = handled
@@ -350,6 +361,8 @@ class RunTelegramBot:
         self._clock = clock
         self._poll_timeout_s = poll_timeout_s
         self._llm = llm
+        self._on_idle = on_idle
+        self._unexpected_updates = 0
         self._bot_id = 0
         self._handled_ids: list[int] = []
         self._running: tuple[str, int] | None = None
@@ -380,18 +393,36 @@ class RunTelegramBot:
         )
         offset: int | None = None
         failures = 0
+        unexpected_polls = 0
         while True:
+            self._idle()
             try:
                 updates = self._api.get_updates(offset, self._poll_timeout_s)
             except TelegramUnavailableError as exc:
                 failures += 1
                 self._wait_after(exc, failures)
                 continue
+            except Exception as exc:
+                # The adapter raises only TelegramUnavailableError; anything else is a bug, retried like a
+                # network error but counted, so a repeating one stops the bot instead of looping forever.
+                unexpected_polls += 1
+                failures += 1
+                self._log("".join(traceback.format_exception(exc)).rstrip("\n"))
+                if unexpected_polls >= MAX_UNEXPECTED_IN_A_ROW:
+                    raise _stopped(unexpected_polls, exc) from None
+                self._wait_after(TelegramUnavailableError(f"unexpected error ({type(exc).__name__})"), failures)
+                continue
             failures = 0
+            unexpected_polls = 0
             for update in updates:
                 offset = max(offset or 0, update.update_id + 1)
-                if self._handle(update, identity, started_at):
+                if self._handle_guarded(update, identity, started_at):
                     return
+
+    def _idle(self) -> None:
+        if self._on_idle is not None:
+            with suppress(Exception):  # a run-log write must never stop the bot
+                self._on_idle()
 
     def _identify(self) -> BotIdentity:
         failures = 0
@@ -403,6 +434,31 @@ class RunTelegramBot:
             except TelegramUnavailableError as exc:
                 failures += 1
                 self._wait_after(exc, failures)
+
+    def _handle_guarded(self, update: IncomingUpdate, identity: BotIdentity, started_at: float) -> bool:
+        """`_handle`, except that an unexpected exception is logged and answered, never fatal by itself.
+
+        `TelegramStateError` still stops the bot (a state file that cannot be written could run a command twice)
+        and Ctrl+C (a `BaseException`) passes through. The failed update is already remembered by `_handle`.
+        """
+        try:
+            stop = self._handle(update, identity, started_at)
+        except TelegramStateError:
+            raise
+        except Exception as exc:
+            self._running = None
+            self._unexpected_updates += 1
+            self._log(f"update {update.update_id}: unexpected {type(exc).__name__}; the message will not be run again")
+            self._log("".join(traceback.format_exception(exc)).rstrip("\n"))
+            message = update.message
+            if message is not None and message.chat_id in self._allowed:
+                with suppress(Exception):  # best effort: a failing reply must not hide the original error
+                    self._reply(message.chat_id, unexpected_error_text(type(exc).__name__))
+            if self._unexpected_updates >= MAX_UNEXPECTED_IN_A_ROW:
+                raise _stopped(self._unexpected_updates, exc) from None
+            return False
+        self._unexpected_updates = 0
+        return stop
 
     def _handle(self, update: IncomingUpdate, identity: BotIdentity, started_at: float) -> bool:
         """Handles one update; True when the bot must stop (the command was interrupted)."""
@@ -760,7 +816,16 @@ class RunTelegramBot:
 
     def _log(self, line: str) -> None:
         # Console lines stay ASCII: an OS or API message may carry characters a cp949 console cannot print.
-        self._log_sink(line.encode("ascii", "backslashreplace").decode("ascii"))
+        # A console that went away (closed window, broken pipe) must not stop the bot.
+        with suppress(OSError, ValueError):
+            self._log_sink(line.encode("ascii", "backslashreplace").decode("ascii"))
+
+
+def _stopped(count: int, exc: Exception) -> TelegramRunStoppedError:
+    return TelegramRunStoppedError(
+        f"예상하지 못한 오류가 연속 {count}번 일어나 bot을 멈춥니다 (마지막: {type(exc).__name__}). "
+        "콘솔의 traceback이나 실행 기록 파일(telegram 폴더의 run-*.log)에서 원인을 확인하세요."
+    )
 
 
 def _delay(exc: TelegramUnavailableError, failures: int) -> float:

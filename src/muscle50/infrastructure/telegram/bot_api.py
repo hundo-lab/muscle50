@@ -23,6 +23,7 @@ from muscle50.application.telegram_bot import (
     TelegramTokenRejectedError,
     TelegramUnavailableError,
 )
+from muscle50.infrastructure.telegram.network_error import describe_network_error
 
 API_BASE_URL = "https://api.telegram.org"
 REQUEST_TIMEOUT_S = 15
@@ -72,7 +73,17 @@ class UrllibTelegramBotApi:
         result = self._call("getUpdates", payload, timeout_s + POLL_HTTP_MARGIN_S)
         if not isinstance(result, list):
             raise TelegramUnavailableError("unexpected getUpdates response")
-        return tuple(_update(item) for item in result)
+        failure: TelegramUnavailableError | None = None
+        updates: tuple[IncomingUpdate, ...] = ()
+        try:
+            updates = tuple(_update(item) for item in result)
+        except TelegramUnavailableError:
+            raise
+        except Exception as exc:
+            failure = TelegramUnavailableError(f"unexpected error ({type(exc).__name__})")
+        if failure is not None:
+            raise failure
+        return updates
 
     def send_message(self, chat_id: int, html: str) -> None:
         payload: dict[str, Any] = {"chat_id": chat_id, "text": html, "parse_mode": "HTML"}
@@ -102,7 +113,9 @@ class UrllibTelegramBotApi:
         except urllib.error.HTTPError as exc:
             failure = TelegramUnavailableError(self._clean(f"file download error {exc.code}"), status=exc.code)
         except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as exc:
-            failure = TelegramUnavailableError(self._clean(f"network error ({type(exc).__name__})"))
+            failure = TelegramUnavailableError(self._clean(f"network error ({describe_network_error(exc)})"))
+        except Exception as exc:  # the adapter raises only TelegramUnavailableError
+            failure = TelegramUnavailableError(self._clean(f"unexpected error ({type(exc).__name__})"))
         if failure is not None:
             raise failure
         if len(data) > max_bytes:
@@ -125,7 +138,9 @@ class UrllibTelegramBotApi:
         except urllib.error.HTTPError as exc:
             failure = self._http_failure(exc.code, _error_body(exc))
         except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as exc:
-            failure = TelegramUnavailableError(self._clean(f"network error ({exc})"))
+            failure = TelegramUnavailableError(self._clean(f"network error ({describe_network_error(exc)})"))
+        except Exception as exc:  # the adapter raises only TelegramUnavailableError
+            failure = TelegramUnavailableError(self._clean(f"unexpected error ({type(exc).__name__})"))
         if failure is not None:
             raise failure
         if not isinstance(document, dict) or document.get("ok") is not True:

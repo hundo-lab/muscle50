@@ -69,6 +69,11 @@ class AppPaths:
     def telegram_photos_dir(self) -> Path:
         return self.root / "telegram" / "photos"
 
+    @property
+    def telegram_run_log_dir(self) -> Path:
+        # `telegram run` appends `run-YYYY-MM.log` here (v2.4); the directory is created on the first write.
+        return self.root / "telegram"
+
     @classmethod
     def from_environment(cls) -> AppPaths:
         override = os.environ.get("MUSCLE50_HOME")

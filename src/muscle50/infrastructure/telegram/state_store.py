@@ -9,20 +9,52 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
 from muscle50.application.telegram_bot import MAX_HANDLED_UPDATES, HandledUpdates, TelegramStateError
+from muscle50.infrastructure.telegram.network_error import describe_os_error
 
 SCHEMA_VERSION = 1
 _KEYS = frozenset({"schema_version", "bot_id", "handled_update_ids"})
+REPLACE_RETRY_DELAYS_S: tuple[float, ...] = (0.05, 0.1, 0.2, 0.4, 0.8)
+"""Telegram LLM v2.4: Windows can refuse `os.replace` for a moment (a virus scanner or an indexer holds the
+file). A `PermissionError` is retried after each of these delays; any other error fails at once."""
+
+
+def replace_with_retry(
+    source: Path,
+    target: Path,
+    *,
+    replace: Callable[[Path, Path], None] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """`os.replace(source, target)`, retried on `PermissionError`. `os.replace` is looked up at call time."""
+    for delay in (*REPLACE_RETRY_DELAYS_S, None):
+        try:
+            (replace or os.replace)(source, target)
+            return
+        except PermissionError:
+            if delay is None:
+                raise
+            sleep(delay)
 
 
 class JsonHandledUpdateStore:
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        replace: Callable[[Path, Path], None] | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self._path = path
+        self._replace = replace
+        self._sleep = sleep
 
     def load(self) -> HandledUpdates | None:
         try:
@@ -30,7 +62,9 @@ class JsonHandledUpdateStore:
         except FileNotFoundError:
             return None
         except OSError as exc:
-            raise TelegramStateError(f"telegram 상태 파일을 읽을 수 없습니다: {self._path} ({exc.strerror})") from None
+            raise TelegramStateError(
+                f"telegram 상태 파일을 읽을 수 없습니다: {self._path} ({describe_os_error(exc)})"
+            ) from None
         try:
             return _handled_from_document(json.loads(raw.decode("utf-8")))
         except UnicodeDecodeError:
@@ -53,10 +87,11 @@ class JsonHandledUpdateStore:
                 handle.write(content)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary, self._path)
+            replace_with_retry(temporary, self._path, replace=self._replace, sleep=self._sleep)
         except OSError as exc:
             raise TelegramStateError(
-                f"telegram 상태 파일을 쓸 수 없습니다: {self._path} ({exc.strerror}). 명령은 실행하지 않았습니다."
+                f"telegram 상태 파일을 쓸 수 없습니다: {self._path} ({describe_os_error(exc)}). "
+                "명령은 실행하지 않았습니다."
             ) from None
         finally:
             with suppress(FileNotFoundError):

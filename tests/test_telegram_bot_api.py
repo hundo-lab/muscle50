@@ -222,13 +222,13 @@ def test_network_errors_are_redacted_and_unchained(monkeypatch: pytest.MonkeyPat
     _assert_no_token(raised.value)
 
 
-def test_redacted_urls_keep_their_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_url_in_the_error_text_never_reaches_the_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    # v2.4: the message is built from the error type and number, never from `str(exc)`, so a URL (and with it
+    # any token) cannot appear in it at all. This replaces the v1 test that pinned the redacted URL's shape.
     _install(monkeypatch, _raise(urllib.error.URLError(f"cannot reach {BASE}/getMe")))
     with pytest.raises(TelegramUnavailableError) as raised:
         UrllibTelegramBotApi(TOKEN).get_me()
-    assert str(raised.value) == (
-        "network error (<urlopen error cannot reach https://api.telegram.org/bot<redacted>/getMe>)"
-    )
+    assert str(raised.value) == "network error (URLError)"
 
 
 def test_invalid_json_response_is_a_network_error(monkeypatch: pytest.MonkeyPatch) -> None:

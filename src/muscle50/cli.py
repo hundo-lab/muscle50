@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import secrets
 import sys
 from collections.abc import Callable, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timezone, tzinfo
 from decimal import Decimal
@@ -85,6 +87,7 @@ from muscle50.application.telegram_bot import (
     CheckTelegramBot,
     RunTelegramBot,
     TelegramBotApi,
+    TelegramRunStoppedError,
     TelegramStateError,
     TelegramTokenRejectedError,
     TelegramUnavailableError,
@@ -147,6 +150,7 @@ from muscle50.infrastructure.telegram.llm_config_file import LlmConfigError, loa
 from muscle50.infrastructure.telegram.llm_memory_store import JsonLlmMemoryStore
 from muscle50.infrastructure.telegram.llm_state_store import JsonLlmStateStore
 from muscle50.infrastructure.telegram.photo_store import PhotoStore
+from muscle50.infrastructure.telegram.run_log import RunLog, install_console_event_hook
 from muscle50.infrastructure.telegram.state_store import JsonHandledUpdateStore
 from muscle50.presentation.inbody_terminal import render_body_composition_trend, render_body_composition_trend_json
 from muscle50.presentation.nutrition_terminal import (
@@ -1673,17 +1677,27 @@ def _telegram_check() -> int:
 
 def _telegram_run() -> int:
     # Never migrates or creates directories itself: each bot command runs through `main` exactly as the
-    # CLI runs it. The only file it writes is the handled-updates state file.
+    # CLI runs it. It writes the handled-updates state file and (v2.4) the monthly run log; the run log
+    # mirrors the console lines and records why the run stopped.
     token = ""
+    run_log: RunLog | None = None
+    remove_hook = _no_hook
+    reason = "ctrl_c"
     try:
         paths = AppPaths.from_environment()
         config = load_telegram_config(paths.telegram_config_path)
         token = config.bot_token
+        settings = load_llm_settings(paths.telegram_llm_config_path)  # None: Telegram LLM v2 is off
+        run_log = RunLog(paths.telegram_run_log_dir, _now)
+        run_log.started(os.getpid(), llm_on=settings is not None)
+        remove_hook = install_console_event_hook(lambda event: _log_console_event(run_log, event))
 
         def log(line: str) -> None:
-            print(redact(line, token), file=sys.stderr, flush=True)
+            redacted = redact(line, token)
+            _console_error(redacted)  # a console that went away must not stop the bot
+            if run_log is not None:
+                run_log.line(redacted)
 
-        settings = load_llm_settings(paths.telegram_llm_config_path)  # None: Telegram LLM v2 is off
         api = _telegram_api(token)
         commands = InProcessCliRunner(main)
 
@@ -1706,20 +1720,44 @@ def _telegram_run() -> int:
             sleep=lambda seconds: _telegram_sleep(seconds),
             clock=lambda: _now().timestamp(),
             llm=llm,
+            on_idle=run_log.tick,
         ).execute()
     except (
         ConfigurationError,
         TelegramConfigError,
         TelegramStateError,
         TelegramUnavailableError,
+        TelegramRunStoppedError,
         LlmConfigError,
     ) as exc:
-        print(redact(f"오류: {_telegram_error(exc)}", token), file=sys.stderr)
+        reason = f"error {type(exc).__name__}"
+        _console_error(redact(f"오류: {_telegram_error(exc)}", token))
         return 1
     except KeyboardInterrupt:
         pass
-    print("\n취소되었습니다.", file=sys.stderr)
+    except BaseException as exc:
+        reason = f"error {type(exc).__name__}"  # the traceback still reaches the console
+        raise
+    finally:
+        remove_hook()
+        if run_log is not None:
+            run_log.stopped(reason)
+    _console_error("\n취소되었습니다.")
     return 130
+
+
+def _no_hook() -> None:
+    return None
+
+
+def _console_error(text: str) -> None:
+    """`print(text, file=sys.stderr, flush=True)` that survives a console that went away (closed, broken pipe)."""
+    with suppress(OSError, ValueError):
+        print(text, file=sys.stderr, flush=True)
+
+
+def _log_console_event(run_log: RunLog, event: int) -> None:
+    run_log.stopped(f"console_event {event}")
 
 
 def _llm_provider(

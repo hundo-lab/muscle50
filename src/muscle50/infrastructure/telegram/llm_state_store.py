@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import uuid
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import date
 from decimal import Decimal
@@ -29,13 +31,23 @@ from muscle50.domain.telegram_llm import (
     ProposalKind,
     ProposalState,
 )
+from muscle50.infrastructure.telegram.network_error import describe_os_error
+from muscle50.infrastructure.telegram.state_store import replace_with_retry
 
 SCHEMA_VERSION = 1
 
 
 class JsonLlmStateStore:
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        replace: Callable[[Path, Path], None] | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
         self._path = path
+        self._replace = replace
+        self._sleep = sleep
 
     def load(self) -> LlmState:
         try:
@@ -44,7 +56,7 @@ class JsonLlmStateStore:
             return EMPTY_STATE
         except OSError as exc:
             raise TelegramStateError(
-                f"telegram LLM 상태 파일을 읽을 수 없습니다: {self._path} ({exc.strerror})"
+                f"telegram LLM 상태 파일을 읽을 수 없습니다: {self._path} ({describe_os_error(exc)})"
             ) from None
         try:
             return _state(json.loads(raw.decode("utf-8")))
@@ -68,10 +80,11 @@ class JsonLlmStateStore:
                 handle.write(content)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary, self._path)
+            replace_with_retry(temporary, self._path, replace=self._replace, sleep=self._sleep)
         except OSError as exc:
             raise TelegramStateError(
-                f"telegram LLM 상태 파일을 쓸 수 없습니다: {self._path} ({exc.strerror}). 아무것도 기록하지 않았습니다."
+                f"telegram LLM 상태 파일을 쓸 수 없습니다: {self._path} ({describe_os_error(exc)}). "
+                "아무것도 기록하지 않았습니다."
             ) from None
         finally:
             with suppress(FileNotFoundError):

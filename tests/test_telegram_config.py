@@ -213,7 +213,7 @@ def test_failed_replace_keeps_the_old_state_and_leaves_no_temp_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = tmp_path / "config" / "telegram_state.json"
-    store = JsonHandledUpdateStore(path)
+    store = JsonHandledUpdateStore(path, sleep=lambda seconds: None)  # v2.4 retries a PermissionError
     store.save(HandledUpdates(1, (10,)))
     before = path.read_bytes()
 
@@ -223,9 +223,7 @@ def test_failed_replace_keeps_the_old_state_and_leaves_no_temp_file(
     monkeypatch.setattr(os, "replace", fail)
     with pytest.raises(TelegramStateError) as raised:
         store.save(HandledUpdates(1, (10, 11)))
-    assert str(raised.value) == (
-        f"telegram 상태 파일을 쓸 수 없습니다: {path} (synthetic denial). 명령은 실행하지 않았습니다."
-    )
+    assert str(raised.value) == (f"telegram 상태 파일을 쓸 수 없습니다: {path} (EACCES). 명령은 실행하지 않았습니다.")
     assert path.read_bytes() == before
     assert [item.name for item in path.parent.iterdir()] == ["telegram_state.json"]
     monkeypatch.undo()

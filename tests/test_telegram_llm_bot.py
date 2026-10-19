@@ -637,7 +637,7 @@ def test_unlisted_chat_photo_and_text_never_reach_provider(
         monkeypatch, capsys, provider, text(1, "점심 먹었어", chat=v1.OTHER), photo(2, "저녁", chat=v1.OTHER)
     )
     assert (replies, provider.requests, fake.downloads) == ([], [], [])
-    assert not (home / "telegram").exists()
+    assert not (home / "telegram" / "history").exists()
 
 
 def test_console_has_no_text_url_or_token(
@@ -1066,7 +1066,7 @@ def test_non_command_text_without_llm_config_is_unchanged(
     replies, err, fake = _session(monkeypatch, capsys, provider, text(1, "점심 먹었어"), photo(2, "저녁"))
     assert replies == ["명령이 아닙니다.\n\n" + HELP_TEXT] * 2
     assert provider.requests == [] and fake.downloads == []
-    assert "telegram llm" not in err and not (home / "telegram").exists()
+    assert "telegram llm" not in err and not (home / "telegram" / "history").exists()
 
 
 def test_console_stays_ascii_with_a_non_ascii_executable_path(
