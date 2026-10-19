@@ -156,6 +156,12 @@ from muscle50.domain.telegram_llm_meals import (
     portions_text,
     registered_units,
 )
+from muscle50.domain.telegram_llm_photo import (
+    OUTCOME_FAILED,
+    caption_is_clearly_eaten,
+    photo_memory_text,
+    photo_outcome_words,
+)
 from muscle50.domain.telegram_llm_prompt import (
     CANCELLED_TEXT,
     CHECK_LINE_HEAD,
@@ -180,6 +186,7 @@ from muscle50.domain.telegram_llm_prompt import (
     OVERLAP_MANY_TEXT,
     OVERLAP_SAME_TEXT,
     PHOTO_DOWNLOAD_FAILED_TEXT,
+    PHOTO_FAILED_TEXT,
     PHOTO_KIND_UNCLEAR_TEXT,
     PHOTO_TOO_LARGE_TEXT,
     PLANNED_TEXT,
@@ -430,6 +437,8 @@ class _Exchange:
     """The `[데이터]` pairs of the interpret call; the numeric re-ask sends the same ones."""
     menu: Proposal | None = None
     """The recent menu offered to the LLM (`menu_ref` points into its choices); None for a photo message."""
+    photo_outcome: str | None = None
+    """How a photo was read, in a few words, for the chat memory (None: the read failed)."""
 
 
 class TelegramLlmHandler:
@@ -534,7 +543,11 @@ class TelegramLlmHandler:
         exchange.calls.append(call)
         if not call.ok:
             if photo is not None:
-                self._photo_failed_proposal(chat_id, exchange)
+                if caption_is_clearly_eaten(words):
+                    self._photo_failed_proposal(chat_id, exchange)
+                else:
+                    # Neither "ate" nor "menu" is clear: a value-less meal would be a guess, so nothing is offered.
+                    exchange.reply = ReplyText(PHOTO_FAILED_TEXT)
             else:
                 exchange.reply = ReplyText(PROVIDER_FAILED_TEXT)
         else:
@@ -547,7 +560,7 @@ class TelegramLlmHandler:
             else:
                 self._text(chat_id, words, interpretation, exchange)
         assert exchange.reply is not None
-        user = text if text is not None else f"[사진] {caption or ''}".rstrip()
+        user = text if text is not None else photo_memory_text(1, caption, exchange.photo_outcome or OUTCOME_FAILED)
         self._record(
             chat_id,
             exchange,
@@ -591,6 +604,7 @@ class TelegramLlmHandler:
         self, chat_id: int, words: str, photo: bytes, interpretation: Interpretation, exchange: _Exchange
     ) -> None:
         kind = interpretation.photo_kind
+        exchange.photo_outcome = photo_outcome_words(interpretation)
         if kind is PhotoKind.MEAL_PHOTO:
             self._meal_proposal(chat_id, words, photo, interpretation, exchange, photo_digest=_digest(photo))
         elif kind is PhotoKind.MENU_CAPTURE:

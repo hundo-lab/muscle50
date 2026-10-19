@@ -159,3 +159,104 @@ def test_the_prompts_carry_the_sync_rules(
     from muscle50.domain.telegram_llm_prompt import TASKS, PromptTask
 
     assert "/daily 로 동기화하라고 안내합니다" in TASKS[PromptTask.ANSWER]
+
+
+# --- AC2: a failed photo read ---
+
+PHOTO_FAILED = '사진을 해석하지 못했습니다. 사진에 "메뉴" 또는 "먹음"이라고 적어 다시 보내 주세요.'
+PLAIN_PHOTO_PROPOSAL = (
+    "사진을 해석하지 못했습니다. 일반식으로만 기록할까요? (점심, 10-06)",
+    "(끼니: 지금 시각 기준)",
+    "1. 일반식",
+    "기록: /ok_7f3a   취소: /no_7f3a",
+)
+
+
+def test_a_failed_read_with_a_clear_caption_offers_the_plain_meal(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    bot._llm_config(home, {"keep_photos": False})
+    replies, _err, _fake = bot._session(
+        monkeypatch, capsys, bot.FakeProvider("timeout"), bot.photo(1, "점심으로 이거 먹었어")
+    )
+    assert replies == ["\n".join(PLAIN_PHOTO_PROPOSAL)]
+    assert len(state(home)) == 1
+
+
+@pytest.mark.parametrize("caption", [None, "", "점심", "이거 뭐야", "점심 메뉴 먹었어", "plate", "menu ate"])
+def test_a_failed_read_without_a_clear_caption_offers_nothing_and_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path, caption: str | None
+) -> None:
+    bot._catalog(capsys)
+    bot._llm_config(home, {"keep_photos": False})
+    before = bot._tables(home)
+    replies, _err, _fake = bot._session(monkeypatch, capsys, bot.FakeProvider("timeout"), bot.photo(1, caption))
+    assert replies == [PHOTO_FAILED]
+    assert bot._tables(home) == before
+    assert not (home / "config" / "telegram_llm_state.json").exists()  # no proposal
+    assert not (home / "telegram" / "photos").exists()
+    (entry,) = bot._history(home)
+    assert entry["reply"] == PHOTO_FAILED and entry["proposal"] is None
+
+
+# --- AC3: the chat memory keeps what a photo was ---
+
+
+def memory(home: Path) -> list[dict[str, Any]]:
+    document = json.loads((home / "config" / "telegram_llm_memory.json").read_text(encoding="utf-8"))
+    return list(document["chats"][str(bot.ALLOWED)]["turns"])
+
+
+def test_a_meal_photo_leaves_a_memory_line_the_next_call_and_memory_show(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    bot._catalog(capsys)
+    bot._llm_config(home)
+    meal_photo = bot.meal(
+        bot._item("닭가슴살", 1, "pack"),
+        bot._item("햇반", 1, "pack"),
+        photo_kind="meal_photo",
+        memory_summary="점심 사진",
+    )
+    bot._session(monkeypatch, capsys, bot.FakeProvider(meal_photo), bot.photo(1, "점심"))
+    (turn,) = memory(home)
+    assert turn["user"] == "[사진 1장] 점심 → 식사 사진으로 읽음: 닭가슴살, 햇반"
+    # the next call's prompt and /memory show the same line
+    question = interpretation(intent="chat", items=[], tense="none", reply="네.", memory_summary="사진 이야기")
+    provider = bot.FakeProvider(question)
+    replies, _err, _fake = bot._session(
+        monkeypatch, capsys, provider, bot.text(2, "두개는 해석 못해?"), bot.text(3, "/memory")
+    )
+    assert "- 나: [사진 1장] 점심 → 식사 사진으로 읽음: 닭가슴살, 햇반" in provider.requests[0][0].prompt
+    assert "- 나: [사진 1장] 점심 → 식사 사진으로 읽음: 닭가슴살, 햇반" in replies[1]
+    assert "'[사진 N장]'으로 시작하는 줄" in provider.requests[0][0].prompt  # the rule that goes with it
+
+
+def test_a_menu_capture_a_failed_read_and_an_unclear_photo_are_remembered_too(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    bot._llm_config(home, {"keep_photos": False})
+    menu_capture = dict(STEW_MENU)
+    unclear = bot.meal(photo_kind="unclear")
+    bot._session(
+        monkeypatch,
+        capsys,
+        bot.FakeProvider(menu_capture, "timeout", unclear),
+        bot.photo(1, "점심 메뉴"),
+        bot.photo(2, None),
+        bot.photo(3, None),
+    )
+    assert [turn["user"] for turn in memory(home)] == [
+        "[사진 1장] 점심 메뉴 → 메뉴 캡처로 읽음: 항목 2개",
+        "[사진 1장] → 해석 못함",
+        "[사진 1장] → 사진 종류 불명",
+    ]
+
+
+def test_a_text_turn_keeps_its_exact_memory_text(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    bot._llm_config(home)
+    chat = interpretation(intent="chat", items=[], tense="none", reply="네.", memory_summary="인사")
+    bot._session(monkeypatch, capsys, bot.FakeProvider(chat), bot.text(1, "안녕 [사진] 이야기"))
+    assert memory(home)[0]["user"] == "안녕 [사진] 이야기"

@@ -509,7 +509,8 @@ def test_unclear_photo_asks_and_photo_failure_offers_a_plain_general_meal(
 ) -> None:
     _llm_config(home, {"keep_photos": False})
     provider = FakeProvider(meal(photo_kind="unclear"), "timeout")
-    replies, _err, _fake = _session(monkeypatch, capsys, provider, photo(1), photo(2))
+    # v2.4: the plain general meal is offered after a failed read only when the caption says it was eaten.
+    replies, _err, _fake = _session(monkeypatch, capsys, provider, photo(1), photo(2, "점심 먹었어"))
     assert replies[0] == PHOTO_KIND_UNCLEAR_TEXT
     assert replies[1] == "\n".join(
         [

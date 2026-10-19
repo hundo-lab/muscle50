@@ -502,7 +502,8 @@ def test_bot_photo_failing_twice_offers_the_plain_general_meal(
 ) -> None:
     bot._llm_config(home, {"keep_photos": False, "claude": {"photo_model": "opus"}})
     runner = FakeRunner(claude_text("x"), claude_text("y"))
-    replies, _err, _fake = _real_session(monkeypatch, capsys, runner, tmp_path, bot.photo(1))
+    # v2.4: the plain general meal is offered only when the caption says it was eaten (the twin below has no caption).
+    replies, _err, _fake = _real_session(monkeypatch, capsys, runner, tmp_path, bot.photo(1, "점심 먹었어"))
     assert replies == [
         "\n".join(
             [
@@ -514,6 +515,17 @@ def test_bot_photo_failing_twice_offers_the_plain_general_meal(
         )
     ]
     assert [_model(call.argv) for call in runner.calls] == ["opus", "sonnet"]
+
+
+def test_bot_photo_failing_twice_without_a_clear_caption_offers_nothing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path, tmp_path: Path
+) -> None:
+    bot._llm_config(home, {"keep_photos": False, "claude": {"photo_model": "opus"}})
+    runner = FakeRunner(claude_text("x"), claude_text("y"))
+    replies, _err, _fake = _real_session(monkeypatch, capsys, runner, tmp_path, bot.photo(1))
+    assert replies == ['사진을 해석하지 못했습니다. 사진에 "메뉴" 또는 "먹음"이라고 적어 다시 보내 주세요.']
+    assert [_model(call.argv) for call in runner.calls] == ["opus", "sonnet"]
+    assert not (home / "config" / "telegram_llm_state.json").exists()
 
 
 def test_a_two_call_message_records_only_the_last_call(

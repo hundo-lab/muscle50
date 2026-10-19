@@ -111,6 +111,9 @@ TASKS = {
             "- edit.target_meal_ordinal: '아침 1식'은 meal_type breakfast와 1, '두 번째 점심'은 lunch와 2. 순서를 "
             "말하지 않았으면 null.",
             "- reply: chat일 때만 짧은 답(숫자 없이). 아니면 null.",
+            "- [기억]에 '[사진 N장]'으로 시작하는 줄이 있으면 사용자가 그 사진을 보냈던 것입니다. 사진이 없다고 답하지 "
+            "않고, 사진의 내용은 그 줄에 적힌 요약만 압니다. 사진이 N장 붙어 있으면 모두 하나의 식사나 하나의 메뉴로 "
+            "봅니다.",
             "- memory_summary: 지금까지의 대화를 300자 안으로 요약(이번 메시지 포함).",
         ]
     ),
@@ -120,6 +123,8 @@ TASKS = {
             "- 판단이나 계산을 새로 하지 않습니다. 데이터의 추천·상태·숫자를 그대로 전합니다.",
             "- 운동을 묻는데 [데이터]에 그 날의 운동이 없거나 동기화가 안 된 것으로 보이면, 숫자 없이 한 문장으로 "
             "/daily 로 동기화하라고 안내합니다.",
+            "- [기억]에 '[사진 N장]'으로 시작하는 줄이 있으면 사용자가 그 사진을 보냈던 것입니다. 사진이 없다고 답하지 "
+            "않고, 사진의 내용은 그 줄에 적힌 요약만 압니다.",
             "- memory_summary: 지금까지의 대화를 300자 안으로 요약(이번 질문과 답 포함).",
         ]
     ),
@@ -149,11 +154,13 @@ def build_prompt(
     has_photo: bool,
     web_search_max: int | None = None,
     recheck_note: str | None = None,
+    photo_count: int = 1,
 ) -> str:
     """The stdin prompt. ``data`` is (label, JSON text) pairs; ``memory`` is exactly `memory_block`'s text.
 
     ``web_search_max`` is set only when the search tool is offered (it selects the web fixed rules);
-    ``recheck_note`` adds the machine-written `[재확인]` section of the one corrective re-ask.
+    ``recheck_note`` adds the machine-written `[재확인]` section of the one corrective re-ask;
+    ``photo_count`` (v2.4 albums) is how many photos are attached: one keeps `(사진 첨부)` byte for byte.
     """
     sections = [
         f"[역할] 당신은 muscle50 해석기입니다. 이름은 {persona_name}, 말투는 {persona_tone}.",
@@ -169,7 +176,8 @@ def build_prompt(
     if recheck_note is not None:
         sections.append(f"[재확인]\n{recheck_note}")
     body = message if message else "(글 없음)"
-    sections.append(f"[메시지]\n{body}" + ("\n(사진 첨부)" if has_photo else ""))
+    attached = "" if not has_photo else ("\n(사진 첨부)" if photo_count <= 1 else f"\n(사진 {photo_count}장 첨부)")
+    sections.append(f"[메시지]\n{body}{attached}")
     return "\n\n".join(sections) + "\n"
 
 
@@ -182,6 +190,7 @@ PHOTO_KIND_UNCLEAR_TEXT = (
 )
 PHOTO_TOO_LARGE_TEXT = "사진이 너무 큽니다. 더 작은 사진으로 다시 보내 주세요."
 DOCUMENT_IMAGE_TEXT = "사진으로 보내 주세요(파일로 보낸 이미지는 읽지 않습니다)."
+PHOTO_FAILED_TEXT = '사진을 해석하지 못했습니다. 사진에 "메뉴" 또는 "먹음"이라고 적어 다시 보내 주세요.'
 PHOTO_DOWNLOAD_FAILED_TEXT = "사진을 받지 못했습니다. 잠시 뒤 다시 보내 주세요."
 SYNC_HINT_TEXT = "동기화는 /daily 로 합니다. 운동 하나만 다시 받으려면 /refresh 를 쓰세요."
 DATE_OTHER_TEXT = "날짜를 정하지 못했습니다. /log로 보내 주세요(오늘과 어제만 문장으로 기록합니다)."
