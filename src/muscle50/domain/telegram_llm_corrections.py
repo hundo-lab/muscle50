@@ -19,7 +19,7 @@ from typing import Any
 
 from muscle50.domain.llm_today_totals import NUTRIENT_NAMES, amount_text
 from muscle50.domain.nutrition import GENERAL_MEAL_FOOD_ID, Meal, MealItem, MealType, NutrientField, QuantityUnit
-from muscle50.domain.telegram_llm import NutrientRanges, Proposal, ProposalKind, ProposalState
+from muscle50.domain.telegram_llm import MENU_PROPOSAL_TTL_S, NutrientRanges, Proposal, ProposalKind, ProposalState
 from muscle50.domain.telegram_llm_prompt import MEAL_NAMES
 
 RECENT_MEALS = 2
@@ -291,9 +291,10 @@ def overlap_name(item: MealItem) -> str:
 
 # --- a menu shown in the last hours, picked by name ---
 
-MENU_WINDOW_S = 4 * 60 * 60
-"""A menu capture or suggestion is offered to the LLM for this long after it was made (its confirmation
-time-to-live is separate and unchanged)."""
+MENU_WINDOW_S = MENU_PROPOSAL_TTL_S
+"""A menu capture or suggestion is offered to the LLM for this long after it was made. Since v2.4 it is also the
+menu proposal's own time-to-live (`/eat_` works for the same 4 hours). One edge differs by one second: at exactly
+this age the menu is still offered by name (`<=`), while `/eat_` is expired (`now >= expires_unix`)."""
 MENU_NAME_MIN = 2
 """A menu item and the user's words must be at least this long (after normalizing) to count as the same name."""
 

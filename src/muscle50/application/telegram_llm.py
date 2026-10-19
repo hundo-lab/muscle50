@@ -79,6 +79,7 @@ from muscle50.domain.telegram_commands import (
 )
 from muscle50.domain.telegram_llm import (
     EMPTY_MEMORY,
+    MENU_PROPOSAL_TTL_S,
     PROPOSAL_TTL_S,
     ChatMemory,
     EditAction,
@@ -199,6 +200,7 @@ from muscle50.domain.telegram_llm_prompt import (
     PromptTask,
     build_prompt,
     llm_status_text,
+    menu_expired_text,
     provider_default_text,
     provider_switched_text,
     sequence_failed_line,
@@ -1712,6 +1714,8 @@ class TelegramLlmHandler:
         if proposal.state is ProposalState.CANCELLED:
             return PROPOSAL_CANCELLED_TEXT
         if int(self._now().timestamp()) >= proposal.expires_unix:
+            if is_menu:
+                return menu_expired_text(proposal.expires_unix - proposal.created_unix)
             return PROPOSAL_EXPIRED_TEXT
         if command.action == "plain" and not proposal.plain_available:
             return PROPOSAL_NO_PLAIN_TEXT.format(token=proposal.token)
@@ -2039,7 +2043,8 @@ class TelegramLlmHandler:
             token = self._new_token()
         else:
             raise RuntimeError("no free proposal token")
-        proposal = Proposal(token, chat_id, kind, now, now + PROPOSAL_TTL_S, ProposalState.OPEN, **fields)
+        lifetime = MENU_PROPOSAL_TTL_S if kind is ProposalKind.MENU else PROPOSAL_TTL_S
+        proposal = Proposal(token, chat_id, kind, now, now + lifetime, ProposalState.OPEN, **fields)
         self._proposals.save(LlmState(state.provider_override, (*proposals, proposal)))
         return proposal
 

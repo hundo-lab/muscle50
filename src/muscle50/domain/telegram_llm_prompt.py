@@ -191,6 +191,16 @@ PROPOSAL_UNKNOWN_TEXT = "이 확인 명령을 찾지 못했습니다."
 PROPOSAL_USED_TEXT = "이미 처리한 제안입니다. /day로 확인하세요."
 PROPOSAL_CANCELLED_TEXT = "취소한 제안입니다."
 PROPOSAL_EXPIRED_TEXT = "이 제안은 유효 시간(60분)이 지났습니다. 다시 보내 주세요."
+
+
+def menu_expired_text(lifetime_s: int) -> str:
+    """The refusal for an expired menu proposal, with the lifetime it was stored with (4 hours since v2.4;
+    a menu from an older state file keeps its 60 minutes)."""
+    hours = lifetime_s >= 2 * 3600 and lifetime_s % 3600 == 0
+    span = f"{lifetime_s // 3600}시간" if hours else f"{lifetime_s // 60}분"
+    return f"이 메뉴 제안은 유효 시간({span})이 지났습니다. 메뉴 사진을 다시 보내거나 다시 물어봐 주세요."
+
+
 PROPOSAL_NO_PLAIN_TEXT = "이 제안에는 추정값이 없습니다. 기록하려면 /ok_{token}을 보내세요."
 PROPOSAL_WRONG_KIND_TEXT = "이 명령은 이 제안에 쓸 수 없습니다."
 MENU_NUMBER_UNKNOWN_TEXT = "그 번호의 메뉴가 없습니다."

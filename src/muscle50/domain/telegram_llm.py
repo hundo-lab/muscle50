@@ -614,6 +614,9 @@ def parse_llm_command(text: str, *, bot_username: str) -> ProposalCommand | LlmC
 # --- proposals and state --------------------------------------------------------------------------------
 
 PROPOSAL_TTL_S = 60 * 60
+MENU_PROPOSAL_TTL_S = 4 * 60 * 60
+"""v2.4: a menu capture or suggestion stays pickable (`/eat_`, or by name) for 4 hours; meal and edit proposals
+keep `PROPOSAL_TTL_S`. `recent_menu` offers a menu for the same time (`MENU_WINDOW_S` is this constant)."""
 PROPOSAL_PRUNE_AFTER_S = 24 * 60 * 60
 MAX_PROPOSALS = 50
 

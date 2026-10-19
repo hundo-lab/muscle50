@@ -889,7 +889,7 @@ def test_the_menu_is_offered_for_four_hours_after_it_was_made_and_not_when_cance
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
 ) -> None:
     show_menu(monkeypatch, capsys, home)
-    # 118 minutes later: the menu proposal itself expired at 60 minutes, but it is still a recent menu
+    # 118 minutes later: since v2.4 the menu proposal itself is valid for 4 hours, like the recent menu window
     later = bot.NOW + timedelta(minutes=118)
     monkeypatch.setattr(cli, "_now", lambda: later)
     update = IncomingUpdate(2, IncomingMessage(bot.ALLOWED, "얼큰순살감자탕 먹었어", int(later.timestamp())))
