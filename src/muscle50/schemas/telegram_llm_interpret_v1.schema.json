@@ -26,6 +26,7 @@
         "menu_suggest",
         "meal_edit",
         "chat",
+        "sync_request",
         "unclear"
       ]
     },

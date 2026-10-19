@@ -67,6 +67,7 @@ _INTENT_NAMES = {
     "menu_suggest": "메뉴 제안",
     "meal_edit": "식사 수정",
     "chat": "잡담",
+    "sync_request": "동기화 안내",
     "unclear": "모름",
     "eat": "메뉴 고르기",
     "fix": "고치기 선택",

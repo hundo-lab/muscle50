@@ -196,6 +196,7 @@ from muscle50.domain.telegram_llm_prompt import (
     REASON_NO_AMOUNT,
     REASON_NOT_IN_CATALOG,
     SEQUENCE_HINT,
+    SYNC_HINT_TEXT,
     UNCLEAR_TEXT,
     PromptTask,
     build_prompt,
@@ -573,6 +574,9 @@ class TelegramLlmHandler:
             self._question(chat_id, words, interpretation, exchange)
         elif intent in (Intent.MENU_SUGGEST, Intent.MENU):
             self._suggest(chat_id, words, interpretation, exchange)
+        elif intent is Intent.SYNC_REQUEST:
+            # Nothing runs and nothing is stored: only the buttons for `/daily` and `/refresh`.
+            exchange.reply = ReplyText(SYNC_HINT_TEXT, ("/daily", "/refresh"))
         elif intent is Intent.CHAT:
             reply = interpretation.reply
             if reply is None or unknown_numbers(reply, allowed_numbers([])):

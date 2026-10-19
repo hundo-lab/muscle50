@@ -37,6 +37,7 @@ class Intent(StrEnum):
     MENU_SUGGEST = "menu_suggest"
     MEAL_EDIT = "meal_edit"
     CHAT = "chat"
+    SYNC_REQUEST = "sync_request"
     UNCLEAR = "unclear"
 
 

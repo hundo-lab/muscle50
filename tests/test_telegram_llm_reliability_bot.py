@@ -16,11 +16,13 @@ import test_telegram_bot as v1
 import test_telegram_llm_bot as bot
 import test_telegram_llm_meals_bot as meals
 from test_telegram_llm_corrections_bot import STEW_MENU, show_menu
+from test_telegram_llm_domain import interpretation
 
 import muscle50.cli as cli
 from muscle50.application.telegram_bot import IncomingMessage, IncomingUpdate
 from muscle50.domain.telegram_llm import MENU_PROPOSAL_TTL_S
-from muscle50.domain.telegram_llm_prompt import PROPOSAL_EXPIRED_TEXT, menu_expired_text
+from muscle50.domain.telegram_llm_prompt import PROPOSAL_EXPIRED_TEXT, SYNC_HINT_TEXT, menu_expired_text
+from muscle50.infrastructure.telegram.cli_runner import InProcessCliRunner
 
 home = bot.home  # the autouse fixture of the bot tests: temporary MUSCLE50_HOME, fake clock, no network, no real sleep
 _isolated = v1.sleeps
@@ -114,3 +116,46 @@ def test_a_menu_from_a_v2_3_state_file_keeps_its_sixty_minutes_and_says_so(
 
 def test_the_menu_fixture_is_the_one_the_corrections_tests_use() -> None:
     assert STEW_MENU["photo_kind"] == "menu_capture"
+
+
+# --- AC8: "동기화 해줘" gets the /daily and /refresh hint and nothing runs ---------------------------------
+
+SYNC_REQUEST = interpretation(
+    intent="sync_request", items=[], tense="none", meal_type=None, memory_summary="동기화 요청"
+)
+SYNC_REPLY = "동기화는 /daily 로 합니다. 운동 하나만 다시 받으려면 /refresh 를 쓰세요.\n/daily\n/refresh"
+
+
+def test_a_sync_request_gets_the_hint_and_runs_and_stores_nothing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    bot._catalog(capsys)
+    bot._llm_config(home)
+    before = bot._tables(home)
+
+    def no_cli(self: object, argv: object) -> object:
+        pytest.fail("a sync request must not run any CLI command")
+
+    monkeypatch.setattr(InProcessCliRunner, "run", no_cli)
+    provider = bot.FakeProvider(SYNC_REQUEST)
+    replies, _err, fake = bot._session(monkeypatch, capsys, provider, bot.text(1, "동기화 해줘"))
+    assert replies == [SYNC_REPLY] and SYNC_HINT_TEXT in replies[0]
+    assert fake.sent[0][1].endswith("</pre>\n/daily\n/refresh")  # tappable command lines after the body
+    assert bot._tables(home) == before
+    assert not (home / "config" / "telegram_llm_state.json").exists()  # no proposal
+    (entry,) = bot._history(home)
+    assert (entry["intent"], entry["reply"]) == ("sync_request", SYNC_REPLY) and entry["proposal"] is None
+    assert "동기화 안내" in bot._session(monkeypatch, capsys, bot.FakeProvider(), bot.text(2, "/history"))[0][0]
+
+
+def test_the_prompts_carry_the_sync_rules(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    bot._catalog(capsys)
+    bot._llm_config(home)
+    provider = bot.FakeProvider(SYNC_REQUEST)
+    bot._session(monkeypatch, capsys, provider, bot.text(1, "동기화 해줘"))
+    assert "sync_request(" in provider.requests[0][0].prompt
+    from muscle50.domain.telegram_llm_prompt import TASKS, PromptTask
+
+    assert "/daily 로 동기화하라고 안내합니다" in TASKS[PromptTask.ANSWER]
