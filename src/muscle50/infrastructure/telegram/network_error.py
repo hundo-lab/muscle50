@@ -42,8 +42,6 @@ def describe_os_error(exc: OSError) -> str:
 
 
 def _describe(exc: BaseException, depth: int) -> str:
-    if isinstance(exc, urllib.error.HTTPError):
-        return f"HTTP {exc.code}"
     if isinstance(exc, urllib.error.URLError):
         reason = exc.reason
         if isinstance(reason, BaseException) and depth > 0:
