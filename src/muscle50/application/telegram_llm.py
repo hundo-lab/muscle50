@@ -218,6 +218,7 @@ from muscle50.domain.telegram_llm_prompt import (
     unregistered_unit_hint,
     unregistered_unit_reason,
 )
+from muscle50.domain.telegram_llm_summary import MealSummary, SummaryVerb, edit_verb, parse_meal_summary
 
 HISTORY_DEFAULT = 5
 HISTORY_MAX = 20
@@ -419,6 +420,14 @@ class LlmReplies(Protocol):
     def item_candidates(self, lines: Sequence[str]) -> ReplyText: ...
 
     def history(self, entries: Sequence[dict[str, Any]]) -> ReplyText: ...
+
+    def recorded(self, summary: MealSummary, verb: SummaryVerb) -> str:
+        """The short Korean reply after a recorded or edited meal (v2.4)."""
+        ...
+
+    def voided(self, meal_id: str) -> str:
+        """The short Korean reply after a void (v2.4)."""
+        ...
 
 
 @dataclass
@@ -1667,7 +1676,11 @@ class TelegramLlmHandler:
         def on_outcome(outcome: CommandOutcome, text: str) -> str:
             meal_id = proposal.meal_id if edit else _recorded_meal_id(outcome.stdout)
             if outcome.exit_code == 0:
-                if edit and meal_id is not None:
+                verb = edit_verb(argv) if edit else SummaryVerb.RECORDED
+                short = self._short_reply(chat_id, meal_id, verb)
+                if short is not None:
+                    text = short  # replaces the CLI's English text (and its undo line)
+                elif edit and meal_id is not None:
                     text = f"{text}\n확인: /show {meal_id}"
                 totals = self._totals_line(chat_id, proposal.day)
                 if totals is not None:
@@ -1715,8 +1728,9 @@ class TelegramLlmHandler:
             failed_code = 0
             for meal, step in zip(meals, steps, strict=False):
                 if step.ok:
-                    blocks.append(step.text)
                     meal_id = _recorded_meal_id(step.outcome.stdout) if step.outcome is not None else None
+                    short = self._short_reply(chat_id, meal_id, SummaryVerb.RECORDED)
+                    blocks.append(short if short is not None else step.text)
                     if meal_id is not None:
                         recorded.append(meal_id)
                 else:
@@ -1754,6 +1768,26 @@ class TelegramLlmHandler:
             return text
 
         return RunConfirmedSequence(invocations, on_done)
+
+    def _short_reply(self, chat_id: int, meal_id: str | None, verb: SummaryVerb) -> str | None:
+        """v2.4: the short Korean summary of the meal a successful command just wrote, or None to keep the CLI text.
+
+        The meal is read again (`nutrition meal show --json`, the read path `status` and `day` use) so the numbers
+        are the stored ones. A void needs no read. Any failure to read or to understand the document is None.
+        """
+        if meal_id is None:
+            return None
+        if verb is SummaryVerb.VOIDED:
+            return self._replies.voided(meal_id)
+        document = self._read_json(chat_id, ("nutrition", "meal", "show", meal_id, "--json"))
+        if document is None:
+            return None
+        try:
+            summary = parse_meal_summary(document)
+            return self._replies.recorded(summary, verb) if summary is not None else None
+        except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+            self._log(f"chat {chat_id}: meal summary not built ({type(exc).__name__})")
+            return None
 
     def _proposal_refusal(self, proposal: Proposal | None, command: ProposalCommand) -> str | None:
         if proposal is None:

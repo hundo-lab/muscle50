@@ -14,6 +14,7 @@ The text adds confirmed and estimated into `low~high` (one number when they agre
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any
@@ -53,9 +54,22 @@ def today_totals(status_doc: Any, day_doc: Any) -> TodayTotals:
         raise ValueError("meal_count must be an integer")
     nutrients = _object(status["nutrients"])
     items = [item for meal in _list(_object(day_doc)["meals"]) for item in _list(_object(meal)["items"])]
+    totals = nutrient_totals(items, lambda nutrient: _decimal(_object(nutrients[nutrient.value])["known_subtotal"]))
+    return TodayTotals(meal_count, totals)
+
+
+def nutrient_totals(
+    items: Sequence[Any], confirmed_of: Callable[[NutrientField], Decimal | None]
+) -> tuple[NutrientTotal, ...]:
+    """The per-nutrient totals of CLI item documents (`items[].nutrients`), shared by the day and a single meal.
+
+    ``confirmed_of`` gives the confirmed subtotal of a nutrient (the CLI's `known_subtotal`); the estimates and the
+    unknown count come from the items: an item with a value is confirmed, one with only a range is an estimate and
+    one with neither is counted as unknown, never as 0.
+    """
     totals = []
     for nutrient in NutrientField:
-        confirmed = _decimal(_object(nutrients[nutrient.value])["known_subtotal"])
+        confirmed = confirmed_of(nutrient)
         lows: list[Decimal] = []
         highs: list[Decimal] = []
         unknown = 0
@@ -82,7 +96,7 @@ def today_totals(status_doc: Any, day_doc: Any) -> TodayTotals:
                 unknown,
             )
         )
-    return TodayTotals(meal_count, tuple(totals))
+    return tuple(totals)
 
 
 TODAY_LABEL = "오늘"

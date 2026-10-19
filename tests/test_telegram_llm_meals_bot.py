@@ -168,7 +168,9 @@ def test_ok_runs_one_nutrition_log_per_meal_and_the_rows_equal_the_cli(
     assert len(replies) == 1
     reply = replies[0]
     for meal_id in ("2026-10-06-breakfast-1", "2026-10-06-lunch-1", "2026-10-06-dinner-1"):
-        assert f"Recorded meal {meal_id}." in reply and f"취소: /void {meal_id}" in reply
+        # v2.4: one short Korean block per recorded meal, with its own undo and show commands
+        assert f" {meal_id} (10-06)\n" in reply and f"취소: /void {meal_id}   전체 보기: /show {meal_id}" in reply
+        assert "Recorded meal" not in reply
     assert reply.index("breakfast-1") < reply.index("lunch-1") < reply.index("dinner-1")
     assert reply.count("\n\n") >= 3 and reply.split("\n\n")[-1].startswith("오늘 누적 (추정 포함):")
     assert "~" in reply.split("\n\n")[-1]  # estimates are added into one range per nutrient
@@ -268,8 +270,10 @@ def test_a_failing_second_meal_keeps_the_first_and_does_not_run_the_third(
     replies, err, _fake = bot._session(monkeypatch, capsys, bot.FakeProvider(), bot.text(3, "/ok_7f3a"))
     (reply,) = replies
     head, failure = reply.split("실패: 점심 - ")
-    assert head.startswith("Recorded meal 2026-10-06-breakfast-1.")
-    assert head.removesuffix("\n\n").endswith("취소: /void 2026-10-06-breakfast-1")
+    assert head.startswith("기록했습니다: 아침 2026-10-06-breakfast-1 (10-06)\n")
+    assert head.removesuffix("\n\n").endswith(
+        "취소: /void 2026-10-06-breakfast-1   전체 보기: /show 2026-10-06-breakfast-1"
+    )
     assert failure.startswith("오류:")
     assert "\n실행하지 않음: 저녁\n남은 끼니는 다시 보내거나 /log로 기록하세요.\n오늘 누적:" in failure
     assert "2026-10-06-dinner" not in reply
@@ -335,7 +339,7 @@ def test_an_unexpected_exception_stops_the_sequence(
     monkeypatch.setattr(cli, "_nutrition", flaky)
     replies, err, _fake = bot._session(monkeypatch, capsys, bot.FakeProvider(), bot.text(2, "/ok_7f3a"))
     (reply,) = replies
-    assert "Recorded meal 2026-10-06-breakfast-1." in reply
+    assert "기록했습니다: 아침 2026-10-06-breakfast-1 (10-06)" in reply
     assert "실패: 점심 - " in reply and "RuntimeError" in reply and "실행하지 않음: 저녁" in reply
     assert len(calls) == 2 and "chat 111: /ok 2/3 failed with RuntimeError" in err
     assert sorted(row[0] for row in bot._tables(home)["nutrition_meals"]) == ["2026-10-06-breakfast-1"]

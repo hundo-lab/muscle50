@@ -291,7 +291,12 @@ def test_a_follow_up_after_a_record_becomes_an_edit_and_never_a_new_meal(
         "--general-estimate-ref=telegram-llm edit (claude sonnet); 라벨",
     ]
     replies, _provider = say(monkeypatch, capsys, None, 4, "/ok_91c0")
-    assert replies[0].startswith("Replaced item 1 of meal 2026-10-06-breakfast-1 with item 3.")
+    # v2.4: the short summary of the stored meal; the replaced item is item 3 (the label survives the edit)
+    assert replies[0].startswith("수정했습니다: 아침 2026-10-06-breakfast-1 (10-06)\n")
+    assert (
+        "\n3. 일반식 (메모: 깻잎닭갈비 삼각김밥 1개) - 라벨 kcal 185, 단백질 5 g, 탄수화물 37 g, 지방 2 g\n"
+        in replies[0]
+    )
     assert "\n확인: /show 2026-10-06-breakfast-1\n오늘 누적" in replies[0]
     assert {row[0] for row in bot._tables(home)["nutrition_meals"]} == {"2026-10-06-breakfast-1"}  # no second meal
     tables = bot._tables(home)
@@ -643,7 +648,8 @@ def test_fix_makes_an_edit_proposal_and_kills_the_overlap_commands(
     assert replies == [PROPOSAL_CANCELLED_TEXT]
     # confirming the fix replaces the item in the same meal: no second meal
     replies, _provider = say(monkeypatch, capsys, None, 7, "/ok_c2e1")
-    assert replies[0].startswith(f"Replaced item 1 of meal {MEAL_1} with item 3.")
+    assert replies[0].startswith(f"수정했습니다: 아침 {MEAL_1} (10-06)\n")
+    assert "\n3. 일반식 (메모: 깻잎닭갈비 삼각김밥 1개) - 추정 kcal 180~200, 단백질 5~6 g\n" in replies[0]
     assert {row[0] for row in bot._tables(home)["nutrition_meals"]} == {MEAL_1}
     shown = json.loads(bot._ok(capsys, "nutrition", "meal", "show", MEAL_1, "--json"))
     assert [item["sequence"] for item in shown["items"]] == [2, 3]
@@ -666,7 +672,7 @@ def test_ok_after_an_overlap_records_another_meal_with_additional(
 ) -> None:
     overlap_reply(monkeypatch, capsys, home, tuna_rice_ball())
     replies, _provider = say(monkeypatch, capsys, None, 4, "/ok_91c0")
-    assert replies[0].startswith("Recorded meal 2026-10-06-breakfast-2.")
+    assert replies[0].startswith("기록했습니다: 아침 2026-10-06-breakfast-2 (10-06)\n")
     assert {row[0] for row in bot._tables(home)["nutrition_meals"]} == {MEAL_1, "2026-10-06-breakfast-2"}
     replies, _provider = say(monkeypatch, capsys, None, 5, "/fix_91c0")
     assert replies == [PROPOSAL_USED_TEXT]

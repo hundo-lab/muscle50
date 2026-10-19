@@ -7,6 +7,7 @@ network), a temporary MUSCLE50_HOME and synthetic foods only.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -14,12 +15,13 @@ from typing import Any
 import pytest
 import test_telegram_bot as v1
 import test_telegram_llm_bot as bot
+import test_telegram_llm_corrections_bot as corrections
 import test_telegram_llm_meals_bot as meals
 from test_telegram_llm_corrections_bot import STEW_MENU, show_menu
 from test_telegram_llm_domain import interpretation
 
 import muscle50.cli as cli
-from muscle50.application.telegram_bot import IncomingMessage, IncomingUpdate
+from muscle50.application.telegram_bot import CommandOutcome, IncomingMessage, IncomingUpdate
 from muscle50.domain.telegram_llm import MENU_PROPOSAL_TTL_S
 from muscle50.domain.telegram_llm_prompt import PROPOSAL_EXPIRED_TEXT, SYNC_HINT_TEXT, menu_expired_text
 from muscle50.infrastructure.telegram.cli_runner import InProcessCliRunner
@@ -260,3 +262,217 @@ def test_a_text_turn_keeps_its_exact_memory_text(
     chat = interpretation(intent="chat", items=[], tense="none", reply="네.", memory_summary="인사")
     bot._session(monkeypatch, capsys, bot.FakeProvider(chat), bot.text(1, "안녕 [사진] 이야기"))
     assert memory(home)[0]["user"] == "안녕 [사진] 이야기"
+
+
+# --- AC7: short Korean summaries after /ok, /plain, edits and voids -------------------------------------------
+
+LABEL_SAMPLE = [
+    "기록했습니다: 아침 2026-10-06-breakfast-1 (10-06)",
+    "1. 일반식 (메모: 깻잎닭갈비 삼각김밥 1개) - 라벨 kcal 185, 단백질 5 g, 탄수화물 37 g",
+    "2. 닭가슴살 (chicken-breast) 1 pack - kcal 165, 단백질 34 g, 탄수화물 0 g, 지방 2 g",
+    "이 끼니 (추정 포함): kcal 350, 단백질 39 g, 탄수화물 37 g, 지방 2 g (값 모르는 항목 1개 빠짐)",
+    "취소: /void 2026-10-06-breakfast-1   전체 보기: /show 2026-10-06-breakfast-1",
+]
+LABEL_TOTALS = [
+    "오늘 누적 (추정 포함):",
+    "  kcal 350",
+    "  단백질 39 g",
+    "  탄수화물 37 g",
+    "  지방 2 g (값 모르는 항목 1개 빠짐)",
+]
+
+
+def test_ok_of_a_label_photo_is_the_short_summary_with_the_label_marked(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    corrections.prepare(capsys, home)
+    corrections.record_label_meal(monkeypatch, capsys, home)
+    # the reply of /ok (the second message) is in the history; its text is what the user was sent
+    entry = bot._history(home)[-1]
+    assert entry["kind"] == "confirm" and entry["reply"] == "\n".join([*LABEL_SAMPLE, *LABEL_TOTALS])
+    assert entry["result"] == {"exit_code": 0, "meal_id": "2026-10-06-breakfast-1"}
+    assert "Recorded meal" not in entry["reply"]
+
+
+def test_the_summary_is_the_same_on_a_twin_home(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path, tmp_path: Path
+) -> None:
+    corrections.prepare(capsys, home)
+    corrections.record_label_meal(monkeypatch, capsys, home)
+    first = bot._history(home)[-1]["reply"]
+    twin = tmp_path / "twin"
+    monkeypatch.setenv("MUSCLE50_HOME", str(twin))
+    tokens = iter(["7f3a", "91c0", "c2e1"])
+    monkeypatch.setattr(cli, "_new_proposal_token", lambda: next(tokens))
+    v1._configure(twin)
+    corrections.prepare(capsys, twin)
+    corrections.record_label_meal(monkeypatch, capsys, twin)
+    assert bot._history(twin)[-1]["reply"] == first
+    assert meals.meal_tables(twin) == meals.meal_tables(home)
+
+
+def test_plain_records_without_values_and_says_so(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    corrections.prepare(capsys, home)
+    corrections.send_photo(monkeypatch, capsys, 1, corrections.label_photo())
+    replies, _err, _fake = bot._session(monkeypatch, capsys, bot.FakeProvider(), bot.text(2, "/plain_7f3a"))
+    assert replies[0].split("\n")[:5] == [
+        "기록했습니다: 아침 2026-10-06-breakfast-1 (10-06)",
+        "1. 일반식 (메모: 깻잎닭갈비 삼각김밥 1개) - 값 없음",
+        "2. 닭가슴살 (chicken-breast) 1 pack - kcal 165, 단백질 34 g, 탄수화물 0 g, 지방 2 g",
+        # one item has no value: every nutrient says so (the known part is a lower bound, never a total)
+        "이 끼니: kcal 165 (값 모르는 항목 1개 빠짐), 단백질 34 g (값 모르는 항목 1개 빠짐), "
+        "탄수화물 0 g (값 모르는 항목 1개 빠짐), 지방 2 g (값 모르는 항목 1개 빠짐)",
+        "취소: /void 2026-10-06-breakfast-1   전체 보기: /show 2026-10-06-breakfast-1",
+    ]
+
+
+def test_a_general_meal_with_no_values_never_reads_as_zero(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    corrections.prepare(capsys, home)
+    only = meals.dishes(meals.item("국밥", "lunch", estimate=meals.est((600, 700), (20, 30))))
+    bot._session(monkeypatch, capsys, bot.FakeProvider(only), bot.text(1, "점심 국밥"))
+    replies, _err, _fake = bot._session(monkeypatch, capsys, bot.FakeProvider(), bot.text(2, "/plain_7f3a"))
+    lines = replies[0].split("\n")
+    assert lines[1] == "1. 일반식 (메모: 국밥) - 값 없음"
+    assert lines[2] == "이 끼니: 값 없음 (0이 아님)"
+    assert "0 kcal" not in replies[0] and "kcal 0" not in replies[0]
+
+
+def test_a_failed_write_keeps_the_cli_error_text(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    bot._catalog(capsys)
+    bot._llm_config(home)
+    bot._session(monkeypatch, capsys, bot.FakeProvider(bot.LUNCH_MEAL), bot.text(1, "점심 닭가슴살이랑 햇반"))
+    # a lunch typed meanwhile makes the proposal's `nutrition log` refuse (a second lunch needs --additional)
+    bot._session(monkeypatch, capsys, bot.FakeProvider(), bot.text(2, "/log lunch 닭가슴살 100 g"))
+    before = meals.meal_tables(home)
+    replies, _err, _fake = bot._session(monkeypatch, capsys, bot.FakeProvider(), bot.text(3, "/ok_7f3a"))
+    assert replies[0].startswith("오류:") and "기록했습니다" not in replies[0]
+    assert meals.meal_tables(home) == before
+    assert bot._history(home)[-1]["result"]["exit_code"] == 1
+
+
+def _break_show(monkeypatch: pytest.MonkeyPatch, outcome: CommandOutcome) -> list[tuple[str, ...]]:
+    """Every `nutrition meal show` of the bot returns ``outcome``; the other commands run for real."""
+    original = InProcessCliRunner.run
+    seen: list[tuple[str, ...]] = []
+
+    def run(self: InProcessCliRunner, argv: Sequence[str]) -> CommandOutcome:
+        seen.append(tuple(argv[:3]))
+        if tuple(argv[:3]) == ("nutrition", "meal", "show"):
+            return outcome
+        return original(self, argv)
+
+    monkeypatch.setattr(InProcessCliRunner, "run", run)
+    return seen
+
+
+def test_the_cli_text_is_sent_when_the_stored_meal_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    bot._catalog(capsys)
+    bot._llm_config(home)
+    bot._session(monkeypatch, capsys, bot.FakeProvider(bot.LUNCH_MEAL), bot.text(1, "점심 닭가슴살이랑 햇반"))
+    _break_show(monkeypatch, CommandOutcome(1, "", "오류: synthetic\n"))
+    replies, _err, _fake = bot._session(monkeypatch, capsys, bot.FakeProvider(), bot.text(2, "/ok_7f3a"))
+    assert replies[0].startswith("Recorded meal 2026-10-06-lunch-1.\n")
+    assert "\n취소: /void 2026-10-06-lunch-1\n오늘 누적:" in replies[0]
+    assert "기록했습니다" not in replies[0]
+    assert bot._history(home)[-1]["result"] == {"exit_code": 0, "meal_id": "2026-10-06-lunch-1"}
+
+
+def test_an_unexpected_shape_falls_back_to_the_cli_text_and_logs_the_type(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    bot._catalog(capsys)
+    bot._llm_config(home)
+    bot._session(monkeypatch, capsys, bot.FakeProvider(bot.LUNCH_MEAL), bot.text(1, "점심 닭가슴살이랑 햇반"))
+    _break_show(monkeypatch, CommandOutcome(0, json.dumps({"meal_id": "x"}), ""))
+    replies, err, _fake = bot._session(monkeypatch, capsys, bot.FakeProvider(), bot.text(2, "/ok_7f3a"))
+    assert replies[0].startswith("Recorded meal 2026-10-06-lunch-1.\n")
+    assert "chat 111: meal summary not built (KeyError)" in err
+
+
+def test_remove_item_and_a_meal_type_change_are_edits(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    bot._catalog(capsys)
+    bot._llm_config(home)
+    bot._ok(
+        capsys,
+        *(
+            "nutrition",
+            "log",
+            "--meal",
+            "lunch",
+            "--item",
+            "chicken-breast",
+            "1",
+            "pack",
+            "--item",
+            "햇반",
+            "1",
+            "pack",
+        ),
+    )
+    provider = bot.FakeProvider(
+        bot._edit("remove_item", target_food_text="햇반"),
+        bot._edit("change_meal_type", new_meal_type="dinner", target_food_text=None),
+    )
+    bot._session(monkeypatch, capsys, provider, bot.text(1, "점심 햇반 빼줘"), bot.text(2, "점심 아니고 저녁"))
+    replies, _err, _fake = bot._session(
+        monkeypatch, capsys, bot.FakeProvider(), bot.text(3, "/ok_7f3a"), bot.text(4, "/ok_91c0")
+    )
+    assert replies[0].split("\n")[:5] == [
+        "수정했습니다: 점심 2026-10-06-lunch-1 (10-06)",
+        "1. 닭가슴살 (chicken-breast) 1 pack - kcal 165, 단백질 34 g, 탄수화물 0 g, 지방 2 g",
+        "이 끼니: kcal 165, 단백질 34 g, 탄수화물 0 g, 지방 2 g",
+        "확인: /show 2026-10-06-lunch-1",
+        "오늘 누적:",
+    ]
+    assert replies[1].startswith("수정했습니다: 저녁 2026-10-06-lunch-1 (10-06)\n1. 닭가슴살")
+
+
+def test_void_is_confirmed_without_reading_the_meal(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    bot._catalog(capsys)
+    bot._llm_config(home)
+    bot._ok(capsys, "nutrition", "log", "--meal", "snack", "--item", "햇반", "1", "pack")
+    bot._session(monkeypatch, capsys, bot.FakeProvider(bot._edit("void_meal")), bot.text(1, "간식 취소"))
+    seen = _break_show(monkeypatch, CommandOutcome(1, "", "must not be asked\n"))
+    replies, _err, _fake = bot._session(monkeypatch, capsys, bot.FakeProvider(), bot.text(2, "/ok_7f3a"))
+    assert replies[0].split("\n")[:3] == [
+        "취소(void)했습니다: 2026-10-06-snack-1",
+        "확인: /show 2026-10-06-snack-1",
+        "오늘 누적: 오늘 기록 없음 (0이 아님)",
+    ]
+    assert ("nutrition", "meal", "show") not in seen
+    assert bot._history(home)[-1]["result"] == {"exit_code": 0, "meal_id": "2026-10-06-snack-1"}
+
+
+def test_fix_confirms_as_an_edit(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    corrections.overlap_reply(monkeypatch, capsys, home, corrections.tuna_rice_ball())
+    corrections.say(monkeypatch, capsys, None, 4, "/fix_91c0")
+    replies, _provider = corrections.say(monkeypatch, capsys, None, 5, "/ok_c2e1")
+    assert replies[0].startswith("수정했습니다: 아침 2026-10-06-breakfast-1 (10-06)\n")
+    assert "\n확인: /show 2026-10-06-breakfast-1\n오늘 누적" in replies[0]
+    assert bot._history(home)[-1]["kind"] == "edit"
+
+
+def test_typed_log_keeps_the_cli_text_with_the_llm_on(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    bot._catalog(capsys)
+    bot._llm_config(home)
+    replies, _err, _fake = bot._session(
+        monkeypatch, capsys, bot.FakeProvider(), bot.text(1, "/log lunch 닭가슴살 150 g")
+    )
+    assert replies[0].startswith("Recorded meal 2026-10-06-lunch-1.\n")
+    assert replies[0].endswith("\n취소: /void 2026-10-06-lunch-1") and "오늘 누적" not in replies[0]

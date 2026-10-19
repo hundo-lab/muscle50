@@ -225,6 +225,13 @@ def _history(root: Path) -> list[dict[str, Any]]:
 
 
 LUNCH_MEAL = meal(_item("닭가슴살", 1, "pack"), _item("햇반", 1, "pack", quantity_estimated=True))
+LUNCH_SUMMARY = [
+    "기록했습니다: 점심 2026-10-06-lunch-1 (10-06)",
+    "1. 닭가슴살 (chicken-breast) 1 pack - kcal 165, 단백질 34 g, 탄수화물 0 g, 지방 2 g",
+    "2. 햇반 (hetbahn-210) 1 pack - kcal 315, 단백질 5 g, 탄수화물 70 g, 지방 1 g",
+    "이 끼니: kcal 480, 단백질 39 g, 탄수화물 70 g, 지방 3 g",
+    "취소: /void 2026-10-06-lunch-1   전체 보기: /show 2026-10-06-lunch-1",
+]
 LUNCH_PROPOSAL = "\n".join(
     [
         "이렇게 기록할까요? (점심, 10-06)",
@@ -263,14 +270,14 @@ def test_meal_proposal_writes_nothing_until_ok_then_rows_equal_cli(
     twin = tmp_path / "twin"
     monkeypatch.setenv("MUSCLE50_HOME", str(twin))
     _catalog(capsys)
-    cli_reply = _ok(capsys, *LUNCH_ARGV)
+    _ok(capsys, *LUNCH_ARGV)
     twin_rows = {name: rows for name, rows in _tables(twin).items() if name.startswith("nutrition_meal")}
     assert meal_rows == twin_rows
     assert _tables(twin)["nutrition_facts"] == after["nutrition_facts"]
+    # v2.4: the confirmation is the short Korean summary of the stored meal, not the CLI's English text.
     expected = "\n".join(
         [
-            cli_reply.removesuffix("\n"),
-            "취소: /void 2026-10-06-lunch-1",
+            *LUNCH_SUMMARY,
             "오늘 누적:",
             "  kcal 480",
             "  단백질 39 g",
@@ -374,7 +381,9 @@ def test_meal_slot_from_the_time_and_duplicate_guard(
         "(끼니: 지금 시각 기준)",
     ]
     replies, _err, _fake = _session(monkeypatch, capsys, FakeProvider(), text(2, "/ok_7f3a"))
-    assert replies[0].startswith("Recorded meal 2026-10-06-lunch-2.")
+    assert replies[0].startswith(
+        "기록했습니다: 점심 2026-10-06-lunch-2 (10-06)\n1. 닭가슴살 (chicken-breast) 1 pack - "
+    )
 
 
 # --- AC3: at most once ----------------------------------------------------------------------------------
@@ -449,7 +458,8 @@ def test_yesterday_uses_the_bots_date(
     replies, _err, _fake = _session(monkeypatch, capsys, FakeProvider(document), text(1, "어제 저녁 햇반"))
     assert replies[0].startswith("이렇게 기록할까요? (저녁, 10-05)")
     replies, _err, _fake = _session(monkeypatch, capsys, FakeProvider(), text(2, "/ok_7f3a"))
-    assert replies[0].startswith("Recorded meal 2026-10-05-dinner-1.")
+    assert replies[0].startswith("기록했습니다: 저녁 2026-10-05-dinner-1 (10-05)\n1. 햇반 (hetbahn-210) 1 pack - ")
+    assert "\n10-05 누적:\n" in replies[0]  # the logged day's own totals, as before
     other = meal(_item("햇반", 1, "pack"), date_expression="other")
     replies, _err, _fake = _session(monkeypatch, capsys, FakeProvider(other), text(3, "지난 주 금요일"))
     assert replies[0].startswith("날짜를 정하지 못했습니다.")
@@ -737,7 +747,10 @@ def test_menu_ranked_by_remaining_then_eat_then_ok_or_plain(
     # The menu stays open: another pick, recorded without values this time.
     replies, _err, _fake = _session(monkeypatch, capsys, FakeProvider(), text(5, "/eat_7f3a_1"), text(6, "/plain_44d2"))
     assert "이미 기록된 점심(2026-10-06-lunch-1)이 있어 하나 더 기록합니다." in replies[0]
-    assert replies[1].startswith("Recorded meal 2026-10-06-lunch-2.")
+    assert replies[1].startswith("기록했습니다: 점심 2026-10-06-lunch-2 (10-06)\n")
+    assert (
+        "- 추정 " not in replies[1] and "일반식 (메모: 한식 제육볶음, 잡곡밥) - 값 없음" in replies[1]
+    )  # /plain: no values
     plain = json.loads(_ok(capsys, "nutrition", "meal", "show", "2026-10-06-lunch-2", "--json"))
     assert plain["items"][0]["facts"] == [] and plain["items"][0]["note"] == "한식 제육볶음, 잡곡밥"
 
@@ -842,7 +855,7 @@ def test_edit_change_quantity_runs_replace_item_after_ok_once(
         "고치기: /ok_7f3a   취소: /no_7f3a"
     ]
     replies, _err, _fake = _session(monkeypatch, capsys, FakeProvider(), text(2, "/ok_7f3a"), text(3, "/ok_7f3a"))
-    assert replies[0].startswith("Replaced item 1 of meal 2026-10-06-lunch-1 with item 3.")
+    assert replies[0].startswith("수정했습니다: 점심 2026-10-06-lunch-1 (10-06)\n")
     assert "\n확인: /show 2026-10-06-lunch-1\n오늘 누적:" in replies[0]
     assert replies[1] == PROPOSAL_USED_TEXT
     assert _history(home)[-2]["kind"] == "edit"
@@ -878,8 +891,11 @@ def test_edit_void_and_meal_type(
     assert "간식 2026-10-06-snack-1: 끼니 간식 → 저녁" in replies[0]
     assert "간식 2026-10-06-snack-1 기록 취소(void)" in replies[1]
     replies, _err, _fake = _session(monkeypatch, capsys, FakeProvider(), text(3, "/ok_7f3a"), text(4, "/ok_91c0"))
-    assert replies[0].startswith("Edited meal 2026-10-06-snack-1: type snack -> dinner.")
-    assert replies[1].startswith("Voided meal 2026-10-06-snack-1.")
+    assert replies[0].startswith("수정했습니다: 저녁 2026-10-06-snack-1 (10-06)\n")
+    assert replies[0].endswith(
+        "\n확인: /show 2026-10-06-snack-1\n오늘 누적:\n  kcal 315\n  단백질 5 g\n  탄수화물 70 g\n  지방 1 g"
+    )
+    assert replies[1].startswith("취소(void)했습니다: 2026-10-06-snack-1\n확인: /show 2026-10-06-snack-1")
 
 
 def test_edit_refused_while_migration_pending(

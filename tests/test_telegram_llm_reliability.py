@@ -6,8 +6,10 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from importlib.resources import files
+from typing import Any
 
 import pytest
+import test_llm_today_totals as totals_tests
 from test_telegram_llm_domain import interpretation
 
 from muscle50.domain.telegram_llm import (
@@ -27,6 +29,10 @@ from muscle50.domain.telegram_llm_photo import (
     photo_outcome_words,
 )
 from muscle50.domain.telegram_llm_prompt import PROPOSAL_EXPIRED_TEXT, menu_expired_text
+from muscle50.domain.telegram_llm_summary import SummaryVerb, edit_verb, parse_meal_summary
+from muscle50.presentation.telegram_llm_summary import render_meal_summary, render_voided
+
+home = totals_tests.home  # the autouse fixture of the day-totals tests: a temporary MUSCLE50_HOME and fixed clock
 
 # --- AC6: the menu time-to-live ---
 
@@ -147,3 +153,134 @@ def test_album_partial_line() -> None:
     assert album_partial_line(5, 4) == "사진 5장 중 4장만 읽었습니다"
     assert album_partial_line(2, 2) is None
     assert album_partial_line(1, 1) is None
+
+
+# --- AC7: the summary of a stored meal (documents made by the real CLI on a temporary home) ---
+
+DAY = totals_tests.DAY
+MEAL = f"{DAY}-lunch-1"
+
+
+def _shown(capsys: pytest.CaptureFixture[str], meal_id: str = MEAL) -> Any:
+    return totals_tests._cli(capsys, "nutrition", "meal", "show", meal_id, "--json")
+
+
+def _log_lunch(capsys: pytest.CaptureFixture[str], *entries: str) -> None:
+    totals_tests._log(capsys, "lunch", *entries)
+
+
+def _rendered(capsys: pytest.CaptureFixture[str], verb: SummaryVerb = SummaryVerb.RECORDED) -> list[str]:
+    summary = parse_meal_summary(_shown(capsys))
+    assert summary is not None
+    return render_meal_summary(summary, verb).split("\n")
+
+
+def test_a_catalog_item_and_a_label_general_item(capsys: pytest.CaptureFixture[str]) -> None:
+    totals_tests._cli(capsys, "nutrition", "food", "add", *totals_tests.CHICKEN)
+    _log_lunch(
+        capsys,
+        *("--general", "--general-note=깻잎닭갈비 삼각김밥 1개"),
+        "--general-estimate=visual_estimate:kcal=185-185,protein=5-5,carbs=37-37",
+        "--general-estimate-ref=telegram-llm photo sha256:abc (claude sonnet); 라벨",
+        *("--item", "chicken-breast", "100", "g"),
+    )
+    assert _rendered(capsys) == [
+        f"기록했습니다: 점심 {MEAL} (10-12)",
+        "1. 일반식 (메모: 깻잎닭갈비 삼각김밥 1개) - 라벨 kcal 185, 단백질 5 g, 탄수화물 37 g",
+        "2. 닭가슴살 (chicken-breast) 100 g - kcal 110, 단백질 23.3 g, 탄수화물 0 g",
+        "이 끼니 (추정 포함): kcal 295, 단백질 28.3 g, 탄수화물 37 g, 지방 알 수 없음 (값 모르는 항목 2개 빠짐)",
+        f"취소: /void {MEAL}   전체 보기: /show {MEAL}",
+    ]
+
+
+def test_a_range_without_the_label_marker_is_an_estimate_and_a_real_range_is_one_too(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _log_lunch(
+        capsys,
+        *("--general", "--general-note=국밥", "--general-estimate=visual_estimate:kcal=700-950,protein=30-45"),
+        *("--general", "--general-note=김밥", "--general-estimate=visual_estimate:kcal=300-300"),
+    )
+    lines = _rendered(capsys)
+    assert lines[1:3] == [
+        "1. 일반식 (메모: 국밥) - 추정 kcal 700~950, 단백질 30~45 g",
+        "2. 일반식 (메모: 김밥) - 추정 kcal 300",  # a point range without the label marker is still an estimate
+    ]
+    assert lines[3] == (
+        "이 끼니 (추정 포함): kcal 1000~1250, 단백질 30~45 g (값 모르는 항목 1개 빠짐), "
+        "탄수화물 알 수 없음 (값 모르는 항목 2개 빠짐), 지방 알 수 없음 (값 모르는 항목 2개 빠짐)"
+    )
+
+
+def test_a_general_item_without_values_is_no_value_and_a_meal_of_only_those_is_not_zero(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _log_lunch(capsys, "--general", "--general-note=모름")
+    lines = _rendered(capsys)
+    assert lines[1] == "1. 일반식 (메모: 모름) - 값 없음"
+    assert lines[2] == "이 끼니: 값 없음 (0이 아님)"
+    _log_lunch_additional = totals_tests._cli(
+        capsys, "nutrition", "log", "--date", DAY, "--meal", "dinner", "--general"
+    )
+    assert "dinner-1" in _log_lunch_additional
+    nameless = _shown(capsys, f"{DAY}-dinner-1")
+    summary = parse_meal_summary(nameless)
+    assert summary is not None and summary.items[0].text == "일반식" and summary.items[0].values == ()
+
+
+def test_a_value_zero_is_shown_as_zero_and_a_missing_one_is_not(capsys: pytest.CaptureFixture[str]) -> None:
+    totals_tests._cli(capsys, "nutrition", "food", "add", *totals_tests.CHICKEN)
+    _log_lunch(capsys, "--item", "chicken-breast", "100", "g")
+    lines = _rendered(capsys)
+    assert lines[1] == "1. 닭가슴살 (chicken-breast) 100 g - kcal 110, 단백질 23.3 g, 탄수화물 0 g"  # fat is unknown
+    assert "지방" not in lines[1]
+    assert lines[2] == "이 끼니: kcal 110, 단백질 23.3 g, 탄수화물 0 g, 지방 알 수 없음 (값 모르는 항목 1개 빠짐)"
+
+
+def test_the_cli_rounding_is_used_34_95_reads_35(capsys: pytest.CaptureFixture[str]) -> None:
+    totals_tests._cli(capsys, "nutrition", "food", "add", *totals_tests.CHICKEN)
+    _log_lunch(capsys, "--item", "chicken-breast", "150", "g")
+    lines = _rendered(capsys)
+    assert lines[1] == "1. 닭가슴살 (chicken-breast) 150 g - kcal 165, 단백질 35 g, 탄수화물 0 g"
+
+
+def test_an_edit_and_a_voided_meal(capsys: pytest.CaptureFixture[str]) -> None:
+    totals_tests._cli(capsys, "nutrition", "food", "add", *totals_tests.CHICKEN)
+    _log_lunch(capsys, "--item", "chicken-breast", "100", "g")
+    assert _rendered(capsys, SummaryVerb.EDITED)[-1] == f"확인: /show {MEAL}"
+    totals_tests._cli(capsys, "nutrition", "meal", "void", MEAL)
+    assert parse_meal_summary(_shown(capsys)) is None
+    assert render_voided(MEAL) == f"취소(void)했습니다: {MEAL}\n확인: /show {MEAL}"
+
+
+def test_the_meal_totals_equal_the_days_totals_of_a_day_with_that_one_meal(capsys: pytest.CaptureFixture[str]) -> None:
+    totals_tests._cli(capsys, "nutrition", "food", "add", *totals_tests.CHICKEN)
+    _log_lunch(
+        capsys,
+        *("--item", "chicken-breast", "150", "g"),
+        *("--general", "--general-note=국밥", "--general-estimate=visual_estimate:kcal=700-950,protein=30-45"),
+        *("--general", "--general-note=모름"),
+    )
+    summary = parse_meal_summary(_shown(capsys))
+    assert summary is not None
+    assert summary.totals == totals_tests._totals(capsys)
+    assert summary.totals.meal_count == 1
+
+
+def test_an_unexpected_shape_raises_and_never_guesses() -> None:
+    cases: list[Any] = [
+        {},
+        {"meal_id": "x"},
+        [],
+        {"meal_id": "x", "meal_type": "lunch", "eaten_at": "2026-10-12T12:00:00+09:00", "items": "no", "total": {}},
+    ]
+    for broken in cases:
+        with pytest.raises((KeyError, TypeError, ValueError)):
+            parse_meal_summary(broken)
+
+
+def test_edit_verb_by_the_command() -> None:
+    assert edit_verb(("nutrition", "meal", "void", "m")) is SummaryVerb.VOIDED
+    for name in ("replace-item", "add-item", "remove-item", "edit"):
+        assert edit_verb(("nutrition", "meal", name, "m")) is SummaryVerb.EDITED
+    assert edit_verb(()) is SummaryVerb.EDITED

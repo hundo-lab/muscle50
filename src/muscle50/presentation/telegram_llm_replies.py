@@ -41,7 +41,9 @@ from muscle50.domain.telegram_llm_prompt import (
     superseded_line,
     web_search_line,
 )
+from muscle50.domain.telegram_llm_summary import MealSummary, SummaryVerb
 from muscle50.presentation.telegram_format import BotReply, reply_messages
+from muscle50.presentation.telegram_llm_summary import render_meal_summary, render_voided
 
 _NUTRIENT_NAMES = {
     NutrientField.CALORIES_KCAL: "kcal",
@@ -92,6 +94,12 @@ class TelegramLlmReplies:
 
     def edit(self, view: EditView) -> ReplyText:
         return ReplyText(f"이렇게 고칠까요?\n{view.change}", (f"고치기: /ok_{view.token}   취소: /no_{view.token}",))
+
+    def recorded(self, summary: MealSummary, verb: SummaryVerb) -> str:
+        return render_meal_summary(summary, verb)
+
+    def voided(self, meal_id: str) -> str:
+        return render_voided(meal_id)
 
     def candidates(self, meal_ids: Sequence[str]) -> ReplyText:
         lines = ["어느 식사(또는 음식)인지 하나로 정하지 못해 아무것도 바꾸지 않았습니다. 후보:"]
