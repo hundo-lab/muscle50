@@ -1,7 +1,7 @@
 ---
 id: telegram-llm-reliability
 title: Telegram LLM Reliability and Replies v2.4
-status: draft
+status: integrated
 migration: none
 output_change: breaking
 user_gates: [design, integration]
@@ -111,3 +111,15 @@ telegram: network error (WinError 10054 connection reset by remote host); retryi
 - 앨범이 2초 넘게 나뉘어 오면 늦게 온 사진은 따로 해석된다.
 - Windows 창 닫힘 기록은 최선 노력이다. PC가 꺼지거나 강제 종료되면 마지막 alive 시각으로만 알 수 있다.
 - 후속 후보: 확인 뒤 `/daily` 실행, 입력한 명령의 대화 기록.
+- 구현자·검증자가 보고한 한계:
+  - 앨범의 늦게 온 사진(약 2초 뒤 또는 4장 초과)은 따로 해석된다. 앨범 모으는 동안 같이 가져온 다른 메시지는 Telegram에 미리 확인(ack)되므로,
+    그 사이 bot이 강제 종료되거나 Ctrl+C가 오면 그 메시지는 다시 실행되지 않고 사라진다(두 번 실행되지는 않는다).
+  - 읽지 못한 사진도 `keep_photos`가 켜져 있으면 전처럼 보관된다(이 기능 이전과 같음). 해석 실패 때 쓰지 않는 것은 DB, 제안, 상태 파일이다.
+  - 실행 기록은 콘솔 줄을 그대로 따라 쓰므로, 예상 못 한 오류의 traceback 마지막 줄(`str(exc)`)에 예외 문구가 들어갈 수 있다(AC5와의 긴장은 설계에서
+    승인했고 docs에 known issue로 적었다). token은 가려진다. 구체적으로 메시지 원문이 들어가는 경로는 찾지 못했다.
+  - `alive` 줄은 루프가 돌 때 확인하므로 긴 LLM 호출 중에는 비어 있을 수 있다. 메모리 파일(`llm_memory_store`)에는 `os.replace` 재시도를 넣지 않았다.
+  - 프롬프트로만 지키는 규칙(운동 질문에서 `/daily` 안내)은 모델이 건너뛸 수 있고, `sync_request` 분류는 문장 두 개로만 확인했다.
+  - 라벨 판별은 저장된 근거 문구의 `; 라벨`을 읽으므로 근거 형식이 바뀌면 `추정`으로 보인다. 여러 영양소가 모르는 `이 끼니` 줄은 길어질 수 있다.
+  - 아직 하지 않은 수동 확인(자동화 불가, 필수 게이트 아님): 실제 Telegram 앨범 두 장, 창을 닫을 때 `console_event` 줄, 30분 뒤 `alive` 줄.
+  - 구현 중 사고: v2.4 테스트 하나가 실제 홈에 `telegram\run-2026-10.log`를 쓰고 세션 출력에 bot token이 찍혔다. `tests/conftest.py`의 자동 격리 fixture로
+    고쳤다(운영 데이터 변경 없음). 이 파일을 지울지와 **token 교체**는 사용자가 정할 일로 남아 있다.

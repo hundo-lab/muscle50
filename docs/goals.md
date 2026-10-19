@@ -48,7 +48,7 @@ muscle50이 무엇을 향해 가는지 적은 문서다. 기능을 고르거나 
 - Telegram 등 채팅으로 묻기: "오늘 뭐 운동해?", "점심 뭐 먹지?", "단백질 얼마 남았어?",
   "근육 증가 방향 괜찮아?". 기존 use case를 그대로 부르는 얇은 층으로 만든다.
   - 명령어형 v1은 있다(`muscle50 telegram run`, `docs/telegram-bot.md`). v1.1(짧은 요약, UNKNOWN 알림, `/refresh`)과
-    v1.2(인자 없는 `/refresh`로 UNKNOWN 운동 모두 다시 받기)도 통합됐다. 자유 문장·사진·코치(LLM) v2도 통합됐다(`config\telegram_llm.json`으로 켜는 선택 기능, `docs/telegram-llm.md`). 메시지 종류별 모델 선택(글 haiku, 사진 sonnet, 형식 실패 시 한 번 재시도)도 통합됐다. v2.2(한 메시지의 여러 끼니, 일반식 추정 범위, 웹 검색, 숫자 재확인)도 통합됐다. v2.3(방금 기록한 식사 고치기, 같은 끼니 겹침과 `/fix_`, 라벨 값, 하나의 범위로 보이는 누적, 양 가정 그램, 최근 메뉴 이름으로 고르기)도 통합됐다.
+    v1.2(인자 없는 `/refresh`로 UNKNOWN 운동 모두 다시 받기)도 통합됐다. 자유 문장·사진·코치(LLM) v2도 통합됐다(`config\telegram_llm.json`으로 켜는 선택 기능, `docs/telegram-llm.md`). 메시지 종류별 모델 선택(글 haiku, 사진 sonnet, 형식 실패 시 한 번 재시도)도 통합됐다. v2.2(한 메시지의 여러 끼니, 일반식 추정 범위, 웹 검색, 숫자 재확인)도 통합됐다. v2.3(방금 기록한 식사 고치기, 같은 끼니 겹침과 `/fix_`, 라벨 값, 하나의 범위로 보이는 누적, 양 가정 그램, 최근 메뉴 이름으로 고르기)도 통합됐다. v2.4(사진 여러 장, 멈추지 않는 bot과 실행 기록, 4시간 메뉴 제안, 짧은 `/ok` 답장, 동기화 안내)도 통합됐다.
 
 ## 4. 현재 상태(2026-10-05)
 
@@ -77,6 +77,7 @@ muscle50이 무엇을 향해 가는지 적은 문서다. 기능을 고르거나 
 2026-10-08: Telegram Refresh All UNKNOWN v1.2(인자 없는 `/refresh`, 한 번에 10개)가 통합됐다. 다음 순서는 그대로다.
 2026-10-13: Telegram 자유 문장·사진·코치 v2(`docs/specs/telegram-llm.md`)가 통합됐다. 다음은 4, 5 순서다.
 2026-10-16: Telegram LLM Corrections and Range Totals v2.3(`docs/specs/telegram-llm-corrections.md`)이 통합됐다. 남은 사용 중 문제는 v2.4(`docs/specs/telegram-llm-reliability.md`)다. 다음 순서는 그대로다.
+2026-10-20: Telegram LLM Reliability and Replies v2.4(`docs/specs/telegram-llm-reliability.md`)가 통합됐다. 다음 순서는 그대로다.
 
 목표에 직접 기여하지 않는 정리 작업(`auto-load-metrics`, `sync-coverage`, `meal-void-edit` 등)은 위 순서를
 막지 않을 때 하거나, 실제로 불편해졌을 때 한다.
