@@ -17,6 +17,10 @@ LLM Corrections and Range Totals v2.3, `docs/specs/telegram-llm-corrections.md`)
 Migration 없음. Output change: breaking(LLM이 켜졌을 때의 Telegram 답장 모양이 바뀐다. CLI는 `nutrition meal replace-item` 옵션만
 더해졌다).
 
+사진 여러 장(앨범), 사진을 읽지 못했을 때의 문구, 사진을 대화 기억에, bot이 멈추지 않게 하는 것과 실행 기록 파일, 메뉴 제안 4시간, 짧은 한국어 `/ok`
+답장, 동기화 안내, 콘솔 오류 문구(Telegram LLM Reliability and Replies v2.4, `docs/specs/telegram-llm-reliability.md`)는 "신뢰성·앨범·짧은 답장 (v2.4)" 절에 있다.
+Migration 없음. Output change: breaking(Telegram LLM 답장·콘솔 오류 문구·새 실행 기록 파일. CLI는 그대로).
+
 ## 목적과 non-goal
 
 - Telegram에서 명령어 대신 **문장과 사진**으로 식사를 기록하고, 질문하고, 메뉴를 고른다. 해석은 이 PC에 설치된
@@ -246,7 +250,7 @@ bot:  (typed /log 답장과 같은 본문)
 - 같은 날 같은 끼니가 이미 있으면 `--additional`을 붙이고 제안 **맨 위**에 `이미 기록된 점심(…)이 있어 하나 더 기록합니다.`를
   보여 준다(v2.3부터 맨 위. 같은 음식이 겹치면 고치기를 묻는다: 아래 "이어지는 고치기·라벨·범위 누적 (v2.3)").
 - "먹을 예정"은 기록하지 않는다.
-- 제안의 argv는 만들 때 고정해서 저장한다(자정을 넘겨 `/ok`해도 날짜가 바뀌지 않음). 유효 시간 60분.
+- 제안의 argv는 만들 때 고정해서 저장한다(자정을 넘겨 `/ok`해도 날짜가 바뀌지 않음). 유효 시간 60분(메뉴 제안만 4시간: v2.4).
 
 ### 사진
 
@@ -259,7 +263,8 @@ bot:  이렇게 기록할까요? (저녁, 10-06, 사진 추정)
 ```
 
 - 4 MB 이하 중 가장 큰 크기를 받는다. 더 크면 `사진이 너무 큽니다`, 파일(document)로 보낸 이미지는 `사진으로 보내 주세요`.
-- 사진인지 메뉴 캡처인지 모호하면 묻는다. 해석에 실패하면 `사진을 해석하지 못했습니다. 일반식으로만 기록할까요?`(값 없음).
+- 사진인지 메뉴 캡처인지 모호하면 묻는다. 해석에 실패하면, 캡션에 먹었다는 말이 있고 메뉴 말이 없을 때만 `사진을 해석하지 못했습니다. 일반식으로만 기록할까요?`(값 없음)를
+  묻고 아니면 캡션을 적어 다시 보내 달라고 한다(v2.4).
 
 ### 메뉴 캡처와 메뉴 제안
 
@@ -647,7 +652,7 @@ Spec: `docs/specs/telegram-llm-corrections.md`(범위 1~5와 추가 문제 11, 1
 null)에 담긴다. bot이 확인한다: 번호가 범위 안이고, 사용자의 낱말과 메뉴 항목 이름이 서로 포함해야 한다(정규화 뒤 2자 이상). 맞으면 그
 항목의 메모·값(메뉴판 표기 포함)·출처 종류로 제안하고(`추정: kcal 1022 … (estimated) (메뉴판 표기)`), 근거 문자열은
 `<메뉴 근거>; 메뉴판 표기`(없으면 `; 메뉴 항목`)이다. 사용자가 이미 본 목록의 값이라 숫자 재확인은 건너뛴다. 맞지 않으면 쓰지 않고(콘솔에 개수만)
-평소처럼 추정한다. 메뉴 제안의 확인 유효 시간(60분)은 이 기능에서 바꾸지 않았다. 4시간은 이름으로 고르는 창일 뿐이다.
+평소처럼 추정한다. (v2.3에서는 메뉴 제안의 확인 유효 시간이 60분이고 4시간은 이름으로 고르는 창일 뿐이었다. v2.4부터 메뉴 제안의 유효 시간도 4시간이다: 아래 "메뉴 제안은 4시간".)
 
 ### 전송되는 데이터 (v2.3)
 
@@ -681,6 +686,120 @@ null)에 담긴다. bot이 확인한다: 번호가 범위 안이고, 사용자�
 - 바뀌지 않음: 그 밖의 모든 CLI 출력, `telegram_llm.json`이 없을 때의 bot, 손으로 친 `/log`·`/void`·`/day`·`/status` 답, `/help`, `/llm`,
   기존 `/ok`·`/plain`·`/no` 답장 본문, 라벨·양 가정·메뉴 참조·겹침이 없는 제안의 항목 줄.
 
+## 신뢰성·앨범·짧은 답장 (v2.4)
+
+Telegram LLM Reliability and Replies v2.4, `docs/specs/telegram-llm-reliability.md`. Migration 없음. Output change: breaking(Telegram
+LLM 답장과 콘솔 오류 문구, 새 실행 기록 파일만 바뀐다. CLI 출력은 그대로다). 2026-10-13~15 실사용에서 나온 문제 가운데 v2.3에서 떼어 낸 나머지다.
+
+### 사진 여러 장(앨범)
+
+- LLM이 켜져 있을 때만 모은다. 첫 사진의 `media_group_id`가 같은 사진을 같은 `getUpdates` 묶음에서 먼저 가져오고, 모자라면 2초짜리
+  `getUpdates`를 이어서 한다. 새 멤버가 없는 poll, 6초(주입한 시계), 사진 4장 중 먼저 오는 것에서 멈춘다.
+- 한 메시지가 된다: 캡션은 처음으로 글이 있는 사진의 것, 사진은 앞의 4장(update 순서). 프롬프트는 `(사진 2장 첨부)`(한 장이면 전과 같은 `(사진 첨부)`),
+  Claude는 이미지 블록 하나씩, Codex는 `-i photo.jpg photo-2.png ...`(한 장이면 전과 같은 `-i photo.jpg`). 숫자 재확인도 같은 사진을 다시 보낸다.
+- 읽지 못했거나 넘친 사진이 있으면 답장 본문(`<pre>` 안, 명령 줄 앞)과 기록에 `사진 5장 중 4장만 읽었습니다`가 붙는다. 큰 사진·파일 이미지·받지
+  못한 사진은 빼고 센다. 하나도 못 읽으면 전과 같은 고정 문구(`사진이 너무 큽니다` 등)다.
+- 허용 목록, 오래된 메시지, 이미 처리한 update ID 규칙은 멤버마다 그대로다. 앨범의 모든 update ID는 처리 전에 기억한다. 첫 멤버의 ID가 합친 메시지의 ID다.
+- 같은 묶음에서 앨범과 함께 가져온 다른 메시지는 순서대로 앨범 뒤에 처리한다(앨범은 첫 멤버 자리에서 처리).
+- LLM이 꺼져 있으면 옛 loop 그대로다(`getUpdates` 호출 수와 offset 포함).
+
+### 사진을 읽지 못했을 때
+
+- 캡션에 먹었다는 말(`먹었`, `먹음`, `먹은`, `드셨`, 단어로서의 영어 `ate`)이 있고 메뉴 말(`메뉴`, `menu`)이 없을 때만 값 없는 일반식 제안(`사진을
+  해석하지 못했습니다. 일반식으로만 기록할까요?`)을 한다. 영어 `ate`는 단어일 때만 맞는다(`plate`, `chocolate`은 아님). NFKC·소문자로 맞춘 뒤 본다.
+- 그 밖에는 `사진을 해석하지 못했습니다. 사진에 "메뉴" 또는 "먹음"이라고 적어 다시 보내 주세요.`만 보내고 제안·상태 파일·DB에 아무것도 쓰지 않는다.
+
+### 사진도 대화 기억에
+
+- 사진 뒤 기억에 `[사진 2장] 점심 → 메뉴 캡처로 읽음: 항목 5개`, `[사진 1장] → 식사 사진으로 읽음: 제육볶음 정식, 햇반 외 1개`, `[사진 1장] → 해석 못함`,
+  `[사진 1장] → 사진 종류 불명` 같은 한 줄이 남는다(캡션 60자·결과 160자까지). 해석 결과에서 만들고 LLM을 더 부르지 않는다. `/memory`와 다음
+  호출의 `[기억]`에 그대로 보인다. 해석·답 프롬프트에는 "`[사진 N장]`으로 시작하는 줄이 있으면 사진을 받은 것이니 사진이 없다고 답하지 않는다"는 규칙이 있다.
+- 글 대화의 기억 줄은 그대로다. 너무 큰 사진·받지 못한 사진처럼 LLM을 부르지 않은 경우는 기억 줄이 없다.
+
+### bot이 멈추지 않게
+
+- Telegram 어댑터는 예상 못 한 예외도 `TelegramUnavailableError`(`unexpected error (<Type>)`, ASCII, token 없음, 연결된 예외 없음)로 바꾼다.
+- 메시지 하나를 처리하다 예상 못 한 예외가 나면 콘솔과 실행 기록에 남기고 사용자에게 오류 문구를 보낸 뒤 다음 메시지로 넘어간다. 그 update는 이미 기억돼 있어
+  다시 실행되지 않는다. 연속 5번이면(`getUpdates` 쪽도 같다) `오류: 예상하지 못한 오류가 연속 5번 …`으로 멈춘다(exit 1). 상태 파일 오류와 token 거절은
+  전처럼 바로 멈춘다.
+- 상태 파일(`telegram_state.json`, `telegram_llm_state.json`)을 저장할 때 Windows가 `os.replace`를 잠깐 막으면(`PermissionError`) 0.05, 0.1, 0.2, 0.4,
+  0.8초 간격으로 다시 시도한다. 그래도 안 되면 전처럼 `TelegramStateError`로 멈춘다(문구는 `(EACCES)`처럼 오류 이름).
+- 콘솔(stderr)에 쓰지 못해도(창을 닫음, 파이프 끊김) bot은 멈추지 않는다.
+
+### 실행 기록 파일 `telegram\run-YYYY-MM.log`
+
+- LLM이 꺼져 있어도 만든다. 콘솔에 찍은 줄(이미 token을 가린 ASCII)을 그대로 따라 쓰고, 파일에만 남는 줄이 있다: `run started pid=<n> llm=<on|off>`,
+  30분마다 `alive`(루프가 돌 때 확인하므로 긴 LLM 호출 중에는 비어 있을 수 있음), `run stopped: ctrl_c`, `run stopped: error <TypeName>`,
+  Windows 콘솔 이벤트(창 닫기·로그오프·종료)가 오면 `run stopped: console_event <n>`.
+- 한 줄마다 열고 덧붙이고 닫는다(append만). 달은 쓸 때마다 주입한 시계로 정해 달이 바뀌면 다음 파일로 간다. 쓰기 실패는 무시한다. 메시지 원문과 token은
+  넣지 않는다. muscle50은 이 파일을 지우거나 돌리지 않는다.
+- 콘솔 이벤트 hook은 Windows에서만, 최선 노력이다(`SetConsoleCtrlHandler`). 항상 False를 돌려주므로 프로세스는 전과 똑같이 끝나고 Ctrl+C는 그대로
+  KeyboardInterrupt다. 콘솔에는 파일 전용 줄이 나오지 않는다.
+
+### 메뉴 제안은 4시간
+
+- 메뉴 캡처·메뉴 제안(`/eat_<token>_<n>`)은 4시간 유효하다. 식사 기록·수정 제안은 60분 그대로다. 이름으로 고르는 창(`MENU_WINDOW_S`)과 같은 상수다.
+- 만료 문구는 저장된 유효 시간을 따른다: `이 메뉴 제안은 유효 시간(4시간)이 지났습니다. 메뉴 사진을 다시 보내거나 다시 물어봐 주세요.`(v2.3 상태 파일의
+  메뉴는 `(60분)`). 식사·수정 제안은 전과 같은 `이 제안은 유효 시간(60분)이 지났습니다. …`다. 상태 파일 모양은 바뀌지 않아 v2.3 파일이 그대로 읽힌다.
+- 한계: 정확히 4시간이 되는 그 1초에는 메뉴가 이름으로는 아직 고를 수 있고(`<=`) `/eat_`는 이미 만료다(`now >= expires`). 테스트가 양쪽을 고정한다.
+
+### 짧은 한국어 `/ok` 답장
+
+`/ok`, `/plain`, 여러 끼니, 수정(`/fix_` 포함), void가 **성공**하면 CLI의 영어 출력 대신 저장된 식사를 다시 읽어(`nutrition meal show --json`) 만든 요약을 보낸다.
+
+```text
+기록했습니다: 아침 2026-10-14-breakfast-1 (10-14)
+1. 일반식 (메모: 깻잎닭갈비 삼각김밥 1개) - 라벨 kcal 185, 단백질 5 g, 탄수화물 37 g
+2. 닭가슴살 (chicken-breast) 1 pack - kcal 165, 단백질 34 g, 탄수화물 0 g, 지방 2 g
+이 끼니 (추정 포함): kcal 350, 단백질 39 g, 탄수화물 37 g, 지방 2 g (값 모르는 항목 1개 빠짐)
+취소: /void 2026-10-14-breakfast-1   전체 보기: /show 2026-10-14-breakfast-1
+오늘 누적 (추정 포함):
+  kcal 350
+  …
+```
+
+- 첫 줄은 `기록했습니다`, 수정은 `수정했습니다`(끝 줄이 `확인: /show <id>`), void는 `취소(void)했습니다: <id>` + `확인: /show <id>`(식사를 읽지 않는다).
+- item 번호는 `/show`·`nutrition day`와 같다. 값은 저장된 값이고 CLI처럼 0.1 단위 half-even으로 반올림해 보인다(34.95는 35). 라벨에서 읽은 값은 `라벨`,
+  범위로만 저장된 값은 `추정`, 정확한 값은 접두 없음, 값이 하나도 없으면 `값 없음`(0이 아님). 모르는 영양소는 줄에서 빠진다.
+- `이 끼니` 줄은 오늘 누적과 같은 규칙이다: 확인된 값 + 추정 범위, 값이 없는 item은 영양소마다 `(값 모르는 항목 N개 빠짐)`으로 센다. 아무 값도 없으면
+  `이 끼니: 값 없음 (0이 아님)`. 여러 영양소가 모르면 줄이 길어진다.
+- 여러 끼니는 끼니마다 한 블록이고 `실패:`·`실행하지 않음:` 줄은 그대로다. 실패 답장(`오류:`)과 손으로 친 `/log`의 답은 그대로다.
+- 식사를 다시 읽지 못하거나 모양이 예상과 다르면 CLI 출력을 그대로 보낸다(콘솔에 `meal summary not built (<Type>)`). 기록(history)에는 실제로 보낸 답장이 남는다.
+
+### 동기화 안내
+
+- "동기화 해줘"는 새 의도 `sync_request`이고 고정 답장 `동기화는 /daily 로 합니다. 운동 하나만 다시 받으려면 /refresh 를 쓰세요.` + 누를 수 있는 `/daily`,
+  `/refresh` 줄이다. 아무것도 실행하거나 저장하지 않는다(기록·기억 줄은 다른 교환처럼 남고 `/history`에는 `동기화 안내`). 확인 뒤 `/daily`를 돌려 주는 것은 후속 후보다.
+- 질문 답 프롬프트에는 "운동을 묻는데 데이터에 그 날의 운동이 없거나 동기화가 안 된 것으로 보이면 숫자 없이 한 문장으로 `/daily`를 안내한다"는 규칙이 있다(프롬프트만).
+
+### 콘솔 오류 문구
+
+- 네트워크 오류는 오류 번호와 짧은 영어 설명이다: `telegram: network error (WinError 10054 connection reset by remote host); retrying in 5 s`. 표에 있는
+  번호는 10013, 10051, 10053, 10054, 10060, 10061, 10065, 11001이고, 그 밖에는 `WinError <n>`, 오류 이름(`ECONNRESET`), 형 이름 순이다. Windows의 한국어 메시지는
+  쓰지 않는다. 번호는 `winerror`, 없으면 `errno`로 찾아 OS와 상관없이 같은 문구다.
+
+### live 확인 (implementer, 2026-10-19, Claude Code / Codex CLI, 합성 데이터)
+
+임시 호출 7번(Claude Haiku 5, Codex 2), 사용자 데이터 없음, 실제 `build_prompt`와 같은 격리 argv, 임시 폴더.
+
+| 확인 | 결과 |
+|---|---|
+| 두 CLI가 `sync_request`가 든 interpret schema를 받는다 | 받음(Claude, Codex 모두 `ok`) |
+| Haiku: "동기화 해줘" / "어제 운동 확인해봐" | `sync_request` / `question` |
+| Claude: 합성 PNG 2장(빨강, 파랑)을 이미지 블록 2개로 | `ok`. 요약에 "1번 사진은 단색 빨강, 2번 사진은 단색 파랑"(둘 다 보고 순서도 맞음) |
+| Codex: 같은 2장을 `-i photo.jpg photo-2.png`로(열려 있던 확인) | `ok`. 요약에 "순서대로 빨간색, 파란색"(둘 다 읽음) |
+| 기억에 `[사진 2장] 점심 → 메뉴 캡처로 읽음: 항목 5개`가 있을 때 "두개는 해석 못해?" | "사진은 못 읽는 게 아니에요. 보내주신 두 사진은 점심 메뉴 캡처로 읽어서 …"(사진이 없다고 하지 않음) |
+
+실제 Telegram 앨범 두 장, Windows 창 닫기 때의 `console_event` 줄, 30분 뒤 `alive` 줄은 자동으로 확인할 수 없어 사용자가 한 번 확인한다.
+
+### Output change(LLM이 켜졌을 때 + 콘솔과 새 파일, `breaking`)
+
+- 바뀜: `/ok`·`/plain`·여러 끼니·수정·`/fix_`·void 성공 답장(짧은 한국어 요약), 읽지 못한 사진의 답장, 앨범의 `사진 N장 중 M장만 읽었습니다` 줄, 메뉴 제안의
+  만료 문구와 유효 시간, 동기화 안내, 해석 프롬프트·스키마(`sync_request`)·요청(`extra_photos`), 기억 파일의 사진 줄, 콘솔의 네트워크·상태 파일 오류 문구
+  (LLM이 꺼져 있어도), 새 파일 `telegram\run-YYYY-MM.log`(LLM이 꺼져 있어도), 예상 못 한 오류 뒤에도 bot이 계속 도는 것.
+- 바뀌지 않음: 모든 CLI 출력, 손으로 친 `/log`·`/void`·`/day`·`/status`·`/show`·`/help`·`/llm` 답, 실패 답장, 한 장짜리 사진의 프롬프트와 argv, 식사·수정 제안과 그 만료 문구,
+  `telegram_llm.json`이 없을 때 bot의 답장·DB·상태 파일·`getUpdates` 호출(새 실행 기록 파일과 콘솔 오류 문구만 더해졌다).
+
 ## 생활 단위(팩·개·마리): `food fact add --new-unit`
 
 단위는 환산하지 않는다. 대신 카탈로그 음식에 그 단위의 값을 **따로** 등록한다.
@@ -704,6 +823,7 @@ muscle50 nutrition food fact add chicken-breast --per 1 pack --kcal 165 --protei
 | `config\telegram_llm_memory.json` | `telegram run` | chat별 요약(300자)과 최근 8턴(각 300자, 24시간) — **메시지 원문 포함** |
 | `telegram\history\YYYY-MM.jsonl` | `telegram run` | 대화마다 한 줄, 추가만. 시각, chat, 메시지, 사진 위치, 의도, 제공자·모델, 검증된 LLM 출력, 답장, 제안, 결과(meal ID), 재시도 여부와 시도 목록 — **식단과 대화 원문 포함** |
 | `telegram\photos\YYYY-MM\<sha256>.jpg` | `telegram run` | 받은 사진(`keep_photos`) |
+| `telegram\run-YYYY-MM.log` | `telegram run`(LLM이 꺼져 있어도) | 콘솔 줄(token을 가린 ASCII)과 `run started`·`alive`·`run stopped` 줄. 메시지 원문 없음. 추가만, muscle50이 지우지 않음 |
 
 - 기록과 사진은 muscle50이 지우지 않는다. 필요하면 직접 지운다. `/forget`과 기억 상한은 기록을 지우지 않는다.
 - 콘솔 로그에는 메시지 원문, LLM 답, 사진 URL(bot token 포함)을 남기지 않는다(ASCII, chat ID와 결과 종류만).
@@ -733,6 +853,12 @@ muscle50 nutrition food fact add chicken-breast --per 1 pack --kcal 165 --protei
 - `infrastructure/llm/`(argv, 프로세스, 실행 파일, 제공자), `infrastructure/telegram/`(설정, 상태, 기억, 기록, 사진, 코치
   가이드, Bot API 사진), `infrastructure/sqlite/food_catalog_reader.py`(읽기 전용 카탈로그).
 - `presentation/telegram_llm_replies.py`, `cli.py`(`telegram history`, `_telegram_llm` 연결, A2 플래그, `--new-unit`).
+- v2.4: `domain/telegram_llm_photo.py`(캡션 규칙, 사진 기억 문구, 앨범 안내 줄), `domain/telegram_llm_summary.py`와
+  `presentation/telegram_llm_summary.py`(짧은 답장), `domain/llm_today_totals.py`의 `nutrient_totals`(하루와 한 끼니가 같이 씀),
+  `application/telegram_bot.py`(앨범 모으기, 한 update 보호, `TelegramRunStoppedError`), `infrastructure/telegram/network_error.py`,
+  `infrastructure/telegram/run_log.py`, `infrastructure/telegram/state_store.py`의 `replace_with_retry`,
+  `infrastructure/llm/argv.py`·`provider.py`(여러 사진), `tests/test_telegram_llm_albums_bot.py`·`test_telegram_llm_reliability*.py`·
+  `test_telegram_bot_resilience.py`·`test_telegram_run_log.py`·`test_telegram_network_error.py`.
 
 ## Known issues / limitations
 
@@ -816,6 +942,21 @@ muscle50 nutrition food fact add chicken-breast --per 1 pack --kcal 165 --protei
 - 기록 완전성은 best-effort다: 처리 중 강제 종료나 기록 쓰기 실패(콘솔에 `history write failed`)면 그 줄이 빠질 수 있다.
   확인 명령이 예외로 끝나면(드묾) 그 확인 줄도 빠진다. 기억 파일이 손상되면 기억 없이 호출하고 그 파일은 쓰지 않는다.
 - `/ok` 뒤의 `오늘 누적`은 `nutrition status/day --json`을 한 번 더 읽어 만든다. 읽지 못하면 그 줄만 빠진다.
+- **신뢰성·앨범·짧은 답장 (v2.4)**
+  - **앨범은 2초 안에 모인 것만이다.** 그보다 늦게 오거나 4장을 넘어 오는 사진은 따로 한 장씩 해석된다. 앨범이 나뉘어 도착하면 그 만큼 지연(최대 약 6초)이 생긴다.
+  - **앨범을 모으는 동안 가져온 다른 메시지는 미리 확인(acknowledge)된다.** 앨범을 처리하기 전에 bot이 꺼지면 그 메시지들은 잃는다(두 번 실행되지는 않는다).
+    같은 이유로 앨범 모으기 중에 Ctrl+C를 누르면 그 앨범은 처리되지 않는다.
+  - **사진 앨범의 캡션은 앨범 전체에 쓴다.** 사진마다 다른 설명은 지원하지 않는다. 상한(4장)을 넘거나 받지 못한 사진은 `사진 N장 중 M장만 읽었습니다`로만 알린다.
+  - **사진 기억 줄은 LLM을 부른 교환에만 있다.** 너무 큰 사진·받지 못한 사진은 줄이 없다. 사진 안의 글자나 값은 요약으로만 남고 사진 자체를 다시 보지는 않는다.
+  - **`ate` 같은 짧은 영어 낱말은 단어일 때만 맞는다.** 한국어 낱말(`먹었` 등)과 `메뉴`·`menu`는 부분 문자열 검사라서, 애매하면 아무것도 쓰지 않는 쪽으로 기운다.
+  - **실행 기록 파일은 돌리지 않는다.** 달마다 하나(작다). `alive`는 루프가 돌 때만 쓰므로 긴 LLM 호출 중에는 비어 있고, 창 닫기 기록은 최선 노력이라 PC가 꺼지거나
+    강제 종료되면 마지막 `alive` 시각으로만 알 수 있다. 예상 못 한 오류의 traceback 마지막 줄에는 예외 문구가 들어갈 수 있다(콘솔에도 이미 나오는 내용).
+  - **한 update를 건너뛰는 보호는 상태 파일을 쓰지 못하는 오류에는 적용하지 않는다.** 그때는 전처럼 멈춘다.
+  - **메뉴 제안이 4시간이라 오래된 `/eat_` 버튼도 4시간 동안 눌린다.** 정확히 4시간째 1초는 이름으로는 고를 수 있고 `/eat_`는 만료다(위).
+  - **짧은 답장의 `이 끼니` 줄은 길 수 있다.** 값이 없는 item이 있으면 영양소마다 `(값 모르는 항목 N개 빠짐)`이 붙는다. 라벨 표시는 근거 문자열의 `; 라벨`을 읽는 것이라 근거
+    문자열 형식이 바뀌면 `추정`으로 보인다. 요약은 저장 뒤 한 번 더 읽는 것이라 그 사이 다른 쓰기가 있으면 그 값이 보일 수 있다(드묾).
+  - **동기화 안내는 문구만이다.** 질문 답의 `/daily` 안내는 프롬프트 규칙이라 모델이 빠뜨릴 수 있다. `sync_request` 분류는 Haiku live 확인 두 문장뿐이다(누락률 미확인).
+  - **프롬프트가 조금 길어져 Haiku가 형식을 틀릴 확률이 아주 조금 늘 수 있다**(틀리면 기존 재시도 규칙이 돈다).
 - 제안은 만들 때의 중복 확인(`--additional`)을 저장한다. 제안과 확인 사이에 같은 끼니가 기록되면 `nutrition log`의
   기존 거절 문구가 그대로 온다(두 번 기록되지 않는다).
 - 날짜는 오늘과 어제만 문장으로 정한다. 그 밖의 날짜는 `/log`로 보낸다.
