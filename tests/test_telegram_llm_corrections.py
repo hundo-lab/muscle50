@@ -100,7 +100,7 @@ def test_the_schema_and_the_parser_have_the_same_keys_at_every_level() -> None:
     assert edit["properties"]["target_meal_ordinal"]["type"] == ["integer", "null"]
     assert "change_estimate" in edit["properties"]["action"]["enum"]
     assert root["properties"]["refers_to"]["enum"] == ["open_proposal", "last_recorded", None]
-    assert "sync_request" not in root["properties"]["intent"]["enum"]  # that is v2.4
+    assert "sync_request" in root["properties"]["intent"]["enum"]  # v2.4: the only change to the 12 root keys
     assert "$schema" not in root
 
 
