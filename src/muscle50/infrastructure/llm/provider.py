@@ -3,8 +3,9 @@
 Each call runs in a fresh temp folder (`muscle50-llm-*`) with `work/` as the CLI's cwd and `io/`
 (schema and output files) outside it; the folder is removed afterwards. Codex gets the photo as
 `work/photo.<ext>` (the only file in its cwd) and `-i`; Claude gets it as a base64 image block in its
-stream-json stdin, so its cwd stays empty. Only the outcome kind, exit code and duration are logged:
-stdout and stderr are never logged or kept (they can contain the message and the answer).
+stream-json stdin, so its cwd stays empty. An album's further photos are `work/photo-2.<ext>`, ... (v2.4).
+Only the outcome kind, exit code and duration are logged: stdout and stderr are never logged or kept (they can
+contain the message and the answer).
 """
 
 from __future__ import annotations
@@ -156,7 +157,7 @@ class CliLlmProvider:
                 result = self._runner.run(
                     claude_argv(executable, model, schema, web_search=web),
                     cwd=work,
-                    stdin=claude_stdin(request.prompt, request.photo),
+                    stdin=claude_stdin(request.prompt, request.photo, request.extra_photos),
                     timeout_s=self._settings.web_search_timeout_seconds if web else self._settings.timeout_seconds,
                     env=self._child_env(),
                 )
@@ -166,9 +167,14 @@ class CliLlmProvider:
                 schema_path, output_path = io / "schema.json", io / "last.json"
                 schema_path.write_text(json.dumps(schema, ensure_ascii=True), encoding="utf-8", newline="\n")
                 photo_path = None
+                extra_paths: list[Path] = []
                 if request.photo is not None:
                     photo_path = work / f"photo{image_suffix(request.photo)}"
                     photo_path.write_bytes(request.photo)
+                    for number, extra in enumerate(request.extra_photos, start=2):
+                        extra_path = work / f"photo-{number}{image_suffix(extra)}"
+                        extra_path.write_bytes(extra)
+                        extra_paths.append(extra_path)
                 result = self._runner.run(
                     codex_argv(
                         executable,
@@ -177,6 +183,7 @@ class CliLlmProvider:
                         output_path=output_path,
                         work_dir=work,
                         photo_path=photo_path,
+                        extra_photo_paths=tuple(extra_paths),
                     ),
                     cwd=work,
                     stdin=request.prompt.encode("utf-8"),

@@ -1,9 +1,9 @@
 """Telegram LLM v2: the port to a local LLM CLI (`claude -p` or `codex exec`) and its call results.
 
-A call sends one prompt (and at most one photo) and gets one JSON document back. The provider
-validates that document with the caller's own validator, so a malformed answer counts as a failure
-(`bad_output`) and may go to the fallback provider. The LLM never writes anything: it has no tools
-and its output is only data that the bot checks and the user confirms.
+A call sends one prompt (and the photos of one message: one, or an album of up to four) and gets one JSON
+document back. The provider validates that document with the caller's own validator, so a malformed answer
+counts as a failure (`bad_output`) and may go to the fallback provider. The LLM never writes anything: it has
+no tools and its output is only data that the bot checks and the user confirms.
 """
 
 from __future__ import annotations
@@ -46,6 +46,8 @@ class LlmRequest:
     """Offer the web search tool (Claude only; Codex never searches). Every other call has no tool."""
     pin: RunPin | None = None
     """A corrective re-ask: one run on the pinned model, no retry and no fallback."""
+    extra_photos: tuple[bytes, ...] = ()
+    """v2.4 albums: the photos after ``photo`` (``photo`` is the first). Empty for a single photo."""
 
     @property
     def has_photo(self) -> bool:

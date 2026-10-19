@@ -34,6 +34,7 @@ from muscle50.application.nutrition_logging import (
     local_day_bounds,
 )
 from muscle50.application.telegram_bot import (
+    ALBUM_MAX_PHOTOS,
     PHOTO_MAX_BYTES,
     CliCommandRunner,
     CommandOutcome,
@@ -158,6 +159,7 @@ from muscle50.domain.telegram_llm_meals import (
 )
 from muscle50.domain.telegram_llm_photo import (
     OUTCOME_FAILED,
+    album_partial_line,
     caption_is_clearly_eaten,
     photo_memory_text,
     photo_outcome_words,
@@ -439,6 +441,8 @@ class _Exchange:
     """The recent menu offered to the LLM (`menu_ref` points into its choices); None for a photo message."""
     photo_outcome: str | None = None
     """How a photo was read, in a few words, for the chat memory (None: the read failed)."""
+    extra_photos: tuple[bytes, ...] = ()
+    """The photos after the first of an album message; the numeric re-ask sends the same ones."""
 
 
 class TelegramLlmHandler:
@@ -502,18 +506,36 @@ class TelegramLlmHandler:
             return self._fixed_photo_reply(chat_id, update_id, message, PHOTO_TOO_LARGE_TEXT)
         if message.photo_file_id is None:
             return None
-        try:
-            photo = self._files.download_photo(message.photo_file_id, PHOTO_MAX_BYTES)
-        except TelegramUnavailableError as exc:
-            self._log(f"chat {chat_id}: photo download failed ({exc})")
-            return self._fixed_photo_reply(chat_id, update_id, message, PHOTO_DOWNLOAD_FAILED_TEXT)
-        path = None
-        if self._photos is not None:
+        # A collected album (v2.4) has several file ids; a single photo has just `photo_file_id`. A photo that cannot be
+        # downloaded is dropped and counted; the reply says so when fewer photos were read than were sent.
+        file_ids = (message.photo_file_ids or (message.photo_file_id,))[:ALBUM_MAX_PHOTOS]
+        sent = max(message.album_members, len(file_ids))
+        photos: list[bytes] = []
+        paths: list[str] = []
+        for file_id in file_ids:
             try:
-                path = self._photos.keep(photo, self._today())
-            except OSError as exc:
-                self._log(f"chat {chat_id}: photo not kept ({type(exc).__name__})")
-        return self._message(chat_id, update_id, text=None, photo=photo, caption=message.caption, photo_path=path)
+                data = self._files.download_photo(file_id, PHOTO_MAX_BYTES)
+            except TelegramUnavailableError as exc:
+                self._log(f"chat {chat_id}: photo download failed ({exc})")
+                continue
+            photos.append(data)
+            if self._photos is not None:
+                try:
+                    paths.append(self._photos.keep(data, self._today()))
+                except OSError as exc:
+                    self._log(f"chat {chat_id}: photo not kept ({type(exc).__name__})")
+        if not photos:
+            return self._fixed_photo_reply(chat_id, update_id, message, PHOTO_DOWNLOAD_FAILED_TEXT)
+        return self._message(
+            chat_id,
+            update_id,
+            text=None,
+            photo=photos[0],
+            caption=message.caption,
+            photo_path=",".join(paths) if paths else None,
+            extra_photos=tuple(photos[1:]),
+            photos_sent=sent,
+        )
 
     # --- free text and photos ------------------------------------------------------------------------------
 
@@ -526,9 +548,11 @@ class TelegramLlmHandler:
         photo: bytes | None,
         caption: str | None,
         photo_path: str | None,
+        extra_photos: tuple[bytes, ...] = (),
+        photos_sent: int = 0,
     ) -> LlmAction:
         words = text if text is not None else (caption or "")
-        exchange = _Exchange()
+        exchange = _Exchange(extra_photos=extra_photos)
         exchange.data = self._interpret_data(chat_id, words, exchange, text_only=photo is None)
         call = self._call(
             chat_id,
@@ -539,6 +563,7 @@ class TelegramLlmHandler:
             exchange.data,
             parse_interpretation,
             web_search=self._web_search_on(),
+            extra_photos=extra_photos,
         )
         exchange.calls.append(call)
         if not call.ok:
@@ -560,7 +585,15 @@ class TelegramLlmHandler:
             else:
                 self._text(chat_id, words, interpretation, exchange)
         assert exchange.reply is not None
-        user = text if text is not None else photo_memory_text(1, caption, exchange.photo_outcome or OUTCOME_FAILED)
+        if photo is not None:
+            partial = album_partial_line(photos_sent, 1 + len(extra_photos))
+            if partial is not None:  # fewer photos were read than were sent
+                exchange.reply = replace(exchange.reply, body=f"{exchange.reply.body}\n{partial}")
+        user = (
+            text
+            if text is not None
+            else photo_memory_text(1 + len(extra_photos), caption, exchange.photo_outcome or OUTCOME_FAILED)
+        )
         self._record(
             chat_id,
             exchange,
@@ -791,6 +824,7 @@ class TelegramLlmHandler:
             recheck_note=recheck_note([(entry.index, failure) for entry, failure in failures]),
             pin=RunPin(model),
             provider=first.provider,
+            extra_photos=exchange.extra_photos,
         )
         exchange.calls.append(second)
         answer = self._usable_second_answer(chat_id, second, photo_digest, exchange.menu)
@@ -1877,6 +1911,7 @@ class TelegramLlmHandler:
         recheck_note: str | None = None,
         pin: RunPin | None = None,
         provider: ProviderName | None = None,
+        extra_photos: tuple[bytes, ...] = (),
     ) -> LlmCallResult:
         guide, reason = self._coach.read()
         if reason is not None:
@@ -1892,8 +1927,9 @@ class TelegramLlmHandler:
             has_photo=photo is not None,
             web_search_max=self._settings.web_search_max if web_search else None,
             recheck_note=recheck_note,
+            photo_count=1 + len(extra_photos),
         )
-        request = LlmRequest(prompt, schema, photo, validate, web_search=web_search, pin=pin)
+        request = LlmRequest(prompt, schema, photo, validate, web_search=web_search, pin=pin, extra_photos=extra_photos)
         result = self._provider.call(request, provider if provider is not None else self.active_provider())
         self._log(f"chat {chat_id}: llm {schema.value} -> {result.outcome} ({result.provider.value})")
         return result

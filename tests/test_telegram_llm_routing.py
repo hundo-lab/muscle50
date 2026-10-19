@@ -810,7 +810,10 @@ def test_the_isolation_argv_is_unchanged_by_the_retry(tmp_path: Path) -> None:
 
 
 def test_request_type_is_reused_unchanged() -> None:
-    # v2.2 added two optional fields at the end (web_search, pin); the four original ones are unchanged.
-    assert list(LlmRequest.__dataclass_fields__) == ["prompt", "schema", "photo", "validate", "web_search", "pin"]
+    # v2.2 added two optional fields at the end (web_search, pin) and v2.4 one more (extra_photos, for albums); the
+    # four original ones are unchanged.
+    assert list(LlmRequest.__dataclass_fields__) == [
+        *("prompt", "schema", "photo", "validate", "web_search", "pin", "extra_photos")
+    ]
     request = LlmRequest("p", SchemaName.ANSWER, None, lambda document: document)
-    assert (request.web_search, request.pin) == (False, None)
+    assert (request.web_search, request.pin, request.extra_photos) == (False, None, ())

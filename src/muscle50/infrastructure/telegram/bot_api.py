@@ -186,6 +186,7 @@ def _update(item: Any) -> IncomingUpdate:
     photo_id, photo_size, too_large = _photo(message.get("photo"))
     document = message.get("document")
     mime = document.get("mime_type") if isinstance(document, dict) else None
+    group = message.get("media_group_id")
     return IncomingUpdate(
         item["update_id"],
         IncomingMessage(
@@ -197,6 +198,7 @@ def _update(item: Any) -> IncomingUpdate:
             caption=caption if isinstance(caption, str) else None,
             photo_too_large=too_large,
             document_image=isinstance(mime, str) and mime.startswith("image/"),
+            media_group_id=group if isinstance(group, str) and group else None,
         ),
     )
 

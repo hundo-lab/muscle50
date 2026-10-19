@@ -138,8 +138,10 @@ def codex_argv(
     output_path: Path,
     work_dir: Path,
     photo_path: Path | None,
+    extra_photo_paths: tuple[Path, ...] = (),
 ) -> tuple[str, ...]:
-    # `-` (prompt from stdin) comes before `-i`: `-i` takes several values and would swallow it.
+    # `-` (prompt from stdin) comes before `-i`: `-i` takes several values and would swallow it. An album's
+    # photos are further values of the same `-i`; a single photo keeps the exact `("-i", path)` form.
     return (
         executable,
         *CODEX_ISOLATION_ARGV,
@@ -151,21 +153,21 @@ def codex_argv(
         str(work_dir),
         *(("-m", model) if model is not None else ()),
         "-",
-        *(("-i", str(photo_path)) if photo_path is not None else ()),
+        *(("-i", str(photo_path), *(str(path) for path in extra_photo_paths)) if photo_path is not None else ()),
     )
 
 
-def claude_stdin(prompt: str, photo: bytes | None) -> bytes:
-    """One stream-json user message: the prompt as a text block, then the photo as a base64 image block."""
+def claude_stdin(prompt: str, photo: bytes | None, extra_photos: tuple[bytes, ...] = ()) -> bytes:
+    """One stream-json user message: the prompt as a text block, then each photo as a base64 image block."""
     content: list[dict[str, object]] = [{"type": "text", "text": prompt}]
-    if photo is not None:
+    for image in (photo, *extra_photos) if photo is not None else ():
         content.append(
             {
                 "type": "image",
                 "source": {
                     "type": "base64",
-                    "media_type": image_media_type(photo),
-                    "data": base64.b64encode(photo).decode("ascii"),
+                    "media_type": image_media_type(image),
+                    "data": base64.b64encode(image).decode("ascii"),
                 },
             }
         )

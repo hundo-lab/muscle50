@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import re
 import traceback
+from collections import deque
 from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
@@ -70,6 +71,11 @@ STALE_MARGIN_S = 60
 POLL_TIMEOUT_S = 10
 SEND_ATTEMPTS = 3
 BACKOFF_S: tuple[float, ...] = (5, 10, 20, 40, 60)
+ALBUM_POLL_TIMEOUT_S = 2
+ALBUM_MAX_WAIT_S = 6
+ALBUM_MAX_PHOTOS = 4
+"""v2.4 albums (LLM on only): after the first photo of a `media_group_id` the bot polls with this timeout until a poll
+brings no new member, `ALBUM_MAX_WAIT_S` have passed or `ALBUM_MAX_PHOTOS` photos are in hand."""
 MAX_UNEXPECTED_IN_A_ROW = 5
 """v2.4: this many unexpected errors in a row (updates that failed with an exception, or `getUpdates` calls that
 raised something other than `TelegramUnavailableError`) look like a bug that repeats, so the bot stops."""
@@ -130,6 +136,12 @@ class IncomingMessage:
     """A photo message whose every size is over `PHOTO_MAX_BYTES`."""
     document_image: bool = False
     """An image sent as a file (document) instead of a photo."""
+    media_group_id: str | None = None
+    """v2.4: the album a photo belongs to (Telegram sends one update per photo)."""
+    photo_file_ids: tuple[str, ...] = ()
+    """v2.4: the photos of a collected album (at most `ALBUM_MAX_PHOTOS`, in update order); empty for a single photo."""
+    album_members: int = 0
+    """v2.4: how many photos the album had in all (0 for a message that is not a collected album)."""
 
 
 @dataclass(frozen=True)
@@ -363,6 +375,7 @@ class RunTelegramBot:
         self._llm = llm
         self._on_idle = on_idle
         self._unexpected_updates = 0
+        self._offset: int | None = None
         self._bot_id = 0
         self._handled_ids: list[int] = []
         self._running: tuple[str, int] | None = None
@@ -391,13 +404,12 @@ class RunTelegramBot:
             f"telegram run: bot @{identity.username} is polling for {count} allowed "
             f"{'chat' if count == 1 else 'chats'}. Press Ctrl+C to stop."
         )
-        offset: int | None = None
         failures = 0
         unexpected_polls = 0
         while True:
             self._idle()
             try:
-                updates = self._api.get_updates(offset, self._poll_timeout_s)
+                updates = self._api.get_updates(self._offset, self._poll_timeout_s)
             except TelegramUnavailableError as exc:
                 failures += 1
                 self._wait_after(exc, failures)
@@ -414,10 +426,15 @@ class RunTelegramBot:
                 continue
             failures = 0
             unexpected_polls = 0
-            for update in updates:
-                offset = max(offset or 0, update.update_id + 1)
-                if self._handle_guarded(update, identity, started_at):
+            queue = deque(updates)  # an album gathers its later members out of the rest of the batch
+            while queue:
+                update = queue.popleft()
+                self._advance(update)
+                if self._handle_guarded(update, identity, started_at, queue):
                     return
+
+    def _advance(self, update: IncomingUpdate) -> None:
+        self._offset = max(self._offset or 0, update.update_id + 1)
 
     def _idle(self) -> None:
         if self._on_idle is not None:
@@ -435,13 +452,17 @@ class RunTelegramBot:
                 failures += 1
                 self._wait_after(exc, failures)
 
-    def _handle_guarded(self, update: IncomingUpdate, identity: BotIdentity, started_at: float) -> bool:
+    def _handle_guarded(
+        self, update: IncomingUpdate, identity: BotIdentity, started_at: float, queue: deque[IncomingUpdate]
+    ) -> bool:
         """`_handle`, except that an unexpected exception is logged and answered, never fatal by itself.
 
         `TelegramStateError` still stops the bot (a state file that cannot be written could run a command twice)
         and Ctrl+C (a `BaseException`) passes through. The failed update is already remembered by `_handle`.
         """
         try:
+            if self._llm is not None and self._starts_album(update, started_at):
+                update = self._gather_album(update, queue, started_at)
             stop = self._handle(update, identity, started_at)
         except TelegramStateError:
             raise
@@ -459,6 +480,69 @@ class RunTelegramBot:
             return False
         self._unexpected_updates = 0
         return stop
+
+    # --- albums (v2.4, LLM on only) ------------------------------------------------------------------------
+
+    def _album_member_of(self, update: IncomingUpdate, first: IncomingMessage, started_at: float) -> bool:
+        """Another photo of the same album: same chat and group, fresh, a photo or an image file, not handled yet."""
+        message = update.message
+        return (
+            message is not None
+            and first.media_group_id is not None
+            and message.media_group_id == first.media_group_id
+            and message.chat_id == first.chat_id
+            and message.sent_at_unix >= started_at - STALE_MARGIN_S
+            and (message.photo_file_id is not None or message.photo_too_large or message.document_image)
+            and update.update_id not in self._handled_ids
+        )
+
+    def _starts_album(self, update: IncomingUpdate, started_at: float) -> bool:
+        message = update.message
+        return (
+            message is not None
+            and message.chat_id in self._allowed
+            and self._album_member_of(update, message, started_at)
+        )
+
+    def _gather_album(self, first: IncomingUpdate, queue: deque[IncomingUpdate], started_at: float) -> IncomingUpdate:
+        """The album that ``first`` starts as one update, or ``first`` itself when it has no other member.
+
+        Members are taken from the rest of the batch (``queue``), then from polls of `ALBUM_POLL_TIMEOUT_S`; updates
+        of other messages fetched meanwhile are appended to ``queue`` in order. Every member id is remembered before
+        the merged message is handled, so the album runs once; the merged update has the first member's id.
+        """
+        assert first.message is not None
+        head = first.message
+        members = [first]
+        rest = deque(update for update in queue if not self._album_member_of(update, head, started_at))
+        members.extend(update for update in queue if self._album_member_of(update, head, started_at))
+        queue.clear()
+        queue.extend(rest)
+        for member in members[1:]:
+            self._advance(member)
+        deadline = self._clock() + ALBUM_MAX_WAIT_S
+        while _photo_count(members) < ALBUM_MAX_PHOTOS and self._clock() < deadline:
+            try:
+                fetched = self._api.get_updates(self._offset, ALBUM_POLL_TIMEOUT_S)
+            except Exception as exc:  # what has been gathered is still used
+                self._log(f"chat {head.chat_id}: album poll failed ({type(exc).__name__})")
+                break
+            added = 0
+            for update in fetched:
+                self._advance(update)
+                if self._album_member_of(update, head, started_at):
+                    members.append(update)
+                    added += 1
+                else:
+                    queue.append(update)
+            if not added:
+                break
+        if len(members) == 1:
+            return first
+        for member in members[1:]:
+            self._remember(member.update_id)  # before the album is handled: at most once
+        self._log(f"chat {head.chat_id}: album of {len(members)} photos collected")
+        return IncomingUpdate(first.update_id, _merged_album(members))
 
     def _handle(self, update: IncomingUpdate, identity: BotIdentity, started_at: float) -> bool:
         """Handles one update; True when the bot must stop (the command was interrupted)."""
@@ -819,6 +903,36 @@ class RunTelegramBot:
         # A console that went away (closed window, broken pipe) must not stop the bot.
         with suppress(OSError, ValueError):
             self._log_sink(line.encode("ascii", "backslashreplace").decode("ascii"))
+
+
+def _photo_count(members: Sequence[IncomingUpdate]) -> int:
+    return sum(1 for update in members if update.message is not None and update.message.photo_file_id is not None)
+
+
+def _merged_album(members: Sequence[IncomingUpdate]) -> IncomingMessage:
+    """One message for the album: the first non-empty caption, the first `ALBUM_MAX_PHOTOS` readable photos.
+
+    Too-large photos and image files are dropped but counted in `album_members`; when nothing readable is left
+    the flags tell the handler which fixed reply applies (an image file wins, as for a single message).
+    """
+    messages = [update.message for update in members if update.message is not None]
+    readable = [message for message in messages if message.photo_file_id is not None]
+    kept = readable[:ALBUM_MAX_PHOTOS]
+    first = messages[0]
+    caption = next((message.caption for message in messages if message.caption), None)
+    return IncomingMessage(
+        first.chat_id,
+        None,
+        first.sent_at_unix,
+        photo_file_id=kept[0].photo_file_id if kept else None,
+        photo_size=kept[0].photo_size if kept else None,
+        caption=caption,
+        photo_too_large=not kept and any(message.photo_too_large for message in messages),
+        document_image=not kept and any(message.document_image for message in messages),
+        media_group_id=first.media_group_id,
+        photo_file_ids=tuple(message.photo_file_id for message in kept if message.photo_file_id is not None),
+        album_members=len(messages),
+    )
 
 
 def _stopped(count: int, exc: Exception) -> TelegramRunStoppedError:

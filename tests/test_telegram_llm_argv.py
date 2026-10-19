@@ -22,6 +22,7 @@ from muscle50.infrastructure.llm.argv import (
     CLAUDE_SYSTEM_PROMPT,
     CODEX_ISOLATION_ARGV,
     claude_argv,
+    claude_stdin,
     codex_argv,
 )
 from muscle50.infrastructure.llm.executables import ResolvedExecutable, resolve_executable
@@ -485,3 +486,69 @@ def test_runner_kills_the_tree_on_ctrl_c(tmp_path: Path, monkeypatch: pytest.Mon
             [sys.executable, "-c", "import time; time.sleep(60)"], cwd=tmp_path, stdin=None, timeout_s=30, env=env
         )
     assert len(killed) == 1
+
+
+# --- v2.4 albums: more photos in one request ---
+
+PHOTO_TWO = b"\x89PNG\r\n\x1a\nsynthetic-second"
+PHOTO_THREE = b"\xff\xd8\xff\xe0synthetic-third"
+
+
+def test_claude_stdin_has_one_image_block_per_photo_and_a_single_photo_is_unchanged() -> None:
+    single = json.loads(claude_stdin(PROMPT, PHOTO).decode("ascii"))["message"]["content"]
+    assert [block["type"] for block in single] == ["text", "image"]
+    assert claude_stdin(PROMPT, PHOTO, ()) == claude_stdin(PROMPT, PHOTO)
+    album = json.loads(claude_stdin(PROMPT, PHOTO, (PHOTO_TWO, PHOTO_THREE)).decode("ascii"))["message"]["content"]
+    assert [block["type"] for block in album] == ["text", "image", "image", "image"]
+    assert [block["source"]["media_type"] for block in album[1:]] == ["image/jpeg", "image/png", "image/jpeg"]
+    assert [block["source"]["data"] for block in album[1:]] == [
+        base64.b64encode(item).decode() for item in (PHOTO, PHOTO_TWO, PHOTO_THREE)
+    ]
+    assert claude_stdin(PROMPT, None, (PHOTO_TWO,)) == claude_stdin(PROMPT, None)  # extras need a first photo
+
+
+def test_codex_argv_lists_every_photo_after_the_prompt_marker(tmp_path: Path) -> None:
+    schema, output, work = tmp_path / "s", tmp_path / "o", tmp_path / "w"
+    first, second, third = work / "photo.jpg", work / "photo-2.png", work / "photo-3.jpg"
+    album = codex_argv(
+        "codex.exe",
+        None,
+        schema_path=schema,
+        output_path=output,
+        work_dir=work,
+        photo_path=first,
+        extra_photo_paths=(second, third),
+    )
+    single = codex_argv("codex.exe", None, schema_path=schema, output_path=output, work_dir=work, photo_path=first)
+    assert album[-5:] == ("-", "-i", str(first), str(second), str(third))
+    assert single[-3:] == ("-", "-i", str(first))  # the single-photo form is byte-identical
+    assert album[:-2] == single  # nothing else differs
+
+
+def test_codex_call_with_an_album_puts_every_photo_in_its_cwd(tmp_path: Path) -> None:
+    runner = FakeRunner(codex_ok())
+    provider, _logs, made = _provider(runner, tmp_path)
+    request = LlmRequest(
+        PROMPT, SchemaName.ANSWER, PHOTO, lambda document: document, extra_photos=(PHOTO_TWO, PHOTO_THREE)
+    )
+    assert provider.call(request, ProviderName.CODEX).outcome == "ok"
+    call = runner.calls[0]
+    work = made[0] / "work"
+    assert sorted(call.cwd_files) == ["photo-2.png", "photo-3.jpg", "photo.jpg"]
+    assert call.argv[-5:] == ("-", "-i", str(work / "photo.jpg"), str(work / "photo-2.png"), str(work / "photo-3.jpg"))
+    assert not made[0].exists()
+
+
+def test_claude_call_with_an_album_sends_every_image_and_keeps_its_cwd_empty(tmp_path: Path) -> None:
+    runner = FakeRunner(claude_ok())
+    provider, _logs, made = _provider(runner, tmp_path)
+    request = LlmRequest(PROMPT, SchemaName.ANSWER, PHOTO, lambda document: document, extra_photos=(PHOTO_TWO,))
+    assert provider.call(request, ProviderName.CLAUDE).outcome == "ok"
+    call = runner.calls[0]
+    assert call.cwd_files == [] and call.stdin is not None
+    assert [block["type"] for block in json.loads(call.stdin.decode("ascii"))["message"]["content"]] == [
+        "text",
+        "image",
+        "image",
+    ]
+    assert call.argv == claude_argv(CLAUDE_EXE, "sonnet", load_schema(SchemaName.ANSWER))  # argv is unchanged
