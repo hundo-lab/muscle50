@@ -103,7 +103,10 @@ def _run(capsys: pytest.CaptureFixture[str], *argv: str) -> tuple[int, str]:
 
 
 def _seed_older_activities(capsys: pytest.CaptureFixture[str]) -> None:
-    code, _ = _run(capsys, "daily", "--after-workout", "--date", SEED_DATE)
+    # Daily Catch-up v1: the seed run covers SEED_DATE..09-30, so today's `daily` still starts on D-1 (10-01)
+    # and the pinned bytes below stay those of the D-1..D range. Seeding only through SEED_DATE would leave
+    # 09-30 unsynced, and today's run would correctly catch it up.
+    code, _ = _run(capsys, "daily", "--after-workout", "--date", "2026-09-30")
     assert code == 0
 
 
