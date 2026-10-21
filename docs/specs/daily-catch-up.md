@@ -1,7 +1,7 @@
 ---
 id: daily-catch-up
 title: Daily Catch-up and Telegram Range Sync v1
-status: draft
+status: integrated
 migration: none
 output_change: additive
 user_gates: [design, integration, live-garmin]
@@ -97,7 +97,37 @@ JSON(`daily --json`, additive, 끝에 key 추가):
 - [ ] AC8: `garmin latest`, `garmin refresh`, 다른 CLI 출력은 byte-identical이다.
 - [ ] AC9: 품질 게이트 4개가 통과한다.
 
+## 설계 승인 결정 (2026-10-21)
+
+사용자 답: "나머지 추천대로".
+
+- **완료일 규칙은 R2**: 운동·회복 row가 모두 `synced`이고 `synced_at_utc`(이 컴퓨터의 고정 UTC offset)가 그 날보다 뒤의 로컬 날짜일
+  때만 그 날을 완료로 본다. 아침 `daily`가 오늘을 `synced`로 적어도 그 날 저녁 운동·회복을 잃지 않게 하려는 것이다.
+- **`partial`은 동기화 안 됨(P1, spec 그대로)**. gate 1 때 운영 coverage(2026-09-21..2026-10-21)에 `partial` 회복 날은 0일이었다.
+- **새 CLI `garmin sync --from --to [--yes] [--json]`(S-A)**: `RunDailySync`를 `DailyMode.SYNC`로 다시 쓴다(로그인 한 번, 추천 없음).
+  bot의 `/sync`는 이 명령을 돌리고, `daily`의 안내 줄도 `garmin activities`+`garmin recovery` 대신 이 명령 하나를 적는다. 위 예시의
+  범위는 앞뒤가 맞지 않아(마지막 동기화 10-13이면 상한에 걸리지 않음) 설계에서 L = 10-08 형태로 고쳤다.
+- **`/sync_ok_<id>` 확인은 bot 메모리에만 둔다**(상태 파일은 바꾸지 않음).
+- `daily --after-workout`은 운동 coverage만 보고 같은 7일 상한으로 이어 받는다.
+- `garmin coverage`의 `Recorded by:` 줄은 byte-identical로 둔다(AC8). `garmin sync`가 빠진 사실은 한계로 적었다.
+- 새 text 줄은 daily 단계 결과 끝, 추천 리포트 앞에 둔다(`daily` text가 `recommend` text로 끝나는 계약 유지).
+- `/daily` 진행 문구(`DAILY_PROGRESS_TEXT`)에서 "어제와 오늘의"를 뺐다(고정 테스트 하나 수정).
+- 통합 순서는 `telegram-llm-failures-and-meals`(v2.5) 먼저. 그 위로 rebase할 때 v2.5 코치 답 규칙에 `/sync` 안내를 더했다
+  (v2.5 spec 범위 8이 허용). 다음 `daily`가 받지 않는 날(뒤에 동기화된 날이 있거나 7일보다 오래됨)은 `/sync <시작> <끝>`을 안내한다.
+
 ## 한계 / 후속 후보
 
 - 상한 7일은 회복 요청 수(약 9회/일)를 기준으로 정했다. 더 긴 공백은 `/sync`로 나눠 받는다.
 - 후속 후보: 아침 요약을 bot이 먼저 보내기, 빠진 날을 `garmin coverage`처럼 Telegram에서 보기(`/coverage`).
+- 구현자·검증자가 보고한 한계:
+  - 마지막 완료일보다 앞의 빈 날은 알리지 않는다(`garmin coverage`로 본다).
+  - 31일 창에 coverage row가 하나도 없는 긴 공백은 "기록 없음"과 같아서 D-1부터 받고 아무것도 알리지 않는다.
+  - 같은 날 기록된 row는 완료가 아니다(R2). 평소처럼 매일 아침 돌리면 시작일은 D-1 그대로다.
+  - 회복이 늘 `partial`이면 어떤 날도 완료가 아니어서 `daily`가 매번 8일(회복 요청 약 72회)을 받는다.
+  - `/sync_ok_` 확인은 bot을 다시 시작하면 사라진다. `/sync`를 다시 보낸다.
+  - `MM-DD`는 늘 올해다(1월에 작년 12월은 `YYYY-MM-DD`). 실패 요약의 다시 받기 명령은 끝 날짜의 해로 `MM-DD`를 쓴다.
+  - 요청 수 안내는 회복만 센다. 운동 목록·상세 요청이 더해진다.
+  - `garmin coverage`의 `Recorded by:` 줄은 `garmin sync`를 적지 않는다.
+  - 코치의 `/sync`와 `/daily` 선택은 프롬프트 규칙이라 틀릴 수 있다. 확정된 안내는 `sync_request` 답장과 `/daily` 요약의 `/sync` 줄이다.
+  - `garmin sync`의 stderr 진행 줄은 bot에서 걸러지지 않는다(검사가 끝난 뒤에만 쓰므로 실제로는 보이지 않는다).
+- **live Garmin 확인(AC7)은 통합 뒤 사용자 확인으로 남아 있음.** 순서는 `docs/daily-catch-up.md` "사람 확인"이다. migration은 없다.

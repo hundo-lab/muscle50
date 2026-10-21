@@ -117,7 +117,7 @@ capture를 재사용하고, 응답이 바뀌면 과거 snapshot을 유지한 채
 ## Garmin sync coverage
 
 날짜별로 "동기화했고 데이터가 없었음"(`synced`, activity 0개)과 "동기화한 적 없음"(`not synced`)을 구분해 보여 줍니다.
-`garmin activities --from/--to`, `garmin recovery`(단일 날짜/범위), `daily`가 sync한 날짜마다 최신 결과 하나를 기록합니다
+`garmin activities --from/--to`, `garmin recovery`(단일 날짜/범위), `daily`, `garmin sync`가 sync한 날짜마다 최신 결과 하나를 기록합니다
 (activities: `synced`/`failed`, recovery: `synced`/`partial`/`failed`). `garmin latest`와 `garmin refresh`는 기록하지 않습니다.
 
 ```powershell
@@ -134,7 +134,8 @@ Discovery 실패, page limit 도달, 날짜를 읽을 수 없는 목록 항목�
 RAW capture의 endpoint 목록으로 `synced`/`partial`(출처 `backfilled from RAW`)로 채웁니다. Garmin을 호출하거나 RAW를 쓰지
 않고, 이미 기록이 있는 날짜는 건드리지 않아 여러 번 실행해도 안전합니다. 과거 activity 날짜는 추정하지 않으므로
 `garmin activities --from --to`로 다시 sync하기 전까지 `not synced`입니다. 이 기능은 migration 010을 씁니다(첫 쓰기 명령에서
-적용, `garmin coverage`는 그 전 DB도 읽음). 상세: `docs/sync-coverage.md`.
+적용, `garmin coverage`는 그 전 DB도 읽음). `garmin coverage` 출력 끝의 `Recorded by:` 줄은 `garmin sync`를 적지 않습니다(출력을
+바꾸지 않으려고 그대로 둠). 상세: `docs/sync-coverage.md`.
 
 ## Training snapshot (Analytics v1)
 
@@ -151,8 +152,8 @@ muscle group 매핑(Exercise Taxonomy v1)은 `docs/exercise-taxonomy.md`를 참�
 
 ## 하루 workflow (`muscle50 daily`)
 
-평소 하루에 필요한 activity 동기화(어제~오늘), load metric 채우기, recovery 동기화(어제~오늘), 오늘 추천을 명령 하나로
-실행합니다. 각 단계는 위의 개별 명령과 같은 코드를 그대로 쓰므로 여러 번 실행해도 안전합니다.
+평소 하루에 필요한 activity 동기화, load metric 채우기, recovery 동기화, 오늘 추천을 명령 하나로 실행합니다. 각 단계는
+위의 개별 명령과 같은 코드를 그대로 쓰므로 여러 번 실행해도 안전합니다.
 
 ```powershell
 muscle50 daily                              # 운동 전: 오늘 날짜로 sync 후 자동 추천
@@ -166,6 +167,23 @@ muscle50 daily --after-workout              # 운동 후: activity 가져오기 
 `muscle50 recommend --date <날짜>`와 같은 내용을 그 아래에 그대로 출력합니다. 어느 sync 단계든 실패하면 실패한 단계를
 표시하고 exit code 1로 끝나며, 불완전할 수 있는 데이터로 추천을 만들지 않습니다(이미 저장된 데이터는 유지).
 `garmin refresh`, InBody import, Garmin 첫 로그인(MFA)은 여전히 별도 명령입니다.
+
+**이어 받기**: 동기화 범위는 sync coverage 기록으로 정합니다. 운동·회복이 모두 `synced`이고 그 날이 끝난 뒤에 기록된 마지막
+날의 다음 날부터 오늘까지 받습니다. 시작일은 어제보다 늦지 않고(매일 아침 `daily`를 돌리면 지금처럼 어제~오늘) 7일 전보다
+이르지 않습니다. `--after-workout`은 운동 coverage만 봅니다. 시작일이 어제보다 이를 때만 daily 단계 결과 끝(추천 앞)에
+`Sync range: ...` 줄이, 7일보다 오래 빠진 날이 있으면 `Older unsynced days: ...` 줄과 받는 명령이 붙고, `--json`에는 마지막 key
+`catch_up`이 붙습니다. 빠진 날이 없거나 coverage 기록이 없으면 출력은 이전과 같습니다.
+
+```powershell
+muscle50 daily                                                   # 빠진 날이 있으면 stderr에 "syncing 2026-10-14..2026-10-21"
+muscle50 garmin sync --from 2026-10-09 --to 2026-10-13           # 정한 기간의 activities + load metric + recovery (추천 없음)
+muscle50 garmin sync --from 2026-10-01 --to 2026-10-18 --yes     # 7일 넘으면 --yes 필요, 최대 31일
+muscle50 garmin sync --from 2026-10-09 --to 2026-10-13 --json    # daily --json과 같은 문서("mode": "sync")
+```
+
+`garmin sync`는 로그인 한 번으로 `daily`의 동기화 단계만 돌리고 coverage를 `garmin sync`로 기록합니다. 날짜 형식, 순서,
+미래 날짜, 31일 초과, 7일 초과인데 `--yes`가 없으면 디렉터리·로그인 전에 `오류:`로 거부합니다(exit 1). Garmin 요청은
+회복만 하루 약 9회이고 운동 목록·상세 요청이 더해집니다. 상세와 한계: `docs/daily-catch-up.md`.
 
 ## Training recommendation (v1)
 
@@ -356,7 +374,8 @@ muscle50 telegram run      # long polling 시작. Ctrl+C로 종료(exit 130)
 | `/void <meal_id> [이유]` | `nutrition meal void <meal_id> [--reason ...]` |
 | `/show <meal_id>` | `nutrition meal show <meal_id>` |
 | `/inbody` | `inbody trend` |
-| `/daily [full]` | `daily` (Garmin 동기화 포함, 진행 답을 먼저 보냄. 기본은 요약, `full`은 CLI text) |
+| `/daily [full]` | `daily` (Garmin 동기화 포함, 진행 답을 먼저 보냄. 기본은 요약, `full`은 CLI text. 이어 받았으면 `이어 받기: 10-14부터 ...` 줄, 7일보다 오래 빠진 날이 남으면 `/sync 10-09 10-13` 안내) |
+| `/sync <시작> <끝>` | `garmin sync --from ... --to ... --json` (날짜는 `YYYY-MM-DD` 또는 `MM-DD`(올해), 끝은 오늘까지, 최대 31일. 운동·load metric·회복만 받고 추천은 만들지 않음. 진행 답을 먼저 보내고 짧은 요약을 답함. 7일을 넘으면 바로 실행하지 않고 요청 수와 `/sync_ok_<id>`를 답하며, 같은 chat에서 10분 안에 한 번만 누를 수 있음(bot 메모리에만 있어 재시작하면 사라짐)) |
 | `/unknown` | `recommend --date <오늘>`의 UNKNOWN notice (최근 14일, 오늘 운동 제외. 운동마다 Garmin Connect 링크와 `/refresh <id>`, 목록 끝에 `모두 다시 받기: /refresh`) |
 | `/refresh` | UNKNOWN 운동 모두 다시 받기, 한 번에 10개 (`/unknown` 목록을 차례로 `garmin refresh`. 진행 답을 먼저 보내고, 운동마다 전후 UNKNOWN 세트 수와 남은 UNKNOWN 운동 수를 답함) |
 | `/refresh <activity_id>` | `garmin refresh <activity_id>` (진행 답을 먼저 보내고, 전후 UNKNOWN 세트 수를 답함) |
@@ -365,7 +384,7 @@ muscle50 telegram run      # long polling 시작. Ctrl+C로 종료(exit 130)
 `allowed_chat_ids`에 없는 chat의 메시지에는 답하지 않고 콘솔에 chat id 한 줄만 남깁니다. 개인 chat id만 넣으세요.
 token은 콘솔, 오류, 답장 어디에도 출력하지 않습니다. 처리한 update는 `config\telegram_state.json`에 기록해 재시작 뒤에도
 다시 실행하지 않고(`/log` 중복 방지), bot이 시작되기 전에 보낸 메시지는 실행하지 않습니다. 적용하지 않은 migration이
-있으면 bot은 migration을 적용하지 않고 `/status`, `/day`, `/show`, `/log`, `/void`, `/daily`, `/refresh`를 거부합니다(터미널에서 백업 후 적용하고
+있으면 bot은 migration을 적용하지 않고 `/status`, `/day`, `/show`, `/log`, `/void`, `/daily`, `/sync`, `/refresh`를 거부합니다(터미널에서 백업 후 적용하고
 `telegram run`을 다시 시작). bot이 직접 쓰는 문구(`/help`, 사용법, `취소: /void <meal_id>` 줄 등)는 한국어입니다.
 상세와 한계: `docs/telegram-bot.md`.
 
@@ -420,7 +439,8 @@ CLI(`claude -p` 또는 `codex exec`)를 본인 구독으로 실행하며 API 키
 - (v2.4) **메뉴 제안은 4시간** 유효합니다(식사 기록·수정 제안은 60분 그대로). `/ok`로 기록·수정·void하면 CLI 영어 출력 대신
   **짧은 한국어 요약**(기록한 item, 이 끼니와 오늘 누적, 취소 명령)을 보내고, 자세한 내용은 `/show <meal id>`로 봅니다. 요약을
   만들지 못하면 CLI 출력을 그대로 보냅니다. "동기화 해줘"는 아무것도 실행하지 않고 누를 수 있는 `/daily`(전체 동기화)와
-  `/refresh`(UNKNOWN 운동 다시 받기)를 안내합니다.
+  `/refresh`(UNKNOWN 운동 다시 받기)를 안내합니다. 다음 `daily`가 받지 않을 빠진 날(7일보다 오래됨)이 남아 있으면
+  `받기: /sync 10-09 10-13` 줄을 하나 더 붙입니다.
 - (v2.4) 개발: 모든 테스트는 실제 muscle50 홈(`%LOCALAPPDATA%\muscle50`)을 건드리지 않도록 임시 폴더로 격리됩니다.
 - (v2.5) **실패하면 이유와 할 일**을 알려 줍니다: 인터넷 연결, 사용 한도, 로그인 필요, 시간 초과, 실행 파일 없음(그 밖은 v2.4
   문구). 답장에 누를 수 있는 `/retry_<토큰>`(60분 유효, 한 번만)이 붙고, 누르면 그 메시지(사진은 같은 사진)를 처음 받은 것처럼
@@ -436,7 +456,8 @@ CLI(`claude -p` 또는 `codex exec`)를 본인 구독으로 실행하며 API 키
   둘이라 더 늦고 Claude 사용량도 쓰며, 메시지·사진이 OpenAI와 Anthropic 둘 다로 갑니다. Claude 검색이 실패하면 Codex 답에
   `(웹 검색은 하지 못했습니다: 사용 한도)`처럼 붙입니다. `"web_search": false`면 하지 않습니다.
 - (v2.5) 코치가 bot 명령 목록과 최근 14일 동기화 상태를 압니다. "동기화 명령어 뭐야?"에는 누를 수 있는 명령으로 답하고, 운동·회복
-  질문에서 "기록 없음"과 "동기화 안 됨"(예: `10-09~10-18`)을 구분해 `/daily`를 안내합니다.
+  질문에서 "기록 없음"과 "동기화 안 됨"(예: `10-09~10-18`)을 구분해 `/daily`를 안내합니다. 그 날 뒤에 동기화된 날이 있거나
+  7일보다 오래된 날(다음 `daily`가 받지 않는 날)은 `/sync <시작> <끝>`을 안내합니다(프롬프트 규칙이라 틀릴 수 있음).
 - 질문 답은 muscle50 결과 JSON에 있는 숫자만 쓸 수 있고, 다른 숫자가 섞이면 보내지 않고 기존 명령 답장을 보냅니다.
 - `/llm`(제공자 확인·변경), `/memory`(다음 호출에 넘어갈 기억), `/forget`(이 chat의 기억 삭제, 기록은 남음),
   `/history [N|YYYY-MM-DD]`(대화 기록). PC에서는 `muscle50 telegram history [--last N | --date YYYY-MM-DD] [--json]`
