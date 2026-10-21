@@ -128,6 +128,8 @@ def _proposal_document(proposal: Proposal) -> dict[str, Any]:
                 "meal_type": meal.meal_type.value,
                 "argv_ok": list(meal.argv_ok),
                 "argv_plain": list(meal.argv_plain),
+                "join_meal_id": meal.join_meal_id,
+                "argv_new": list(meal.argv_new),
             }
             for meal in proposal.meals
         ],
@@ -139,6 +141,10 @@ def _proposal_document(proposal: Proposal) -> dict[str, Any]:
         "retry_file_ids": list(proposal.retry_file_ids),
         "retry_album": proposal.retry_album,
         "received_unix": proposal.received_unix,
+        "edit_requests": list(proposal.edit_requests),
+        "join_meal_id": proposal.join_meal_id,
+        "argv_alt": list(proposal.argv_alt),
+        "alt_action": proposal.alt_action,
     }
 
 
@@ -191,6 +197,8 @@ def _proposal(item: dict[str, Any]) -> Proposal:
                 meal_type=MealType(meal["meal_type"]),
                 argv_ok=_strings(meal["argv_ok"]),
                 argv_plain=_strings(meal["argv_plain"]),
+                join_meal_id=_optional_string(meal.get("join_meal_id")),
+                argv_new=_strings(meal.get("argv_new", [])),
             )
             for meal in item.get("meals", [])
         ),
@@ -204,6 +212,10 @@ def _proposal(item: dict[str, Any]) -> Proposal:
         retry_file_ids=_strings(item.get("retry_file_ids", [])),
         retry_album=_integer(item.get("retry_album", 0)),
         received_unix=_integer(item.get("received_unix", 0)),
+        edit_requests=_strings(item.get("edit_requests", [])),
+        join_meal_id=_optional_string(item.get("join_meal_id")),
+        argv_alt=_strings(item.get("argv_alt", [])),
+        alt_action=_alt_action(item.get("alt_action", "")),
     )
 
 
@@ -211,6 +223,12 @@ def _optional_string(value: Any) -> str | None:
     if value is not None and not isinstance(value, str):
         raise ValueError("expected a string or null")
     return value
+
+
+def _alt_action(value: Any) -> str:
+    if value not in ("", "new", "add"):
+        raise ValueError("bad alt_action")
+    return str(value)
 
 
 def _integer(value: Any) -> int:

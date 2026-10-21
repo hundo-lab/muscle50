@@ -181,14 +181,19 @@ def recent_meals_block(meals: Sequence[Meal]) -> str:
 
 
 def open_proposal_block(proposal: Proposal) -> str:
-    """`<열린 제안>`: the item lines the user was shown for the newest open meal proposal."""
+    """`<열린 제안>`: the item lines the user was shown for the newest open meal proposal and (v2.5) the earlier
+    requests that corrected it, so that the next correction keeps them."""
     if proposal.meal_type is not None:
         where = (
             f"{MEAL_NAMES[proposal.meal_type]} {proposal.day:%m-%d}" if proposal.day else MEAL_NAMES[proposal.meal_type]
         )
     else:
         where = f"{proposal.day:%m-%d} {len(proposal.meals)}끼" if proposal.day else f"{len(proposal.meals)}끼"
-    return "\n".join([f"/ok_{proposal.token} | {where}", *proposal.outline])
+    lines = [f"/ok_{proposal.token} | {where}", *proposal.outline]
+    if proposal.edit_requests:
+        lines.append("앞선 수정 요청(오래된 것부터):")
+        lines.extend(f"- {request}" for request in proposal.edit_requests)
+    return "\n".join(lines)
 
 
 # --- a new meal that overlaps a recorded one of the same day and type ---

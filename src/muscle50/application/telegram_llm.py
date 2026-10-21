@@ -115,6 +115,7 @@ from muscle50.domain.telegram_llm import (
     Topic,
     blank_retry,
     clean_memo,
+    edit_requests_after,
     estimate_source,
     history_entry,
     meal_slot_for,
@@ -135,6 +136,12 @@ from muscle50.domain.telegram_llm_check import (
     RecheckOutcome,
     check_estimate,
     recheck_note,
+)
+from muscle50.domain.telegram_llm_context import (
+    command_lines,
+    coverage_range,
+    coverage_summary,
+    known_commands,
 )
 from muscle50.domain.telegram_llm_corrections import (
     RECENT_MEALS,
@@ -220,6 +227,11 @@ from muscle50.domain.telegram_llm_prompt import (
     UNCLEAR_TEXT,
     PromptTask,
     build_prompt,
+    join_add_hint,
+    join_many_text,
+    join_new_hint,
+    join_none_text,
+    join_target_gone_text,
     llm_status_text,
     menu_expired_text,
     provider_default_text,
@@ -237,7 +249,10 @@ HISTORY_SCAN = 200
 """The newest history lines read to find the chat's last recorded meals (a bounded read: a month file can be big)."""
 _RECORDED_MEAL = re.compile(r"Recorded meal (\S+)\.")
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
-_TOPIC_COMMANDS = {Topic.TRAINING: "/today", Topic.NUTRITION: "/status", Topic.BODY: "/inbody"}
+_TOPIC_COMMANDS = {Topic.TRAINING: "/today", Topic.NUTRITION: "/status", Topic.BODY: "/inbody", Topic.BOT: "/help"}
+_ADD_ITEM = ("nutrition", "meal", "add-item")
+JOIN_ITEMS_SHOWN = 3
+"""A join proposal names the first items of the recorded meal it adds to (then ` 외 N개`)."""
 _CATEGORY_NAMES = {
     SuggestCategory.EATING_OUT: "외식",
     SuggestCategory.DELIVERY: "배달",
@@ -358,6 +373,19 @@ class MealProposalView:
     superseded: str | None = None
     """The token of the open proposal this one replaces (cancelled in the same save)."""
     overlap: OverlapView | None = None
+    join: JoinView | None = None
+    """v2.5: the proposal adds to this recorded meal (`/ok_` is `add-item`, `/new_` a separate meal)."""
+    join_note: str | None = None
+    """v2.5: why a requested join does not happen (no meal of that type, or several)."""
+    alt_action: str = ""
+    """v2.5: `new` (with a join) or `add` (`/add_` adds to the one recorded meal of that type instead)."""
+
+
+@dataclass(frozen=True)
+class JoinView:
+    meal_id: str
+    items: str
+    """The recorded meal's first items (`바나나 (banana) 1 count`, then ` 외 N개`)."""
 
 
 @dataclass(frozen=True)
@@ -366,6 +394,9 @@ class MealBlockView:
     duplicates: tuple[str, ...]
     items: tuple[ProposalItemView, ...]
     overlap: OverlapView | None = None
+    join_meal_id: str | None = None
+    """v2.5: this meal adds to that recorded meal."""
+    join_note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -380,6 +411,8 @@ class MultiMealProposalView:
     label: str | None = None
     """`사진 추정` for a photo, as in the single-meal proposal head."""
     superseded: str | None = None
+    new_available: bool = False
+    """v2.5: some meal adds to a recorded one, so `/new_` (every meal as a new one) is offered."""
 
 
 @dataclass(frozen=True)
@@ -644,6 +677,8 @@ class TelegramLlmHandler:
             parse_interpretation,
             web_search=self._web_search_on(),
             extra_photos=extra_photos,
+            # v2.5: while a meal proposal is open, a text may correct it: the stronger retry model reads it.
+            strong_model=photo is None and self._open_meal_proposal(chat_id) is not None,
         )
         exchange.calls.append(call)
         if not call.ok:
@@ -820,6 +855,7 @@ class TelegramLlmHandler:
             exchange.reply = ReplyText(DATE_OTHER_TEXT)
             return
         cancel: str | None = None
+        edit_requests: tuple[str, ...] = ()
         if photo is None and interpretation.refers_to is Refers.OPEN_PROPOSAL:
             # The message corrects the proposal that is still open: the corrected one replaces it (never a stray meal).
             opened = self._open_meal_proposal(chat_id)
@@ -827,6 +863,7 @@ class TelegramLlmHandler:
                 exchange.reply = ReplyText(EDIT_NO_OPEN_TEXT)
                 return
             cancel = opened.token
+            edit_requests = edit_requests_after(opened.edit_requests, words)  # v2.5: the next correction keeps them
         entries = self._link_items(chat_id, interpretation, exchange.menu)
         if not entries:
             exchange.reply = ReplyText(usage_text("log"))
@@ -848,6 +885,7 @@ class TelegramLlmHandler:
             self._reference(used, photo_digest),
             label,
             cancel=cancel,
+            edit_requests=edit_requests,
         )
 
     # --- linking ---------------------------------------------------------------------------------------------
@@ -901,6 +939,7 @@ class TelegramLlmHandler:
                 own_quantity=item.quantity,
                 label=is_label_estimate(item.estimate, item.from_label),
                 portions=item.portions,
+                join=item.join_existing,
             )
 
         if item.kind is ItemKind.GENERAL:
@@ -939,6 +978,7 @@ class TelegramLlmHandler:
             via=via,
             index=index,
             meal_type=item.meal_type,
+            join=item.join_existing,
         )
 
     # --- the numeric re-check -------------------------------------------------------------------------------
@@ -1033,10 +1073,13 @@ class TelegramLlmHandler:
         label: str | None,
         *,
         cancel: str | None = None,
+        edit_requests: tuple[str, ...] = (),
     ) -> None:
         """One meal: the v2 proposal. Two or more meals: one proposal that `/ok_` records meal by meal.
 
         ``cancel``: the token of the open proposal this one corrects; it is cancelled in the same state save.
+        ``edit_requests``: the corrections so far (v2.5), kept with the new proposal for the next correction.
+        v2.5: a meal whose items all ask to join (`join_existing`) adds to the day's one recorded meal of that type.
         """
         meals: dict[MealType, list[_Entry]] = {}
         slot_from_time = False
@@ -1061,6 +1104,7 @@ class TelegramLlmHandler:
                 slot_from_time,
                 searches=searches,
                 cancel=cancel,
+                edit_requests=edit_requests,
             )
             return
         commands = []
@@ -1068,14 +1112,32 @@ class TelegramLlmHandler:
         for meal_type, items in meals.items():
             existing = self._existing_meals(chat_id, day, meal_type)
             duplicates = tuple(meal.meal_id for meal in existing)
+            target, note = _join_target(meal_type, existing, items)
             head = ("nutrition", "log", "--date", day.isoformat(), "--meal", meal_type.value)
             tail = ("--additional",) if duplicates else ()
-            argv_ok = (*head, *(arg for entry in items for arg in entry.argv(source, reference, True)), *tail)
-            argv_plain = (*head, *(arg for entry in items for arg in entry.argv(source, reference, False)), *tail)
+            ok_items = tuple(arg for entry in items for arg in entry.argv(source, reference, True))
+            plain_items = tuple(arg for entry in items for arg in entry.argv(source, reference, False))
+            log_ok, log_plain = (*head, *ok_items, *tail), (*head, *plain_items, *tail)
             has_estimate = any(entry.estimate for entry in items)
-            commands.append(MealCommand(meal_type, argv_ok, argv_plain if has_estimate else ()))
+            if target is not None:
+                add = (*_ADD_ITEM, target.meal_id)
+                command = MealCommand(
+                    meal_type, (*add, *ok_items), (*add, *plain_items) if has_estimate else (), target.meal_id, log_ok
+                )
+            else:
+                command = MealCommand(meal_type, log_ok, log_plain if has_estimate else ())
+            commands.append(command)
             overlap = self._overlap(day, meal_type, existing, items, fixable=False)
-            blocks.append(MealBlockView(meal_type, duplicates, _item_views(items), overlap[0]))
+            blocks.append(
+                MealBlockView(
+                    meal_type,
+                    duplicates,
+                    _item_views(items),
+                    overlap[0],
+                    target.meal_id if target is not None else None,
+                    note,
+                )
+            )
         proposal = self._new_proposal(
             chat_id,
             ProposalKind.MEAL,
@@ -1083,6 +1145,7 @@ class TelegramLlmHandler:
             meals=tuple(commands),
             day=day,
             outline=_multi_outline(blocks),
+            edit_requests=edit_requests,
         )
         exchange.proposal = proposal.token
         view = MultiMealProposalView(
@@ -1093,6 +1156,7 @@ class TelegramLlmHandler:
             searches,
             label,
             cancel,
+            any(command.argv_new for command in commands),
         )
         exchange.reply = self._replies.multi_proposal(view)
 
@@ -1141,17 +1205,32 @@ class TelegramLlmHandler:
         failed_photo: bool = False,
         searches: int = 0,
         cancel: str | None = None,
+        edit_requests: tuple[str, ...] = (),
     ) -> None:
+        """One meal's proposal. v2.5: when every item asks to join and the day has exactly one meal of that type,
+        `/ok_` adds to it (`add-item`) and `/new_` records a separate meal; with no word to join and exactly one such
+        meal (and nothing overlapping), `/add_` offers adding to it instead of the new meal `/ok_` records."""
         existing = self._existing_meals(chat_id, day, meal_type)
         duplicates = tuple(meal.meal_id for meal in existing)
+        target, join_note = _join_target(meal_type, existing, entries) if not failed_photo else (None, None)
         overlap, fix_argv, fix_change = self._overlap(
-            day, meal_type, existing, entries, fixable=True, source=source, reference=reference
+            day, meal_type, existing, entries, fixable=target is None, source=source, reference=reference
         )
         head = ("nutrition", "log", "--date", day.isoformat(), "--meal", meal_type.value)
         tail = ("--additional",) if duplicates else ()
-        argv_ok = (*head, *(arg for entry in entries for arg in entry.argv(source, reference, True)), *tail)
+        ok_items = tuple(arg for entry in entries for arg in entry.argv(source, reference, True))
+        plain_items = tuple(arg for entry in entries for arg in entry.argv(source, reference, False))
         has_estimate = any(entry.estimate for entry in entries)
-        argv_plain = (*head, *(arg for entry in entries for arg in entry.argv(source, reference, False)), *tail)
+        argv_ok, argv_plain = (*head, *ok_items, *tail), (*head, *plain_items, *tail)
+        argv_alt: tuple[str, ...] = ()
+        alt_action = ""
+        join = None
+        if target is not None:
+            argv_alt, alt_action = argv_ok, "new"
+            argv_ok, argv_plain = (*_ADD_ITEM, target.meal_id, *ok_items), (*_ADD_ITEM, target.meal_id, *plain_items)
+            join = JoinView(target.meal_id, _join_items(target))
+        elif len(existing) == 1 and overlap is None and not failed_photo:
+            argv_alt, alt_action = (*_ADD_ITEM, existing[0].meal_id, *ok_items), "add"
         views = _item_views(entries)
         proposal = self._new_proposal(
             chat_id,
@@ -1164,6 +1243,10 @@ class TelegramLlmHandler:
             outline=_outline(views),
             fix_argv=fix_argv,
             fix_change=fix_change,
+            edit_requests=edit_requests,
+            join_meal_id=target.meal_id if target is not None else None,
+            argv_alt=argv_alt,
+            alt_action=alt_action,
         )
         exchange.proposal = proposal.token
         view = MealProposalView(
@@ -1172,7 +1255,7 @@ class TelegramLlmHandler:
             day,
             label,
             slot_from_time,
-            duplicates,
+            () if target is not None else duplicates,
             views,
             tuple(dropped),
             has_estimate,
@@ -1180,6 +1263,9 @@ class TelegramLlmHandler:
             searches,
             cancel,
             overlap,
+            join,
+            join_note,
+            alt_action,
         )
         exchange.reply = self._replies.proposal(view)
 
@@ -1473,6 +1559,8 @@ class TelegramLlmHandler:
         data: list[tuple[str, Any]] = []
         documents: dict[Topic, Any] = {}
         for topic in topics:
+            if topic is Topic.BOT:
+                continue  # v2.5: the bot's commands come with every answer prompt (`[bot 명령]`)
             if topic is Topic.TRAINING:
                 argv: tuple[str, ...] = ("recommend", "--date", self._today().isoformat(), "--json")
             elif topic is Topic.NUTRITION:
@@ -1490,16 +1578,27 @@ class TelegramLlmHandler:
                     data.append(("오늘 누적", totals_text(today_totals(documents[Topic.NUTRITION], day))))
             except (KeyError, TypeError, ValueError) as exc:
                 self._log(f"chat {chat_id}: today totals not computed ({type(exc).__name__})")
+        if Topic.TRAINING in topics or Topic.BOT in topics:
+            coverage = self._coverage(chat_id)
+            if coverage is not None:
+                data.append(("동기화 상태", coverage))
         sources = ", ".join(_TOPIC_COMMANDS[topic] for topic in topics)
-        if data:
-            call = self._call(chat_id, SchemaName.ANSWER, PromptTask.ANSWER, words, None, data, parse_answer)
+        if data or Topic.BOT in topics:
+            commands = help_text(True)
+            call = self._call(
+                chat_id, SchemaName.ANSWER, PromptTask.ANSWER, words, None, data, parse_answer, commands=commands
+            )
             exchange.calls.append(call)
             if call.ok:
                 exchange.outputs["answer"] = call.document.document
                 exchange.summary = call.document.memory_summary or exchange.summary
-                unknown = unknown_numbers(call.document.answer, allowed_numbers([doc for _label, doc in data]))
+                answer = call.document.answer
+                # The help text is not data: its numbers are not numbers the answer may use.
+                unknown = unknown_numbers(answer, allowed_numbers([doc for _label, doc in data]))
                 if not unknown:
-                    exchange.reply = ReplyText(f"{call.document.answer}\n(근거: {sources})")
+                    # A question about the bot gets its named commands as lines of their own (one tap each).
+                    lines = command_lines(answer, known_commands(commands)) if Topic.BOT in topics else ()
+                    exchange.reply = ReplyText(f"{answer}\n(근거: {sources})", lines)
                     return
                 self._log(
                     f"chat {chat_id}: llm answer had {len(unknown)} numbers outside the data; sent the existing replies"
@@ -1521,7 +1620,9 @@ class TelegramLlmHandler:
                     continue
             except SummaryUnavailableError:
                 pass
-            if topic is Topic.BODY:
+            if topic is Topic.BOT:
+                messages.extend(self._replies.messages(ReplyText(help_text(True))))
+            elif topic is Topic.BODY:
                 try:
                     outcome = self._commands.run(("inbody", "trend"))
                     text = outcome.stdout.removesuffix("\n") or outcome.stderr.removesuffix("\n")
@@ -1534,6 +1635,20 @@ class TelegramLlmHandler:
                 messages.extend(self._replies.messages(ReplyText(f"답을 만들지 못했습니다. 확인: {command}")))
         exchange.messages = tuple(messages)
         exchange.reply = ReplyText(f"(LLM 답 대신 기존 답장: {sources})")
+
+    def _coverage(self, chat_id: int) -> str | None:
+        """v2.5: the `<동기화 상태>` of the last 14 days (`garmin coverage --json`, read-only); None when unreadable."""
+        start, end = coverage_range(self._today())
+        document = self._read_json(
+            chat_id, ("garmin", "coverage", "--from", start.isoformat(), "--to", end.isoformat(), "--json")
+        )
+        if document is None:
+            return None
+        try:
+            return coverage_summary(document, end)
+        except (KeyError, TypeError, ValueError) as exc:
+            self._log(f"chat {chat_id}: sync coverage not understood ({type(exc).__name__})")
+            return None
 
     # --- meal edits ------------------------------------------------------------------------------------------
 
@@ -1787,7 +1902,15 @@ class TelegramLlmHandler:
     # --- proposal commands -------------------------------------------------------------------------------
 
     def _proposal_command(self, chat_id: int, update_id: int, command: ProposalCommand) -> LlmAction:
-        kind = {"ok": "confirm", "plain": "plain", "no": "cancel", "eat": "eat", "fix": "fix"}[command.action]
+        kind = {
+            "ok": "confirm",
+            "plain": "plain",
+            "no": "cancel",
+            "eat": "eat",
+            "fix": "fix",
+            "new": "confirm",
+            "add": "confirm",
+        }[command.action]
         typed = f"/{command.action}_{command.token}" + (f"_{command.number}" if command.number is not None else "")
         state = self._proposals.load()
         proposal = next(
@@ -1809,24 +1932,34 @@ class TelegramLlmHandler:
         refused = self._migration_refusal(chat_id)
         if refused is not None:  # not consumed: it can be confirmed once the migration is applied
             return self._simple(chat_id, update_id, kind, refused, proposal=proposal.token, typed=typed)
+        gone = self._join_target_gone(chat_id, proposal, command.action)
+        if gone is not None:  # v2.5: not consumed either: `/new_` (or `/ok_`) still works
+            self._log(f"chat {chat_id}: /{command.action} {proposal.token} refused (meal to add to is gone)")
+            return self._simple(chat_id, update_id, kind, gone, proposal=proposal.token, typed=typed)
         self._update(state, proposal.with_state(ProposalState.USED))  # before it runs: at most once
         if proposal.meals:
             self._log(f"chat {chat_id}: proposal {proposal.token} confirmed ({len(proposal.meals)} meals)")
             return self._run_meals(chat_id, update_id, proposal, command.action, kind, typed)
-        argv = proposal.argv_plain if command.action == "plain" else proposal.argv_ok
+        if command.action in ("new", "add"):
+            argv = proposal.argv_alt
+        else:
+            argv = proposal.argv_plain if command.action == "plain" else proposal.argv_ok
         edit = proposal.kind is ProposalKind.EDIT
+        adds = not edit and argv[:3] == _ADD_ITEM  # v2.5: adds to a recorded meal (no undo line: it is not new)
         history_kind = "edit" if edit else kind
-        invocation = CliInvocation("ok" if command.action == "ok" else "plain", argv, True, False, not edit)
+        invocation = CliInvocation(
+            "plain" if command.action == "plain" else "ok", argv, True, False, not edit and not adds
+        )
         self._log(f"chat {chat_id}: proposal {proposal.token} confirmed")
 
         def on_outcome(outcome: CommandOutcome, text: str) -> str:
-            meal_id = proposal.meal_id if edit else _recorded_meal_id(outcome.stdout)
+            meal_id = proposal.meal_id if edit else argv[3] if adds else _recorded_meal_id(outcome.stdout)
             if outcome.exit_code == 0:
-                verb = edit_verb(argv) if edit else SummaryVerb.RECORDED
+                verb = edit_verb(argv) if edit else SummaryVerb.EDITED if adds else SummaryVerb.RECORDED
                 short = self._short_reply(chat_id, meal_id, verb)
                 if short is not None:
                     text = short  # replaces the CLI's English text (and its undo line)
-                elif edit and meal_id is not None:
+                elif (edit or adds) and meal_id is not None:
                     text = f"{text}\n확인: /show {meal_id}"
                 totals = self._totals_line(chat_id, proposal.day)
                 if totals is not None:
@@ -1853,18 +1986,21 @@ class TelegramLlmHandler:
         self, chat_id: int, update_id: int, proposal: Proposal, action: str, kind: str, typed: str
     ) -> LlmAction:
         """`/ok_` or `/plain_` of a multi-meal proposal: one `nutrition log` per meal, in order, stopping at the
-        first failure. Meals already recorded stay recorded (each has its own undo line)."""
+        first failure. Meals already recorded stay recorded (each has its own undo line). v2.5: a meal that joins a
+        recorded one runs `add-item` (no undo line); `/new_` records every meal as a new one."""
         plain = action == "plain"
         meals = proposal.meals
+
+        def meal_argv(meal: MealCommand) -> tuple[str, ...]:
+            if action == "new":
+                return meal.argv_new or meal.argv_ok
+            return (meal.argv_plain or meal.argv_ok) if plain else meal.argv_ok
+
+        def joins(meal: MealCommand) -> bool:
+            return meal.join_meal_id is not None and action != "new"
+
         invocations = tuple(
-            CliInvocation(
-                "plain" if plain else "ok",
-                (meal.argv_plain or meal.argv_ok) if plain else meal.argv_ok,
-                True,
-                False,
-                True,
-            )
-            for meal in meals
+            CliInvocation("plain" if plain else "ok", meal_argv(meal), True, False, not joins(meal)) for meal in meals
         )
 
         def on_done(steps: tuple[SequenceStep, ...]) -> str:
@@ -1874,8 +2010,12 @@ class TelegramLlmHandler:
             failed_code = 0
             for meal, step in zip(meals, steps, strict=False):
                 if step.ok:
-                    meal_id = _recorded_meal_id(step.outcome.stdout) if step.outcome is not None else None
-                    short = self._short_reply(chat_id, meal_id, SummaryVerb.RECORDED)
+                    if joins(meal):
+                        meal_id: str | None = meal.join_meal_id
+                    else:
+                        meal_id = _recorded_meal_id(step.outcome.stdout) if step.outcome is not None else None
+                    verb = SummaryVerb.EDITED if joins(meal) else SummaryVerb.RECORDED
+                    short = self._short_reply(chat_id, meal_id, verb)
                     blocks.append(short if short is not None else step.text)
                     if meal_id is not None:
                         recorded.append(meal_id)
@@ -1955,6 +2095,31 @@ class TelegramLlmHandler:
             return PROPOSAL_NO_PLAIN_TEXT.format(token=proposal.token)
         if command.action == "fix" and (proposal.kind is not ProposalKind.MEAL or not proposal.fix_argv):
             return PROPOSAL_WRONG_KIND_TEXT
+        if command.action == "new" and proposal.alt_action != "new" and not any(m.argv_new for m in proposal.meals):
+            return PROPOSAL_WRONG_KIND_TEXT
+        if command.action == "add" and proposal.alt_action != "add":
+            return PROPOSAL_WRONG_KIND_TEXT
+        return None
+
+    def _join_target_gone(self, chat_id: int, proposal: Proposal, action: str) -> str | None:
+        """v2.5: the refusal when a recorded meal this command would add to is gone or voided (checked again at
+        `/ok_`, before anything is marked used); None when every target is still active."""
+        targets: list[tuple[MealType, str]] = []
+        if action in ("ok", "plain"):
+            targets = [(meal.meal_type, meal.join_meal_id) for meal in proposal.meals if meal.join_meal_id]
+            if proposal.join_meal_id is not None and proposal.meal_type is not None:
+                targets.append((proposal.meal_type, proposal.join_meal_id))
+        elif action == "add" and proposal.meal_type is not None and len(proposal.argv_alt) > 3:
+            targets = [(proposal.meal_type, proposal.argv_alt[3])]
+        for meal_type, meal_id in targets:
+            try:
+                active = self._meals.get_active(meal_id)
+            except Exception as exc:  # cannot be checked: refused like a missing meal (nothing is written)
+                self._log(f"chat {chat_id}: meal to add to not read ({type(exc).__name__})")
+                active = None
+            if active is None:
+                hint = join_add_hint(proposal.token) if action == "add" else join_new_hint(proposal.token)
+                return join_target_gone_text(meal_type, meal_id, hint)
         return None
 
     def _fix(self, chat_id: int, update_id: int, overlap: Proposal) -> LlmAction:
@@ -2094,6 +2259,8 @@ class TelegramLlmHandler:
         pin: RunPin | None = None,
         provider: ProviderName | None = None,
         extra_photos: tuple[bytes, ...] = (),
+        strong_model: bool = False,
+        commands: str | None = None,
     ) -> LlmCallResult:
         guide, reason = self._coach.read()
         if reason is not None:
@@ -2110,8 +2277,18 @@ class TelegramLlmHandler:
             web_search_max=self._settings.web_search_max if web_search else None,
             recheck_note=recheck_note,
             photo_count=1 + len(extra_photos),
+            commands=commands,
         )
-        request = LlmRequest(prompt, schema, photo, validate, web_search=web_search, pin=pin, extra_photos=extra_photos)
+        request = LlmRequest(
+            prompt,
+            schema,
+            photo,
+            validate,
+            web_search=web_search,
+            pin=pin,
+            extra_photos=extra_photos,
+            strong_model=strong_model,
+        )
         result = self._provider.call(request, provider if provider is not None else self.active_provider())
         self._log(f"chat {chat_id}: llm {schema.value} -> {result.outcome} ({result.provider.value})")
         return result
@@ -2389,6 +2566,8 @@ class _Entry:
     proposal's, and the values are not re-checked (they come from a list the user already saw)."""
     menu_reference: str | None = None
     printed: bool = False
+    join: bool = False
+    """v2.5: the user asked to add this food to the day's recorded meal of that type (`join_existing`)."""
 
     def argv(self, source: NutritionSourceType, reference: str, with_estimate: bool) -> tuple[str, ...]:
         if self.food_id is not None and self.quantity is not None and self.unit is not None:
@@ -2436,6 +2615,26 @@ def _item_views(entries: Sequence[_Entry]) -> tuple[ProposalItemView, ...]:
         )
         for entry in entries
     )
+
+
+def _join_target(
+    meal_type: MealType, existing: Sequence[Meal], entries: Sequence[_Entry]
+) -> tuple[Meal | None, str | None]:
+    """(the recorded meal a meal joins, the note when a requested join does not happen). A meal joins only when every
+    item asks to and the day has exactly one meal of that type: none or several are never guessed between."""
+    if not entries or not all(entry.join for entry in entries):
+        return None, None
+    if len(existing) == 1:
+        return existing[0], None
+    if not existing:
+        return None, join_none_text(meal_type)
+    return None, join_many_text(meal_type, [meal.meal_id for meal in existing])
+
+
+def _join_items(meal: Meal) -> str:
+    shown = ", ".join(item_summary(item) for item in meal.items[:JOIN_ITEMS_SHOWN])
+    rest = len(meal.items) - JOIN_ITEMS_SHOWN
+    return f"{shown} 외 {rest}개" if rest > 0 else shown
 
 
 def _fix_command(
@@ -2517,6 +2716,7 @@ def _menu_entry(index: int, item: InterpretItem, menu: Proposal | None) -> _Entr
         menu_source=menu.source or NutritionSourceType.VISUAL_ESTIMATE,
         menu_reference=f"{menu.reference or 'telegram-llm menu'}; {where}",
         printed=choice.printed,
+        join=item.join_existing,
     )
 
 

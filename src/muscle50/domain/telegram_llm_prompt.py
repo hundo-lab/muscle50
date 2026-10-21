@@ -1,7 +1,8 @@
 """Telegram LLM v2: the stdin prompt and the bot's own fixed Korean texts (pure; tests pin them).
 
-Prompt order: role and persona -> `[코치 가이드]` -> `[고정 규칙]` -> task -> `[기억]` -> `[데이터]` ->
-`[메시지]`. The fixed rules come after the persona and the user's coach guide and say that they win.
+Prompt order: role and persona -> `[코치 가이드]` -> `[고정 규칙]` -> task -> (v2.5, answers only) `[bot 명령]` ->
+`[기억]` -> `[데이터]` -> `[메시지]`. The fixed rules come after the persona and the user's coach guide and say that
+they win.
 """
 
 from __future__ import annotations
@@ -100,7 +101,12 @@ TASKS = {
             "열린 제안을 고치는 말이면 refers_to=open_proposal, intent=meal_log이고 items에 고친 제안 전체"
             "(바뀌지 않은 음식 포함)를 다시 적습니다. 이미 기록된 식사를 고치는 말이면 refers_to=last_recorded, "
             "intent=meal_edit. 아니면 null.",
-            "- question_topics: question이면 training, nutrition, body 중 해당하는 것.",
+            "- <열린 제안>에 '앞선 수정 요청'이 있으면 그 요청(양, 추가, 삭제)을 모두 그대로 둔 채 이번 수정을 "
+            "더합니다. 앞선 수정을 되돌리지 않습니다.",
+            "- join_existing: meal_log에서 사용자가 이미 기록한 같은 끼니에 더해 달라고 하면('같이', '하나에', "
+            "'기존 ~에 추가', '~에 더해') 그 끼니의 item마다 true, 아니면 false.",
+            "- question_topics: question이면 training, nutrition, body, bot(이 bot의 명령이나 쓰는 법을 묻는 말: "
+            "'동기화 명령어 뭐야?') 중 해당하는 것. '동기화 해줘'처럼 해 달라는 말은 question이 아니라 sync_request.",
             "- menu: menu_capture이면 보이는 끼니(slots_visible)와 메뉴마다 slot, corner(코너 이름), name, "
             "메뉴판에 적힌 kcal·단백질(printed_kcal, printed_protein_g, 없으면 null), estimate.",
             "- edit: meal_edit이면 action과 대상 음식(target_food_text), 새 음식·수량·단위·끼니. 음식은 카탈로그 "
@@ -121,8 +127,11 @@ TASKS = {
         [
             "[할 일] [데이터]의 JSON만 근거로 [메시지]의 질문에 짧게 답합니다(answer, 600자 이내).",
             "- 판단이나 계산을 새로 하지 않습니다. 데이터의 추천·상태·숫자를 그대로 전합니다.",
-            "- 운동을 묻는데 [데이터]에 그 날의 운동이 없거나 동기화가 안 된 것으로 보이면, 숫자 없이 한 문장으로 "
-            "/daily 로 동기화하라고 안내합니다.",
+            "- [bot 명령]이 이 bot 명령의 유일한 목록입니다. 목록에 없는 명령을 지어내지 않고, 명령을 물으면 "
+            "그 목록에서 골라 답합니다.",
+            "- <동기화 상태>의 '동기화 안 됨'은 '동기화했고 운동 없음'과 다릅니다. 동기화 안 된 날을 운동이나 회복 "
+            "기록이 없는 날이라고 말하지 않고, 적힌 날짜 그대로 동기화되지 않았다고 말한 뒤 /daily 로 동기화하라고 "
+            "안내합니다. '빠진 날 없음'이면 동기화 이야기를 하지 않습니다. 동기화 상태를 모르면 모른다고 합니다.",
             "- [기억]에 '[사진 N장]'으로 시작하는 줄이 있으면 사용자가 그 사진을 보냈던 것입니다. 사진이 없다고 답하지 "
             "않고, 사진의 내용은 그 줄에 적힌 요약만 압니다.",
             "- memory_summary: 지금까지의 대화를 300자 안으로 요약(이번 질문과 답 포함).",
@@ -155,12 +164,15 @@ def build_prompt(
     web_search_max: int | None = None,
     recheck_note: str | None = None,
     photo_count: int = 1,
+    commands: str | None = None,
 ) -> str:
     """The stdin prompt. ``data`` is (label, JSON text) pairs; ``memory`` is exactly `memory_block`'s text.
 
     ``web_search_max`` is set only when the search tool is offered (it selects the web fixed rules);
     ``recheck_note`` adds the machine-written `[재확인]` section of the one corrective re-ask;
-    ``photo_count`` (v2.4 albums) is how many photos are attached: one keeps `(사진 첨부)` byte for byte.
+    ``photo_count`` (v2.4 albums) is how many photos are attached: one keeps `(사진 첨부)` byte for byte;
+    ``commands`` (v2.5, answers only) is the bot's help text, sent as `[bot 명령]` after the task (not in `[데이터]`, so
+    its numbers are not numbers the answer may use).
     """
     sections = [
         f"[역할] 당신은 muscle50 해석기입니다. 이름은 {persona_name}, 말투는 {persona_tone}.",
@@ -169,6 +181,8 @@ def build_prompt(
         sections.append(f"[코치 가이드]\n{coach_guide}")
     sections.append(FIXED_RULES if web_search_max is None else fixed_rules_web(web_search_max))
     sections.append(TASKS[task])
+    if commands is not None:
+        sections.append(f"[bot 명령]\n{commands}")
     if memory is not None:
         sections.append(memory)
     if data:
@@ -321,3 +335,53 @@ def provider_switched_text(provider: str, company: str) -> str:
 
 def provider_default_text(provider: str, company: str) -> str:
     return f"설정 파일의 제공자로 되돌렸습니다: {provider}({company})."
+
+
+# --- v2.5: adding to a recorded meal (`join_existing`, `/new_`, `/add_`) -----------------------------------------
+
+
+def _subject(word: str) -> str:
+    """The word with its subject particle (`아침이`, `기타가`)."""
+    last = ord(word[-1]) - 0xAC00
+    return f"{word}이" if 0 <= last <= 11171 and last % 28 else f"{word}가"
+
+
+def join_head(meal_type: MealType, meal_id: str, items: str, day_text: str) -> str:
+    return f"기존 {MEAL_NAMES[meal_type]} {meal_id}({items})에 추가할까요? ({day_text})"
+
+
+def join_new_label(meal_type: MealType) -> str:
+    """`새 아침으로 따로` (`기타로`: no final consonant, or the ㄹ one, takes 로)."""
+    name = MEAL_NAMES[meal_type]
+    last = ord(name[-1]) - 0xAC00
+    ending = last % 28 if 0 <= last <= 11171 else 0
+    return f"새 {name}{'으로' if ending not in (0, 8) else '로'} 따로"
+
+
+def join_block_head(meal_type: MealType, meal_id: str) -> str:
+    """A meal of a multi-meal proposal that adds to a recorded meal."""
+    return f"{MEAL_NAMES[meal_type]}: 기존 {meal_id}에 추가"
+
+
+def join_none_text(meal_type: MealType) -> str:
+    return f"기존 {_subject(MEAL_NAMES[meal_type])} 없어 새로 기록합니다."
+
+
+def join_many_text(meal_type: MealType, meal_ids: Sequence[str]) -> str:
+    return (
+        f"같은 날 {_subject(MEAL_NAMES[meal_type])} 여러 개({', '.join(meal_ids)})라 어디에 더할지 정하지 않았습니다. "
+        "하나 더 기록합니다."
+    )
+
+
+def join_target_gone_text(meal_type: MealType, meal_id: str, hint: str) -> str:
+    """`/ok_` (or `/add_`) when the meal to add to is gone or voided: nothing is written, the proposal stays open."""
+    return f"오류: 기존 {MEAL_NAMES[meal_type]} {meal_id}이 없거나 취소(void)되어 추가하지 않았습니다. {hint}"
+
+
+def join_new_hint(token: str) -> str:
+    return f"새 끼니로 기록하려면 /new_{token}"
+
+
+def join_add_hint(token: str) -> str:
+    return f"하나 더 기록하려면 /ok_{token}"

@@ -35,6 +35,9 @@ from muscle50.domain.telegram_llm_prompt import (
     HISTORY_EMPTY_TEXT,
     MEAL_NAMES,
     duplicate_text,
+    join_block_head,
+    join_head,
+    join_new_label,
     multi_proposal_head,
     overlap_text,
     photo_failed_head,
@@ -120,8 +123,10 @@ class TelegramLlmReplies:
 def proposal_reply(view: MealProposalView) -> ReplyText:
     day = view.day.isoformat()[5:]
     # What the proposal does to an already recorded meal is the first thing the user reads.
-    lines = _overlap_lines(view.overlap, view.duplicates, view.meal_type)
-    if view.failed_photo:
+    lines = _overlap_lines(view.overlap, view.duplicates, view.meal_type, join_note=view.join_note)
+    if view.join is not None:
+        lines.append(join_head(view.meal_type, view.join.meal_id, view.join.items, day))
+    elif view.failed_photo:
         lines.append(photo_failed_head(view.meal_type, day))
     else:
         lines.append(proposal_head(view.meal_type, day, view.label))
@@ -135,8 +140,15 @@ def proposal_reply(view: MealProposalView) -> ReplyText:
     if view.superseded:
         lines.append(superseded_line(view.superseded))
     token = view.token
+    if view.join is not None:  # v2.5: `/ok_` adds to the recorded meal, `/new_` records a separate one
+        plain = f"   일반식만 추가(값 없이): /plain_{token}" if view.plain else ""
+        new = f"{join_new_label(view.meal_type)}: /new_{token}"
+        return ReplyText("\n".join(lines), (f"추가: /ok_{token}{plain}   {new}   취소: /no_{token}",))
     plain = f"   일반식만 기록(값 없이): /plain_{token}" if view.plain else ""
     overlap = view.overlap
+    if view.alt_action == "add":  # v2.5: or add to the one recorded meal of that type
+        add = f"   기존 {MEAL_NAMES[view.meal_type]}에 추가: /add_{token}"
+        return ReplyText("\n".join(lines), (f"기록: /ok_{token}{plain}{add}   취소: /no_{token}",))
     if overlap is None:
         return ReplyText("\n".join(lines), (f"기록: /ok_{token}{plain}   취소: /no_{token}",))
     fix = f"기존 {MEAL_NAMES[overlap.meal_type]} 고치기: /fix_{token}   " if overlap.fix else ""
@@ -147,10 +159,14 @@ def multi_proposal_reply(view: MultiMealProposalView) -> ReplyText:
     """Two or more meals: one block per meal; one `/ok_` records them all, meal by meal."""
     lines: list[str] = []
     for block in view.meals:
-        lines.extend(_overlap_lines(block.overlap, block.duplicates, block.meal_type, hints=False))
+        duplicates = () if block.join_meal_id else block.duplicates
+        lines.extend(_overlap_lines(block.overlap, duplicates, block.meal_type, hints=False, join_note=block.join_note))
     lines.append(multi_proposal_head(view.day.isoformat()[5:], len(view.meals), view.label))
     for block in view.meals:
-        lines.append(MEAL_NAMES[block.meal_type])
+        if block.join_meal_id is not None:
+            lines.append(join_block_head(block.meal_type, block.join_meal_id))
+        else:
+            lines.append(MEAL_NAMES[block.meal_type])
         for number, item in enumerate(block.items, start=1):
             lines.extend(_item_lines(number, item, indent="  "))
     if view.searches:
@@ -160,19 +176,28 @@ def multi_proposal_reply(view: MultiMealProposalView) -> ReplyText:
     token = view.token
     plain = f"   값 없이 일반식만 기록: /plain_{token}" if view.plain else ""
     record = "기록(겹치는 끼니는 하나 더)" if any(block.overlap for block in view.meals) else "기록"
-    return ReplyText("\n".join(lines), (f"{record}: /ok_{token}{plain}   취소: /no_{token}",))
+    new = f"   새 끼니로 따로: /new_{token}" if view.new_available else ""
+    return ReplyText("\n".join(lines), (f"{record}: /ok_{token}{plain}{new}   취소: /no_{token}",))
 
 
 def _overlap_lines(
-    overlap: OverlapView | None, duplicates: Sequence[str], meal_type: MealType, *, hints: bool = True
+    overlap: OverlapView | None,
+    duplicates: Sequence[str],
+    meal_type: MealType,
+    *,
+    hints: bool = True,
+    join_note: str | None = None,
 ) -> list[str]:
     """The first lines of a proposal that lands in a day's meal of the same type: the overlap notice (with why
-    there is no `/fix_`), or the `--additional` notice when nothing overlaps."""
+    there is no `/fix_`), or the `--additional` notice when nothing overlaps. v2.5: why a requested join does not
+    happen (``join_note``) replaces the `--additional` notice."""
     if overlap is not None:
         lines = [overlap_text(overlap.when, overlap.meal_type, overlap.meal_id, overlap.names)]
         if hints and overlap.hint:
             lines.append(overlap.hint)
-        return lines
+        return [*lines, join_note] if join_note else lines
+    if join_note:
+        return [join_note]
     return [duplicate_text(meal_type, duplicates)] if duplicates else []
 
 

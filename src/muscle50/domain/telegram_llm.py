@@ -66,6 +66,8 @@ class Topic(StrEnum):
     TRAINING = "training"
     NUTRITION = "nutrition"
     BODY = "body"
+    BOT = "bot"
+    """v2.5: a question about the bot itself (its commands: "동기화 명령어 뭐야?")."""
 
 
 class ItemKind(StrEnum):
@@ -175,6 +177,8 @@ class InterpretItem:
     """Assumed grams per component (empty when the user stated the amount or the item is a catalog item)."""
     menu_ref: int | None = None
     """The number of the recently shown menu item the user says they ate (the bot checks it)."""
+    join_existing: bool = False
+    """v2.5: the user asked to add this food to the day's meal of that type that is already recorded ("같이")."""
 
 
 @dataclass(frozen=True)
@@ -383,13 +387,16 @@ def _menu_ref(value: Any, where: str) -> int | None:
 
 def _item(value: Any, index: int) -> InterpretItem:
     where = f"items[{index}]"
-    entry = _object(value, where, 14)
+    entry = _object(value, where, 15)
     quantity_estimated = entry["quantity_estimated"]
     if type(quantity_estimated) is not bool:
         raise LlmOutputError(f"{where}.quantity_estimated must be a boolean")
     from_label = entry["from_label"]
     if type(from_label) is not bool:
         raise LlmOutputError(f"{where}.from_label must be a boolean")
+    join_existing = entry["join_existing"]
+    if type(join_existing) is not bool:
+        raise LlmOutputError(f"{where}.join_existing must be a boolean")
     return InterpretItem(
         kind=_enum(ItemKind, entry["kind"], f"{where}.kind"),
         food_text=_text(entry["food_text"], f"{where}.food_text", FOOD_TEXT_MAX),
@@ -407,6 +414,7 @@ def _item(value: Any, index: int) -> InterpretItem:
         from_label=from_label,
         portions=_portions(entry["portions"], f"{where}.portions"),
         menu_ref=_menu_ref(entry["menu_ref"], f"{where}.menu_ref"),
+        join_existing=join_existing,
     )
 
 
@@ -571,7 +579,7 @@ def estimate_source(photo: bool) -> NutritionSourceType:
 # --- commands the LLM layer owns (only when the feature is on) ---------------------------------------
 
 PROPOSAL_TOKEN = re.compile(r"[0-9a-f]{4}")
-_PROPOSAL_COMMAND = re.compile(r"/(ok|plain|no|fix|retry)_([0-9a-f]{4})")
+_PROPOSAL_COMMAND = re.compile(r"/(ok|plain|no|fix|retry|new|add)_([0-9a-f]{4})")
 _EAT_COMMAND = re.compile(r"/eat_([0-9a-f]{4})_([1-9][0-9]?)")
 LLM_COMMANDS = frozenset({"llm", "memory", "forget", "history"})
 
@@ -579,7 +587,7 @@ LLM_COMMANDS = frozenset({"llm", "memory", "forget", "history"})
 @dataclass(frozen=True)
 class ProposalCommand:
     action: str
-    """`ok`, `plain`, `no`, `fix`, `eat` or (v2.5) `retry`."""
+    """`ok`, `plain`, `no`, `fix`, `eat` or (v2.5) `retry`, `new` and `add`."""
     token: str
     number: int | None = None
     """`/eat_<token>_<n>`: the menu number."""
@@ -614,6 +622,17 @@ def parse_llm_command(text: str, *, bot_username: str) -> ProposalCommand | LlmC
 
 
 # --- proposals and state --------------------------------------------------------------------------------
+
+EDIT_REQUESTS_MAX = 5
+EDIT_REQUEST_TEXT_MAX = 120
+
+
+def edit_requests_after(earlier: tuple[str, ...], message: str) -> tuple[str, ...]:
+    """The correction chain of a proposal that replaces an open one: its requests and this message (whitespace
+    collapsed, clipped), oldest first, the newest `EDIT_REQUESTS_MAX`."""
+    text = " ".join(message.split())[:EDIT_REQUEST_TEXT_MAX]
+    return (*earlier, text)[-EDIT_REQUESTS_MAX:] if text else earlier
+
 
 PROPOSAL_TTL_S = 60 * 60
 MENU_PROPOSAL_TTL_S = 4 * 60 * 60
@@ -653,6 +672,10 @@ class MealCommand:
     argv_ok: tuple[str, ...]
     argv_plain: tuple[str, ...] = ()
     """Empty when no item of this meal has an estimate (`/plain_` then runs `argv_ok`)."""
+    join_meal_id: str | None = None
+    """v2.5: the recorded meal `argv_ok`/`argv_plain` add to (`nutrition meal add-item`); None for a new meal."""
+    argv_new: tuple[str, ...] = ()
+    """v2.5: for a meal that joins a recorded one, the `nutrition log` argv `/new_` runs instead (a separate meal)."""
 
 
 @dataclass(frozen=True)
@@ -692,6 +715,16 @@ class Proposal:
     """v2.5 retry: how many photos the album had in all (0 for a single photo or a text)."""
     received_unix: int = 0
     """v2.5 retry: when the failed message was first handled; dates and meal slots are resolved from it."""
+    edit_requests: tuple[str, ...] = ()
+    """v2.5: the earlier messages that corrected this open meal proposal, oldest first (at most `EDIT_REQUESTS_MAX`,
+    each clipped); the next correction's prompt shows them so that none is undone."""
+    join_meal_id: str | None = None
+    """v2.5: the recorded meal a single-meal proposal adds to (`argv_ok` is `nutrition meal add-item`)."""
+    argv_alt: tuple[str, ...] = ()
+    """v2.5: the other choice of a single-meal proposal: a separate meal (`/new_`) or adding to the one recorded meal
+    of that type (`/add_`), as `alt_action` says."""
+    alt_action: str = ""
+    """`new`, `add` or empty (no other choice)."""
 
     @property
     def has_retry_payload(self) -> bool:

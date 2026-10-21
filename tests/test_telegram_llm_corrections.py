@@ -86,7 +86,7 @@ def test_the_schema_and_the_parser_have_the_same_keys_at_every_level() -> None:
     document = interpretation()
     assert set(root["required"]) == set(root["properties"]) == set(document) and len(document) == 12
     item = root["properties"]["items"]["items"]
-    assert set(item["required"]) == set(item["properties"]) == set(document["items"][0]) and len(item["required"]) == 14
+    assert set(item["required"]) == set(item["properties"]) == set(document["items"][0]) and len(item["required"]) == 15
     edit = root["properties"]["edit"]
     assert set(edit["required"]) == set(edit["properties"]) == set(document["edit"]) and len(edit["required"]) == 10
     # Codex strict mode: every nested object lists all its keys as required and forbids extra ones
@@ -97,6 +97,8 @@ def test_the_schema_and_the_parser_have_the_same_keys_at_every_level() -> None:
     assert set(estimate["properties"]) == set(NULL_ESTIMATE)
     assert all(estimate["properties"][name]["type"] == ["number", "null"] for name in estimate["properties"])
     assert item["properties"]["menu_ref"]["type"] == ["integer", "null"]
+    assert item["properties"]["join_existing"]["type"] == "boolean"  # v2.5: the 15th item key
+    assert root["properties"]["question_topics"]["items"]["enum"] == ["training", "nutrition", "body", "bot"]
     assert edit["properties"]["target_meal_ordinal"]["type"] == ["integer", "null"]
     assert "change_estimate" in edit["properties"]["action"]["enum"]
     assert root["properties"]["refers_to"]["enum"] == ["open_proposal", "last_recorded", None]

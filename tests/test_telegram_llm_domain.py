@@ -47,6 +47,7 @@ NEW_ITEM_KEYS: dict[str, Any] = {
     "from_label": False,
     "portions": [],
     "menu_ref": None,
+    "join_existing": False,  # v2.5: the 15th item key
 }
 NULL_EDIT = {
     "action": None,

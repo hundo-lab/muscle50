@@ -89,7 +89,8 @@
           "assumption",
           "from_label",
           "portions",
-          "menu_ref"
+          "menu_ref",
+          "join_existing"
         ],
         "properties": {
           "kind": {
@@ -257,6 +258,10 @@
               "null"
             ],
             "description": "the number of the listed recent menu item the user says they ate; otherwise null"
+          },
+          "join_existing": {
+            "type": "boolean",
+            "description": "true when the user asks to add this food to the meal of that type already recorded that day"
           }
         }
       }
@@ -268,7 +273,8 @@
         "enum": [
           "training",
           "nutrition",
-          "body"
+          "body",
+          "bot"
         ]
       }
     },
