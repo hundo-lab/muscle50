@@ -373,10 +373,12 @@ token은 콘솔, 오류, 답장 어디에도 출력하지 않습니다. 처리�
 
 명령어 대신 자유 문장과 사진으로 식사를 기록하고, 운동·영양·InBody 질문에 코치 말투로 답받습니다. 이 PC에 설치된 공식
 CLI(`claude -p` 또는 `codex exec`)를 본인 구독으로 실행하며 API 키는 쓰지 않습니다. **`config\telegram_llm.json`을 직접
-만들어야 켜지고, 없으면 bot은 위 v1.2와 byte 단위로 같습니다.** `{}`이면 기본값(provider `claude`, 대체 제공자 꺼짐)입니다.
+만들어야 켜지고, 없으면 bot은 위 v1.2와 byte 단위로 같습니다.** `{}`이면 기본값입니다: (v2.5) provider `codex`(모델
+`gpt-6.1-sol`), 대체 제공자 꺼짐, 사용 한도 때만 Claude로 한 번 넘기기 켜짐(`fallback_on_usage_limit`). Claude로 쓰려면
+`"provider": "claude"`를 적거나 `/llm claude`로 바꿉니다.
 
 ```json
-{"provider": "claude", "timeout_seconds": 90, "fallback_provider": null}
+{"provider": "codex", "timeout_seconds": 90, "fallback_provider": null, "fallback_on_usage_limit": true}
 ```
 
 - 식사 문장·음식 사진·구내식당 메뉴 캡처는 먼저 **제안**으로 답하고, `/ok`로 확인하기 전에는 DB가 바뀌지 않습니다.
@@ -389,7 +391,7 @@ CLI(`claude -p` 또는 `codex exec`)를 본인 구독으로 실행하며 API 키
 - (v2.2) 상표·식당·제품 이름이 든 item은 Claude가 **웹 검색**으로 찾아보고 근거와 가정을 답장에 보여 줍니다. 기본 켜짐이고
   `config\telegram_llm.json`에서 `web_search`(기본 true), `web_search_max`(메시지당 검색 횟수, 기본 3),
   `web_search_timeout_seconds`(기본 150)로 조절하며, Claude만 검색합니다(Codex는 검색하지 않음). 검색은 응답 시간과 구독
-  사용량을 늘리므로 끄려면 `"web_search": false`입니다.
+  사용량을 늘리므로 끄려면 `"web_search": false`입니다. 제공자가 Codex일 때의 검색은 아래 v2.5를 보세요.
 - (v2.2) 추정 숫자는 kcal·단백질·탄수·지방 사이의 관계와 가정에 적힌 숫자로 한 번 **재확인**합니다. 맞지 않으면 같은 제공자에
   **한 번만** 다시 묻고, 그래도 맞지 않으면 그 item에 "(값 확인 필요)"를 붙여 보여 줍니다.
 - (v2.3) **방금 기록한 식사 고치기**: "삼각김밥 지방 2g이네", "아침 1식 닭가슴살 2팩으로 바꿔줘"처럼 말하면 새 식사를 만들지
@@ -420,15 +422,32 @@ CLI(`claude -p` 또는 `codex exec`)를 본인 구독으로 실행하며 API 키
   만들지 못하면 CLI 출력을 그대로 보냅니다. "동기화 해줘"는 아무것도 실행하지 않고 누를 수 있는 `/daily`(전체 동기화)와
   `/refresh`(UNKNOWN 운동 다시 받기)를 안내합니다.
 - (v2.4) 개발: 모든 테스트는 실제 muscle50 홈(`%LOCALAPPDATA%\muscle50`)을 건드리지 않도록 임시 폴더로 격리됩니다.
+- (v2.5) **실패하면 이유와 할 일**을 알려 줍니다: 인터넷 연결, 사용 한도, 로그인 필요, 시간 초과, 실행 파일 없음(그 밖은 v2.4
+  문구). 답장에 누를 수 있는 `/retry_<토큰>`(60분 유효, 한 번만)이 붙고, 누르면 그 메시지(사진은 같은 사진)를 처음 받은 것처럼
+  다시 처리합니다(날짜·끼니는 처음 받은 시각 기준, `/ok` 전에는 아무것도 쓰지 않음). CLI 오류 원문은 어디에도 남기지 않고 이유만
+  `telegram history`에 `reason=network`처럼 남깁니다. 사용 한도에 걸리면 다른 제공자로 한 번 넘기고 답장에 그 사실을 적습니다
+  (끄려면 `"fallback_on_usage_limit": false`).
+- (v2.5) **기존 끼니에 더하기**: "아침은 하나에 같이 기록해줘"처럼 말하고 그날 그 끼니 기록이 하나뿐이면 새 끼니 대신
+  `기존 아침 2026-10-16-breakfast-1(...)에 추가할까요?`를 제안합니다(`/ok` 뒤에도 끼니 ID 그대로, `/new_<토큰>`은 따로 새 끼니).
+  그런 말이 없어도 같은 끼니가 하나 있으면 `기존 아침에 추가: /add_<토큰>`이 붙습니다. `/ok` 때 그 끼니가 없거나 void되었으면
+  `오류:`이고 아무것도 쓰지 않습니다. 열린 제안을 고치는 말은 앞선 고치기 요청을 함께 넘겨 이전 수정이 유지됩니다.
+- (v2.5) **웹 검색은 Claude로만**: 제공자가 Codex면 먼저 검색 없이 읽고, 상표·식당·포장 제품처럼 검색이 값을 크게 바꿀 item이
+  있다고 모델이 표시한 식사 기록만 Claude가 웹 검색으로 한 번 더 읽어 그 답을 씁니다(`웹 검색 2회 (Claude)`). 이런 메시지는 호출이
+  둘이라 더 늦고 Claude 사용량도 쓰며, 메시지·사진이 OpenAI와 Anthropic 둘 다로 갑니다. Claude 검색이 실패하면 Codex 답에
+  `(웹 검색은 하지 못했습니다: 사용 한도)`처럼 붙입니다. `"web_search": false`면 하지 않습니다.
+- (v2.5) 코치가 bot 명령 목록과 최근 14일 동기화 상태를 압니다. "동기화 명령어 뭐야?"에는 누를 수 있는 명령으로 답하고, 운동·회복
+  질문에서 "기록 없음"과 "동기화 안 됨"(예: `10-09~10-18`)을 구분해 `/daily`를 안내합니다.
 - 질문 답은 muscle50 결과 JSON에 있는 숫자만 쓸 수 있고, 다른 숫자가 섞이면 보내지 않고 기존 명령 답장을 보냅니다.
 - `/llm`(제공자 확인·변경), `/memory`(다음 호출에 넘어갈 기억), `/forget`(이 chat의 기억 삭제, 기록은 남음),
   `/history [N|YYYY-MM-DD]`(대화 기록). PC에서는 `muscle50 telegram history [--last N | --date YYYY-MM-DD] [--json]`
   (읽기 전용).
 - 메시지 종류별로 모델을 고릅니다(제공자 설정의 `model`=글, `photo_model`=사진, `retry_model`=형식 실패 뒤 재시도). 기본값은
-  Claude `haiku`(글) / `sonnet`(사진) / `sonnet`(재시도), Codex는 모두 `null`(Codex 기본 모델, 재시도 없음)입니다. 재시도는
+  Claude `haiku`(글) / `sonnet`(사진) / `sonnet`(재시도), Codex `gpt-6.1-sol`(글) / `gpt-6.1-sol`(사진) / 재시도 없음입니다
+  (v2.5. 모델 이름은 바뀔 수 있으니 `telegram_llm.json`에서 고칩니다). 식사 제안이 열려 있는 동안의 글은 `retry_model`로 돕니다. 재시도는
   답이 형식 검사를 통과하지 못했을 때 **한 번만** 하고, 시간 초과·로그인 문제나 내용이 틀린 답은 재시도하지 않습니다.
   `/llm`과 `/history`가 실제로 답한 모델과 재시도 여부를 보여 줍니다.
-- 메시지와 사진은 고른 제공자(Anthropic 또는 OpenAI)로 전송됩니다. Codex는 사용자 전역 `~/.codex/AGENTS.md`를 읽는 알려진
-  한계가 있어 기본은 Claude입니다. 구독 사용량을 쓰고 응답에 수 초~수십 초가 걸립니다.
+- 메시지와 사진은 고른 제공자(Anthropic 또는 OpenAI)로 전송되고, 사용 한도 대체나 Claude 웹 검색 때는 다른 회사로도 갑니다.
+  Codex는 사용자 전역 `~/.codex/AGENTS.md`를 읽는 알려진 한계가 있고, 기본이 Codex가 되면서 이 위험이 모든 메시지에 해당하는
+  것을 사용자가 2026-10-21에 받아들였습니다(피하려면 `"provider": "claude"`). 구독 사용량을 쓰고 응답에 수 초~수십 초가 걸립니다.
 
 설정 key, 코치 가이드, 격리 방식, 파일·개인정보, 알려진 한계: [`docs/telegram-llm.md`](docs/telegram-llm.md).

@@ -1,7 +1,7 @@
 ---
 id: telegram-llm-failures-and-meals
 title: Telegram LLM Failure Replies and Meal Merging v2.5
-status: draft
+status: integrated
 migration: none
 output_change: breaking
 user_gates: [design, integration]
@@ -107,8 +107,40 @@ bot:   운동·회복 받아오기는 /daily 입니다. 운동 하나만 다시 
 - [ ] AC7: LLM이 꺼진 bot과 기존 CLI 출력은 byte-identical이다.
 - [ ] AC8: 품질 게이트 4개가 통과한다.
 
+## 설계 승인 결정 (2026-10-21)
+
+- **기본 제공자는 Codex**다(처음에는 "코드 기본값은 claude 그대로"(P1)로 승인했다가, 같은 날 사용자 결정 "그냥 클로드가 하던 모든일을
+  코덱스로 바꿔"로 P2). `{}` 설정이면 모든 호출이 Codex로 가고, Claude는 사용 한도 대체와 `/llm claude`로 남는다. `"provider": "claude"`를 적은
+  설정은 v2.4처럼 동작한다(이번에 바뀐 답장·프롬프트 규칙은 제외).
+- **Codex 모델은 Sonnet급 `gpt-6.1-sol`**(글·사진), 재시도 모델 없음(사용자 결정). Claude 모델 기본값(haiku/sonnet/sonnet)은 그대로다.
+- `fallback_on_usage_limit`의 기본값은 **켜짐**이고, 다른 제공자가 답하면 답장에 한 줄로 알린다(D2).
+- **웹 검색은 Claude로만**(D3). 처음 결정(W3: Codex에서도 검색)은 Codex가 격리 argv의 `--disable code_mode_host` 아래서 검색하지 못해
+  만들 수 없었다. 사용자 결정 "검색만 클로드해"로 Codex 격리는 main 그대로 두고, 해석 item의 `lookup_wanted`가 true인 식사 기록만 Claude가
+  웹 검색으로 한 번 다시 읽어 그 답으로 바꾼다. 새 설정 key는 없다(`web_search`를 그대로 쓴다).
+- 열린 제안이 있는 동안의 글은 `retry_model`로 처음부터 돈다(D4 E1). 기존 끼니 더하기 말이 없어도 같은 끼니가 하나면 `/add_`를 붙인다(D6 J-B).
+  한 기능, 커밋 두 묶음(D7).
+- **범위 6의 "앞선 수정을 되돌리면 한 번 더" 검사는 하지 않는다**(D5 R0, 사용자 승인). spec에서 벗어난 부분이고 `docs/telegram-llm.md`에 적었다.
+- Codex가 `~/.codex/AGENTS.md`를 읽는 남는 위험(2026-10-13에 "기본은 claude"를 근거로 받아들임)이 이제 모든 메시지에 해당한다. 사용자가
+  2026-10-21에 받아들였다.
+
 ## 한계 / 후속 후보
 
 - 실패 이유는 CLI가 내는 표시에 기대므로 CLI가 문구를 바꾸면 `other`로 떨어질 수 있다.
 - "같이", "하나에" 판단은 LLM이 하므로 놓칠 수 있다. 그래서 제안에 `/new_`와 기존 끼니 표시를 같이 둔다.
-- 후속 후보: v3 agent 모드(읽기 도구 + 제안만 하는 쓰기 도구), 작업별 사용량 통계.
+- 후속 후보: **Codex 검색만 켜는 옵션(코드 모드 없이)이 생기면 Codex 검색으로 바꾸기**, 작업별 사용량 통계, v3 agent 모드(읽기 도구 +
+  제안만 하는 쓰기 도구).
+- 구현자·검증자가 보고한 한계:
+  - 실패 이유 표식은 CLI 문구에 기댄다. 사용 한도 문구는 live로 만들 수 없어 알려진 문구로만 맞췄다(live 확인 안 됨). `rate limit`·`quota` 같은
+    넓은 낱말은 다른 뜻의 오류를 잘못 분류할 수 있다(답장 문구만 달라진다). Claude 네트워크 끊김은 CLI가 스스로 다시 시도하므로 시간 초과까지 기다린다.
+  - Claude 검색 여부는 Codex가 채운 `lookup_wanted`가 정한다. live 확인은 합성 문장 두 개뿐이라 누락률은 모른다. 검색하는 메시지는 호출이 둘이라
+    더 늦고(Codex 약 12~17 s 뒤 Claude 최대 150 s) Claude 사용량도 쓰며, 메시지와 사진이 OpenAI와 Anthropic 둘 다로 간다.
+  - Codex가 사용 한도에 걸려 Claude가 대신 답하면 검색 없이 답한다(상표 음식도 `출처` 없음). 반대로 `"provider": "claude"`에서 Claude가 막혀
+    Codex가 답하면 Claude 검색을 건너뛴다.
+  - 열린 제안 고치기를 `retry_model`로 돌리는 규칙(E1)은 Codex에서는 효과가 없다(재시도 모델이 없어 같은 `gpt-6.1-sol`). Claude에서는 제안이
+    열린 60분 동안 관계없는 글도 Sonnet으로 돌아 사용량이 는다.
+  - 만료된 다시 보내기 원문은 bot이 도는 동안(시작 때와 쉬는 poll마다)만 지운다. bot이 꺼져 있으면 다음 시작 때 지운다.
+  - 앞선 수정을 되돌렸는지 보는 검사(D5)는 빠졌다(R0, 사용자 승인). 모델과 요청 사슬로 원인을 줄이고, 고친 제안 전체가 `/ok` 전에 보인다.
+  - Codex의 `~/.codex/AGENTS.md` 위험이 모든 메시지에 해당한다(2026-10-21 받아들임). 사용 한도 대체는 따로 묻지 않고 두 번째 회사로 보낸다(기본 켜짐).
+  - `gpt-6.1-sol` 같은 모델 이름은 바뀐다. 없어지면 `telegram_llm.json`의 `codex.model`/`photo_model`로 바꾼다.
+  - 동기화 상태는 coverage 기록에 기대므로 `garmin latest`·`garmin refresh`만 쓴 날은 `동기화 안 됨`으로 보인다.
+  - 아직 하지 않은 수동 확인(필수 게이트 아님): 실제 메시지로 Telegram에서 Claude 검색 확인. migration과 Garmin 변경은 없다.
