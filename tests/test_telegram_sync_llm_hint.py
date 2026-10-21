@@ -16,7 +16,9 @@ import test_telegram_llm_bot as bot
 from test_telegram_llm_reliability_bot import SYNC_REPLY, SYNC_REQUEST
 
 import muscle50.cli as cli
+from muscle50.domain.telegram_llm import parse_llm_command
 from muscle50.domain.telegram_llm_prompt import SYNC_HINT_TEXT
+from muscle50.domain.telegram_sync import SYNC_CONFIRM_INVALID_TEXT
 from muscle50.infrastructure.telegram.cli_runner import InProcessCliRunner
 
 home = bot.home  # the autouse fixture of the bot tests
@@ -85,6 +87,36 @@ def test_an_unreadable_gap_keeps_the_plain_hint(
     replies, err, _fake = bot._session(monkeypatch, capsys, bot.FakeProvider(SYNC_REQUEST), bot.text(1, "동기화 해줘"))
     assert replies == [SYNC_REPLY]
     assert "chat 111: sync gap not read (RuntimeError); sent the plain sync hint" in err
+
+
+def test_sync_commands_are_not_llm_commands() -> None:
+    for text in ("/sync_ok_a41c", "/sync 10-09 10-18", "/sync"):
+        assert parse_llm_command(text, bot_username=v1.IDENTITY.username) is None
+
+
+def test_sync_commands_reach_the_bot_grammar_with_the_llm_on(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    # With the LLM on every `/...` message meets `parse_llm_command` first; `/sync*` must still be the bot's own.
+    bot._llm_config(home)
+    _no_cli(monkeypatch)
+    provider = bot.FakeProvider()
+
+    replies, _err, _fake = bot._session(
+        monkeypatch,
+        capsys,
+        provider,
+        bot.text(1, "/sync 09-20 10-05"),
+        bot.text(2, "/sync 10-05 10-09"),
+        bot.text(3, "/sync_ok_ffff"),
+    )
+
+    assert replies == [
+        "16일(09-20 ~ 10-05), Garmin 요청 약 144회입니다. 받아오려면 누르세요(10분 유효):\n/sync_ok_7f3a",
+        "오류: 끝 날짜(2026-10-09)가 오늘(2026-10-06) 이후입니다. 작년 날짜는 YYYY-MM-DD로 쓰세요.",
+        SYNC_CONFIRM_INVALID_TEXT,
+    ]
+    assert provider.requests == []  # no LLM call
 
 
 def test_no_database_keeps_the_plain_hint(
