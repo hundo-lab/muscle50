@@ -21,6 +21,11 @@ Migration 없음. Output change: breaking(LLM이 켜졌을 때의 Telegram 답�
 답장, 동기화 안내, 콘솔 오류 문구(Telegram LLM Reliability and Replies v2.4, `docs/specs/telegram-llm-reliability.md`)는 "신뢰성·앨범·짧은 답장 (v2.4)" 절에 있다.
 Migration 없음. Output change: breaking(Telegram LLM 답장·콘솔 오류 문구·새 실행 기록 파일. CLI는 그대로).
 
+실패 이유와 `/retry_`, 사용 한도 때 다른 제공자로, 기본 제공자 Codex, 기존 끼니에 더하기(`/new_`·`/add_`), 열린 제안 고치기의 앞선 요청,
+코치가 bot 명령과 동기화 상태를 아는 것(Telegram LLM Failure Replies and Meal Merging v2.5,
+`docs/specs/telegram-llm-failures-and-meals.md`)은 "실패 이유·다시 보내기·기존 끼니에 더하기 (v2.5)" 절에 있다. Migration 없음. Output change:
+breaking(LLM이 켜졌을 때의 Telegram 답장·프롬프트·상태 파일·콘솔. CLI는 `telegram history`의 새 줄 꼬리만 바뀐다).
+
 ## 목적과 non-goal
 
 - Telegram에서 명령어 대신 **문장과 사진**으로 식사를 기록하고, 질문하고, 메뉴를 고른다. 해석은 이 PC에 설치된
@@ -38,12 +43,13 @@ byte 단위로 같다.** 모든 key는 선택이고 `{}`이면 아래 기본값�
 
 ```json
 {
-  "provider": "claude",
+  "provider": "codex",
   "claude": {"model": "haiku", "photo_model": "sonnet", "retry_model": "sonnet", "executable": null},
-  "codex": {"model": null, "photo_model": null, "retry_model": null, "executable": null},
+  "codex": {"model": "gpt-6.1-sol", "photo_model": "gpt-6.1-sol", "retry_model": null, "executable": null},
   "persona": {"name": "머슬", "tone": "존댓말, 짧게, 담백하게"},
   "timeout_seconds": 90,
   "fallback_provider": null,
+  "fallback_on_usage_limit": true,
   "keep_photos": true,
   "web_search": true,
   "web_search_max": 3,
@@ -51,7 +57,9 @@ byte 단위로 같다.** 모든 key는 선택이고 `{}`이면 아래 기본값�
 }
 ```
 
-- `provider`: `claude` 또는 `codex`. `/llm codex`로 채팅에서 바꿀 수 있다(설정 파일은 바뀌지 않음).
+- `provider`: `claude` 또는 `codex`. `/llm codex`로 채팅에서 바꿀 수 있다(설정 파일은 바뀌지 않음). **v2.5부터 기본값은 `codex`다**(사용자 결정
+  2026-10-21). 예전처럼 Claude를 쓰려면 `"provider": "claude"`를 적거나 `/llm claude`로 바꾼다. `provider`를 적지 않은 v2.4 파일은 재시작 뒤 Codex로
+  간다.
 - `model`: 글 메시지에 쓰는 모델. `null`이면 모델 옵션을 넘기지 않는다. Codex는 `--ignore-user-config`로 실행하므로 `null`은 **Codex 내장 기본
   모델**이지 `~/.codex/config.toml`에 적은 모델이 아니다.
 - `photo_model`: 사진(식사 사진, 메뉴 캡처)이 붙은 요청에 쓰는 모델. `null`이면 `model`을 쓴다.
@@ -64,20 +72,27 @@ byte 단위로 같다.** 모든 key는 선택이고 `{}`이면 아래 기본값�
 - `timeout_seconds`: 10~600. 넘으면 그 CLI의 프로세스 트리를 끝내고 실패로 처리한다.
 - `fallback_provider`: `null`(기본) 또는 다른 제공자. 켜면 실패 시 한 번 더 시도하고, 메시지와 사진이 두 번째 회사로도
   간다.
+- `fallback_on_usage_limit`(true/false, 기본 **true**, v2.5): 지금 제공자가 **사용 한도**에 걸렸을 때만 다른 제공자로 한 번 넘긴다(Codex → Claude,
+  Claude → Codex). 다른 실패는 `fallback_provider`를 따른다. 넘어가면 메시지와 사진이 두 번째 회사로 가고 답장 끝에
+  `(Codex 사용 한도라 이번에는 claude(Anthropic)로 처리했습니다.)`가 붙는다. 잘못된 값은 `fallback_on_usage_limit must be true or false`.
 - `keep_photos`: 받은 사진을 `telegram\photos`에 보관할지.
 - `web_search`(true/false, 기본 **true**), `web_search_max`(1~10, 기본 3), `web_search_timeout_seconds`(10~600, 기본 150):
   Claude에게 웹 검색을 허락하는 설정. 아래 "식사 추정·여러 끼니·웹 검색 (v2.2)"를 본다. 잘못된 형식·범위는 key 이름만
   말하고 값은 쓰지 않으며, 이 key가 없는 v2.1 파일은 기본값으로 읽는다(그래서 **재시작 뒤 검색이 켜진다**).
 - 설정을 바꾸면 `telegram run`을 다시 시작한다. 시작할 때 콘솔에 한 줄이 늘어난다:
-  `telegram llm: on, provider claude, fallback none, timeout 90 s, web search on (max 3, 150 s); claude (C:\...\claude.exe); codex (C:\...\codex.exe)`
-  (검색을 끄면 `web search off`).
+  `telegram llm: on, provider codex, fallback none, usage-limit fallback on, timeout 90 s, web search on (max 3, 150 s); claude (C:\...\claude.exe); codex (C:\...\codex.exe)`
+  (검색을 끄면 `web search off`, v2.5에서 `usage-limit fallback on|off`가 더해졌다). `web search on`은 설정 값이고, Codex 호출은 검색하지 않는다(아래 v2.5 절).
 
 ### 모델 선택과 재시도
 
 | 제공자 | `model`(글) | `photo_model`(사진) | `retry_model`(형식 실패 뒤 한 번) |
 |---|---|---|---|
 | Claude 기본 | `haiku` | `sonnet` | `sonnet` |
-| Codex 기본 | `null`(Codex 내장 기본) | `null`(= `model`) | `null`(재시도 없음) |
+| Codex 기본(v2.5) | `gpt-6.1-sol` | `gpt-6.1-sol` | `null`(재시도 없음) |
+
+- v2.5: Codex 기본 모델은 `gpt-6.1-sol`(Codex의 Sonnet급 "workhorse" 모델, 글과 사진)이다. 그래서 기본 argv에 `-m gpt-6.1-sol`이 붙는다. 전에는 세 key가
+  모두 `null`(Codex 내장 기본)이었다. 설정 파일의 `codex` 모델이 이긴다. Claude처럼 key마다 따로 기본값을 가지므로 `{"codex": {"model": "x"}}`는 글만
+  `x`이고 사진은 `gpt-6.1-sol`이다. 모델 이름은 시간이 지나면 바뀐다(아래 Known issues).
 
 - 글 메시지는 가벼운 모델로, 사진은 더 강한 모델로 돌린다. 한 메시지의 두 번째 호출(질문 답, 메뉴 제안)은 첫 호출과 같은
   규칙(글이면 `model`)을 따른다. 사진 메시지는 호출이 한 번뿐이다(v2.2의 숫자 재확인이 일어나면 한 번 더).
@@ -95,8 +110,9 @@ byte 단위로 같다.** 모든 key는 선택이고 `{}`이면 아래 기본값�
     이어서 시도한다. 한 호출 단계의 CLI 실행은 최대 4번이다(v2.2: 식사 해석은 숫자 재확인의 다시 묻기까지 최대 5번).
 - 매 실행은 새 임시 폴더, 전체 `timeout_seconds`, 같은 stdin·사진·정리된 환경·고정 argv로 돌고 `--model`/`-m`만 다르다.
   Codex 재시도에서도 사진은 새 `work\` 폴더에 다시 쓴다. 격리 argv는 바뀌지 않는다.
-- `/llm`의 첫 줄은 실제로 쓰이는 모델을 보여 준다. 기본값 그대로면
-  `LLM: claude · 글 haiku · 사진 sonnet · 형식 실패 시 재시도: sonnet (글만) · 대체 제공자: 없음 · 시간 상한 90초`.
+- `/llm`의 첫 줄은 실제로 쓰이는 모델을 보여 준다. `"provider": "claude"`이면
+  `LLM: claude · 글 haiku · 사진 sonnet · 형식 실패 시 재시도: sonnet (글만) · 대체 제공자: 없음 · 시간 상한 90초`, v2.5 기본값(`{}`)이면
+  `LLM: codex · 글 gpt-6.1-sol · 사진 gpt-6.1-sol · 형식 실패 시 재시도: 없음 · 대체 제공자: 없음 · 시간 상한 90초`.
   사진 모델이 재시도 모델과 같으면 사진은 재시도하지 않으므로 `(글만)`이 붙는다. 대체 제공자의 모델은 보여 주지 않는다.
 - 콘솔(ASCII, 메시지 원문 없음): 재시도 실행은 괄호 안에 `, retry`가 붙는다.
 
@@ -771,6 +787,7 @@ LLM 답장과 콘솔 오류 문구, 새 실행 기록 파일만 바뀐다. CLI �
 - "동기화 해줘"는 새 의도 `sync_request`이고 고정 답장 `동기화는 /daily 로 합니다. 운동 하나만 다시 받으려면 /refresh 를 쓰세요.` + 누를 수 있는 `/daily`,
   `/refresh` 줄이다. 아무것도 실행하거나 저장하지 않는다(기록·기억 줄은 다른 교환처럼 남고 `/history`에는 `동기화 안내`). 확인 뒤 `/daily`를 돌려 주는 것은 후속 후보다.
 - 질문 답 프롬프트에는 "운동을 묻는데 데이터에 그 날의 운동이 없거나 동기화가 안 된 것으로 보이면 숫자 없이 한 문장으로 `/daily`를 안내한다"는 규칙이 있다(프롬프트만).
+  v2.5에서 이 규칙은 `<동기화 상태>`를 쓰는 규칙으로 바뀌었다(아래).
 
 ### 콘솔 오류 문구
 
@@ -800,6 +817,154 @@ LLM 답장과 콘솔 오류 문구, 새 실행 기록 파일만 바뀐다. CLI �
 - 바뀌지 않음: 모든 CLI 출력, 손으로 친 `/log`·`/void`·`/day`·`/status`·`/show`·`/help`·`/llm` 답, 실패 답장, 한 장짜리 사진의 프롬프트와 argv, 식사·수정 제안과 그 만료 문구,
   `telegram_llm.json`이 없을 때 bot의 답장·DB·상태 파일·`getUpdates` 호출(새 실행 기록 파일과 콘솔 오류 문구만 더해졌다).
 
+## 실패 이유·다시 보내기·기존 끼니에 더하기 (v2.5)
+
+Telegram LLM Failure Replies and Meal Merging v2.5, `docs/specs/telegram-llm-failures-and-meals.md`. Migration 없음. Output change: breaking
+(LLM이 켜졌을 때만). 근거는 v2.4 뒤 2026-10-16~20 실사용이다(실패 이유를 알 수 없던 23:27 실패 3개, "하나에 같이"를 무시한 `breakfast-2`, 두 번
+말해야 반영된 고치기, 명령 목록을 모르는 코치, 동기화 안 된 날을 "기록 없음"이라고 한 답).
+
+### 기본 제공자 Codex (사용자 결정 2026-10-21)
+
+- `DEFAULT_SETTINGS.provider`가 `codex`이고 Codex 모델 기본값은 글·사진 `gpt-6.1-sol`, 재시도 모델 없음이다(위 "모델 선택과 재시도"). `{}` 설정이면 모든
+  호출(글, 사진, 질문 답, 메뉴 제안, 고치기)이 Codex로 간다. Claude는 다른 제공자로 남는다: 사용 한도 때 넘어가는 곳(기본 켜짐)이고 `/llm claude`로 바꿀 수
+  있다. Claude 모델 기본값(haiku/sonnet/sonnet)은 그대로다.
+- `"provider": "claude"`를 적은 설정은 v2.4와 똑같이 동작한다(이번에 바뀐 답장·프롬프트 규칙은 제외). 기존 테스트는 이 명시 설정으로 고정한다.
+- 추정 근거 문자열은 실제로 답한 모델을 쓰므로 `telegram-llm text (codex gpt-6.1-sol)`처럼 된다.
+
+### 실패 이유와 답장
+
+LLM 호출이 실패하면 이유를 고정 목록에서 정한다(`infrastructure/llm/failure_reason.py`, 순수 함수). 입력은 종료 코드·시간 초과, Claude의 마지막 `result`
+이벤트(오류일 때의 문구와 `api_error_status`; 종료 코드가 0이 아니어도 이제 읽는다, 결과 종류는 그대로), Claude의 `system/api_retry` 이벤트, stderr의
+마지막 4096자(실패한 Codex는 stdout도)다. Codex는 stderr에 프롬프트를 다시 찍으므로 보낸 프롬프트를 지우고 `error`가 든 줄만 본다. 문구는 소문자로
+맞춰 표와 비교하고 **이유 값만 함수 밖으로 나온다**. CLI 문구는 콘솔·기록·상태 파일·답장 어디에도 남지 않는다(테스트가 표식 문자열로 확인한다).
+
+| 이유 | 표(일부) | 답장 본문 |
+|---|---|---|
+| `network` | `connection error`, `getaddrinfo`, `error sending request`, `workspace routing discovery failed`, `os error 10054` 같은 번호, HTTP 상태 없는 `api_retry`로 끝난 시간 초과 | `인터넷 연결이 끊긴 것 같아 해석하지 못했습니다. 연결되면 아래 명령으로 다시 보내세요.` |
+| `usage_limit` | `usage limit`, `hit your limit`, `limit reached`, `rate limit`, `quota`, 상태 429 | `Codex 사용 한도에 걸려 해석하지 못했습니다. 잠시 뒤 다시 보내거나 /llm claude 로 바꾸세요.`(다른 제공자도 이미 해 봤으면 `… 한도가 풀린 뒤 다시 보내세요.`) |
+| `login` | `not logged in`, `/login`, `401 unauthorized`, `missing bearer`, 상태 401/403 | Claude: `… PC 터미널에서 claude 를 실행해 /login 한 뒤 다시 보내세요.` Codex: `… PC 터미널에서 codex login 을 실행한 뒤 다시 보내세요.` |
+| `timeout` | 시간 초과 | `Codex가 시간 안에 답하지 않아 해석하지 못했습니다. 다시 보내거나 /log 로 보내세요.` |
+| `not_found` | 실행 파일 없음·`.exe` 아님 | `Codex 실행 파일을 찾지 못해 해석하지 못했습니다. PC에서 설치와 telegram_llm.json의 executable을 확인하고 bot을 다시 시작하세요.` |
+| `other` | 그 밖(모르는 문구, 형식 실패) | v2.4 문구 그대로(`지금 해석하지 못했습니다. …`, 사진은 캡션 규칙) |
+
+- 우선순위: 시간 초과 → 사용 한도 → 로그인 → 네트워크 → 기타. 그래서 Codex가 `error sending request … retrying` 뒤에 사용 한도로 끝나면 사용 한도다.
+- 답장의 이유와 제공자는 **마지막 시도**의 것이다. 짧은 평문 사용 한도 답(500자 이하)은 이제 형식 실패가 아니어서 Sonnet으로 다시 돌리지 않는다.
+- 사진: 이유를 알면 그 문구가 v2.4 캡션 규칙을 대신한다. `other`면 v2.4 그대로(먹었다는 캡션이면 값 없는 일반식 제안, 아니면 사진 문구 + 다시 보내기 줄).
+  질문 답이 실패하면 전처럼 기존 답장이다.
+- 콘솔: `llm codex: failed (exit 1) after 2.1 s (gpt-6.1-sol); reason usage_limit; trying fallback claude`(`other`·`timeout`이면 꼬리 없음),
+  `chat 111: retry 3f2a offered (network)`, `chat 111: retry 3f2a used`.
+- 기록 줄은 맨 끝에 두 key가 늘어난다(22 key, `v`는 1): `failure_reason`(마지막 LLM 호출이 실패했을 때의 이유, 아니면 `null`)과 `retry_of`(`/retry_`로
+  다시 처리한 메시지의 token). 16/18/20 key 줄은 그대로 읽힌다. `telegram history`: `… text codex/gpt-6.1-sol failed reason=network`, 다시 처리한 줄은
+  끝에 `retry_of=3f2a`. `/history`: 머리 줄 끝에 ` · 실패 이유: 네트워크`.
+
+### `/retry_<id>` 다시 보내기
+
+```text
+사용자: 오늘 아침 밥한공기 굴비 작은거 두마리 미역국 건더기만 먹었어
+bot:   인터넷 연결이 끊긴 것 같아 해석하지 못했습니다. 연결되면 아래 명령으로 다시 보내세요.
+       다시 보내기(60분 유효): /retry_3f2a
+```
+
+- 글 해석 실패, 사진 해석 실패(값 없는 일반식 제안은 제외), 메뉴 제안 호출 실패, 사진을 한 장도 받지 못했을 때(일부만 받은 앨범은 v2.4 줄 그대로)에 붙는다.
+- 누르면 그 메시지를 **처음 받은 것처럼** 다시 처리한다: 사진은 같은 file id로 다시 받고(`PHOTO_MAX_BYTES`, 앨범 장수 규칙 그대로), LLM을 부르고, 제안을
+  만든다. `/ok` 전에는 아무것도 쓰지 않으므로 같은 끼니가 두 번 기록되지 않는다. 날짜와 끼니 시각은 **처음 받은 시각**으로 정한다(23:27 메시지를 00:10에
+  다시 보내도 전날 저녁). 유효 시간은 실제 시계다.
+- 한 번만 쓰인다: 쓰는 순간 `used`로 바꾸고 원문을 지운 뒤(한 번의 저장) 처리한다. 거절: 모르는 token과 다른 chat의 token은 `이 다시 보내기 명령을 찾지
+  못했습니다.`(같은 문구), 쓴 것은 `이미 다시 보낸 메시지입니다. /history로 확인하세요.`, 60분 지난 것은 `다시 보내기 유효 시간(60분)이 지났습니다. 메시지를
+  다시 보내 주세요.` 거절은 아무것도 쓰지 않는다(기록 줄 종류 `retry`, `/history`의 `다시 보내기`). `/ok_`·`/no_`를 다시 보내기 token에 쓰면 `이 명령은 이
+  제안에 쓸 수 없습니다.`
+- 원문(글, 캡션, 사진 file id)은 상태 파일의 `kind: "retry"` 제안에 **60분만** 있다. bot이 시작할 때와 쉬는 poll마다 만료된 원문을 지운다(콘솔
+  `llm retry: expired messages removed`). 기록과 기억에는 v2와 같이 원문이 남는다.
+- 허용 목록·오래된 메시지 규칙은 `/retry_` update 자신에 그대로 적용되고, 저장된 chat이 보낸 사람과 같아야 한다.
+- LLM이 꺼진 bot에서 `/retry_x`·`/new_x`·`/add_x`는 v1의 모르는 명령 답 그대로다.
+
+### 사용 한도 때 다른 제공자로
+
+- 순서는 `[지금 제공자]`, 그다음 `fallback_provider`(설정돼 있고 다르면)다. 지금 제공자가 `usage_limit`로 끝났고 `fallback_on_usage_limit`가 켜져 있고
+  아직 두 번째 제공자가 없으면 다른 제공자를 붙인다. 그래서 양쪽 방향으로 되고, 세 번째 제공자 실행은 생기지 않는다(한 단계 최대 4번 그대로).
+- 숫자 재확인의 다시 묻기(`RunPin`)는 넘어가지 않는다.
+- 넘어가서 답을 받으면 답장 본문 끝에 `(Codex 사용 한도라 이번에는 claude(Anthropic)로 처리했습니다.)`가 붙는다.
+
+### 기존 끼니에 더하기 (`join_existing`, `/new_`, `/add_`)
+
+해석 schema의 item에 `join_existing`(boolean, 필수, item key 15개)이 생겼다. 사용자가 "같이", "하나에", "기존 ~에 추가", "~에 더해"라고 하면 그 끼니의
+item마다 true다.
+
+```text
+기존 아침 2026-10-16-breakfast-1(바나나 (banana) 1 count)에 추가할까요? (10-16)
+1. 일반식 (메모: 고구마 1개)
+   추정: kcal 180~220, 단백질 2~3 g (estimated)
+추가: /ok_9b1e   일반식만 추가(값 없이): /plain_9b1e   새 아침으로 따로: /new_9b1e   취소: /no_9b1e
+```
+
+- 한 끼니의 **모든** item이 true이고 그날 그 끼니의 기록(활성)이 **정확히 하나**일 때만 더한다. `/ok_`·`/plain_`은 `nutrition meal add-item <id> …`(값
+  있음/없음)이고 끼니 ID가 그대로다. 답장은 짧은 `수정했습니다` 요약이고 undo 줄(`/void`)은 없다(기존 끼니 전체를 지우게 되므로). `/new_`는 따로 새 끼니
+  (`nutrition log … --additional`)다. 기존 item은 앞의 3개까지 보이고 나머지는 ` 외 N개`. 같은 음식이 이미 있으면 겹침 안내 줄은 남고 `/fix_`는 없다.
+- 그 끼니 기록이 없으면 첫 줄 `기존 아침이 없어 새로 기록합니다.`, 둘 이상이면 `같은 날 아침이 여러 개(a, b)라 어디에 더할지 정하지 않았습니다. 하나 더
+  기록합니다.`(어느 쪽인지 추측하지 않는다)이고 새 끼니 제안이다. item 중 일부만 true면 더하지 않는다.
+- 말이 없어도 그 끼니 기록이 정확히 하나이고 겹치는 음식이 없으면 새 끼니 제안에 `기존 아침에 추가: /add_9b1e`가 붙는다(D6 J-B):
+  `기록: /ok_9b1e   일반식만 기록(값 없이): /plain_9b1e   기존 아침에 추가: /add_9b1e   취소: /no_9b1e`. 값 없는 사진 일반식 제안에는 붙지 않는다.
+- 여러 끼니 제안은 끼니마다 정한다: 더하는 끼니의 블록 머리는 `아침: 기존 2026-10-16-breakfast-1에 추가`이고 명령 줄은
+  `기록: /ok_X   값 없이 일반식만 기록: /plain_X   새 끼니로 따로: /new_X   취소: /no_X`다. `/new_`는 모든 끼니를 새로 기록한다. `/add_`는 없다.
+- `/ok_`·`/plain_`·`/add_` 때 더할 끼니를 `get_active`로 **다시 읽는다**. 없거나 void되었으면 `오류: 기존 아침 2026-10-16-breakfast-1이 없거나 취소(void)되어
+  추가하지 않았습니다. 새 끼니로 기록하려면 /new_9b1e`(`/add_`면 `하나 더 기록하려면 /ok_9b1e`)이고 아무것도 쓰지 않으며 제안은 열린 채로 남는다.
+  `nutrition meal add-item`도 void된 끼니를 거절한다. 기록 줄은 `confirm`이고 결과의 meal ID는 더한 끼니다(그래서 "방금 거"에도 들어간다).
+
+### 열린 제안 고치기
+
+- 식사 제안이 열려 있는 동안 오는 **글 메시지**는 제공자의 `retry_model`로 처음부터 돈다(`LlmRequest.strong_model`, D4 E1; Claude 기본은 sonnet). 재시도·
+  대체 규칙은 그대로이고 sonnet → sonnet 재시도는 없다. Codex는 재시도 모델이 없어 같은 `gpt-6.1-sol`이다.
+- 고친 제안은 앞선 고치기 메시지를 들고 간다(최대 5개, 공백을 줄이고 120자까지, 오래된 것부터). 다음 고치기의 `<열린 제안>`에 `앞선 수정 요청(오래된
+  것부터):`과 `- …` 줄로 들어가고, 해석 규칙은 "그 요청(양, 추가, 삭제)을 모두 둔 채 이번 수정을 더하고 되돌리지 않는다"이다.
+- **spec 범위 6의 "앞선 수정을 되돌리면 형식 실패로 보고 한 번 더" 검사는 하지 않는다**(D5 R0, 사용자 결정 2026-10-21). outline이 같은지 비교하는 방법은
+  실제 사례(두 번째 수정이 다른 item도 바꿈)를 잡지 못하고, 이름으로 맞추는 방법은 거짓 양성마다 Sonnet 실행을 더 쓴다. 대신 위의 모델과 요청 사슬로
+  원인을 줄이고, 고친 제안 전체가 `/ok` 전에 보인다.
+
+### 코치가 bot 명령과 동기화 상태를 안다
+
+- 질문 답 프롬프트에는 과제 뒤에 `[bot 명령]` 절로 `help_text(True)`가 들어간다(`[데이터]` 밖이라 그 안의 숫자는 답에 쓸 수 있는 숫자가 아니다). 해석·메뉴 제안
+  프롬프트에는 없다. 해석의 `question_topics`에 `bot`이 생겼다("동기화 명령어 뭐야?"; "동기화 해줘"는 그대로 `sync_request`).
+- `training`과 `bot` 질문의 `[데이터]`에는 `<동기화 상태>`가 들어간다: `garmin coverage --from D-13 --to D --json`(읽기 전용)을 요약한 것이다.
+
+```text
+기간 10-08~10-21 (14일, 오늘 포함)
+운동 동기화 안 됨: 10-09~10-18
+회복 동기화 안 됨: 10-09~10-18 · 회복 일부만: 10-20
+동기화했고 운동 없음: 10-19
+오늘: 운동 동기화 안 됨, 회복 동기화 안 됨
+```
+
+- 빠진 날은 오늘 앞의 13일로 정한다(오늘은 마지막 줄). 빠진 날이 없으면 둘째 줄이 정확히 `빠진 날 없음`이다. coverage 표가 없는 DB는 `동기화 기록이 이 DB에
+  아직 없습니다(알 수 없음).`이고(`빠진 날 없음`이 아니다), 읽지 못하면 블록을 빼고 콘솔에만 남긴다. 결과에 없는 날은 `동기화 안 됨`이다.
+- 답 규칙: `[bot 명령]`이 유일한 명령 목록이고 지어내지 않는다. `동기화 안 됨`과 `동기화했고 운동 없음`은 다르고, 동기화 안 된 날은 적힌 날짜 그대로 말하고
+  `/daily`를 안내한다. v2.4의 `/daily` 규칙은 이 규칙으로 바뀌었다. `daily-catch-up`이 `/sync`를 더하면 도움말을 통해 자동으로 목록에 들어간다.
+- `bot` 질문의 데이터는 동기화 상태뿐이다. 답이 숫자 검사를 통과하면 답이 말한 도움말 명령(나온 순서, 중복 없이 최대 4개)이 누를 수 있는 줄로 붙는다. 실패하면
+  도움말 전체가 답이다. 운동 질문의 답에는 명령 줄을 붙이지 않는다(v2.4 답 모양 그대로).
+
+### live 확인 (implementer, 2026-10-21, Claude Code / Codex CLI 0.160.0, 합성 데이터)
+
+임시 폴더, 합성 프롬프트, 프로젝트의 격리 argv. 실제 로그인은 바꾸지 않았다(빈 `CODEX_HOME`/`CLAUDE_CONFIG_DIR`는 임시 폴더).
+
+| 확인 | 결과 |
+|---|---|
+| `-m gpt-6.1-sol` + strict `--output-schema` | 통과 |
+| v2.5 해석 schema(`join_existing` 필수, `bot` 주제) | Codex(`gpt-6.1-sol`)와 Claude(haiku) 모두 `ok`. Haiku는 "아침은 하나에 같이"에 `join_existing: true`, Codex는 "동기화 명령어 뭐야?"에 `question`/`bot` |
+| 로그인 없음 | Claude: exit 1, `result` 오류 `Not logged in · Please run /login` → `login`. Codex: `401 Unauthorized … Missing bearer` → `login` |
+| 연결 안 됨(`HTTPS_PROXY=http://127.0.0.1:9`) | Claude: 상태 없는 `system/api_retry`만 반복하다 시간 초과 → `network`. Codex: `workspace routing discovery failed`, exit 1 → `network` |
+| Codex stderr | 매 실행 프롬프트를 그대로 다시 찍는다 → 분류 전에 지우고 `error` 줄만 본다 |
+| Codex 웹 검색(W3) | **켜지 못함**(아래 Known issues) |
+
+사용 한도는 일부러 만들 수 없어 실제 문구로 확인하지 못했다(CLI가 알려진 문구를 쓴다고 가정).
+
+### Output change(LLM이 켜졌을 때, `breaking`)
+
+- 바뀜: 기본 제공자와 Codex 모델(`{}` 설정), 실패 답장과 사진 받기 실패 답장의 `/retry_` 줄, `PHOTO_FAILED_TEXT` 뒤의 줄, 사용 한도 안내 줄, 기존 끼니에
+  더하기·`/new_`·`/add_` 제안과 답장, 질문 답 프롬프트(`[bot 명령]`, `<동기화 상태>`, 바뀐 규칙)와 `bot` 주제 답, 해석 프롬프트·schema, 열린 제안 고치기의
+  모델과 근거 문자열(`(claude sonnet)`), 상태 파일의 새 key, 기록의 두 key, `telegram history`·`/history`의 새 줄 꼬리, 시작 줄과 실패 콘솔 줄, LLM이 켜졌을 때
+  손으로 친 `/new_x`·`/add_x`·`/retry_x`(전에는 v1의 모르는 명령 답, 이제 고정 거절 문구).
+- 바뀌지 않음: 모든 `muscle50` CLI 명령의 출력(`telegram history`의 옛 줄 포함), `telegram_llm.json`이 없을 때의 bot(답장·DB·상태 파일·`getUpdates`), 손으로 친
+  `/log /void /day /status /show /help /llm` 답, `/llm` 첫 줄의 모양, 새 규칙 외의 해석·메뉴 제안 프롬프트, Claude argv와 `-m` 외의 Codex argv.
+
 ## 생활 단위(팩·개·마리): `food fact add --new-unit`
 
 단위는 환산하지 않는다. 대신 카탈로그 음식에 그 단위의 값을 **따로** 등록한다.
@@ -819,7 +984,7 @@ muscle50 nutrition food fact add chicken-breast --per 1 pack --kcal 165 --protei
 |---|---|---|
 | `config\telegram_llm.json` | 사용자 | 설정(비밀값 없음) |
 | `config\telegram_llm_coach.md` | 사용자 | 코치 가이드 |
-| `config\telegram_llm_state.json` | `telegram run` | `/llm` 선택, 열린 제안(정확한 argv. v2.3부터 보인 item 줄 `outline`과 `/fix_` 명령 `fix_argv`·`fix_change`도). 손상되면 bot이 멈춘다(지우고 다시 시작 가능) |
+| `config\telegram_llm_state.json` | `telegram run` | `/llm` 선택, 열린 제안(정확한 argv. v2.3부터 보인 item 줄 `outline`과 `/fix_` 명령 `fix_argv`·`fix_change`도. v2.5부터 고치기 요청 `edit_requests`, 더할 끼니 `join_meal_id`·`argv_alt`·`alt_action`, 그리고 `/retry_`의 **실패한 메시지 원문·캡션·사진 file id를 60분만**). 손상되면 bot이 멈춘다(지우고 다시 시작 가능) |
 | `config\telegram_llm_memory.json` | `telegram run` | chat별 요약(300자)과 최근 8턴(각 300자, 24시간) — **메시지 원문 포함** |
 | `telegram\history\YYYY-MM.jsonl` | `telegram run` | 대화마다 한 줄, 추가만. 시각, chat, 메시지, 사진 위치, 의도, 제공자·모델, 검증된 LLM 출력, 답장, 제안, 결과(meal ID), 재시도 여부와 시도 목록 — **식단과 대화 원문 포함** |
 | `telegram\photos\YYYY-MM\<sha256>.jpg` | `telegram run` | 받은 사진(`keep_photos`) |
@@ -859,6 +1024,10 @@ muscle50 nutrition food fact add chicken-breast --per 1 pack --kcal 165 --protei
   `infrastructure/telegram/run_log.py`, `infrastructure/telegram/state_store.py`의 `replace_with_retry`,
   `infrastructure/llm/argv.py`·`provider.py`(여러 사진), `tests/test_telegram_llm_albums_bot.py`·`test_telegram_llm_reliability*.py`·
   `test_telegram_bot_resilience.py`·`test_telegram_run_log.py`·`test_telegram_network_error.py`.
+- v2.5: `domain/llm_failure.py`(이유 목록과 문구), `infrastructure/llm/failure_reason.py`(분류), `domain/telegram_llm_context.py`(동기화 상태 요약,
+  도움말 명령), `infrastructure/llm/provider.py`(이유, 사용 한도 대체, `strong_model`), `application/telegram_llm.py`(`/retry_`, `purge_expired`, 더하기,
+  고치기 사슬, 질문 맥락), `tests/test_llm_failure_reason.py`·`test_telegram_llm_failures*.py`·`test_telegram_llm_join_bot.py`·
+  `test_telegram_llm_edit_chain_bot.py`·`test_telegram_llm_context.py`.
 
 ## Known issues / limitations
 
@@ -909,6 +1078,10 @@ muscle50 nutrition food fact add chicken-breast --per 1 pack --kcal 165 --protei
   충족하고 Codex에서는 일부만 충족한다.** 사용자가 이 남는 위험을 2026-10-13에 받아들였다(spec AC7). 그래서 Codex는
   계속 고를 수 있다(설정의 `provider`/`fallback_provider`, `/llm codex`). 기본값은 그대로 `claude`이고 fallback은
   꺼져 있다. 쓰고 싶지 않으면 `codex`를 고르지 않으면 된다.
+  - **2026-10-21 갱신(v2.5):** 사용자 결정("그냥 클로드가 하던 모든일을 코덱스로 바꿔")으로 **기본 제공자가 `codex`가 되었다.** 그래서 위의 근거였던
+    "기본값은 그대로 `claude`"는 더 이상 맞지 않고, 이 남는 위험(`~/.codex/AGENTS.md`의 지시가 끼어들 수 있음)은 이제 **모든 메시지**에 해당한다. 사용자가
+    2026-10-21에 이를 받아들였다. 완화는 위와 같다(고정 규칙이 이김, schema와 bot 검증, 모든 쓰기는 확인). 피하려면 `"provider": "claude"`를 적는다.
+    사용 한도 대체가 기본으로 켜져 있어 Claude로 넘어가면 메시지가 Anthropic으로도 간다(답장에 표시된다).
 - Codex에는 "도구 없음" 스위치가 없다. 0.160.0에서 `functions.wait`, `request_user_input`, `collaboration.*`이 남는다.
   cwd에는 사진만 있고, 출력은 검증되고, 쓰기는 확인을 거친다. `--disable` 목록은 버전마다 바뀌므로 업그레이드 뒤 확인을
   다시 한다.
@@ -958,6 +1131,25 @@ muscle50 nutrition food fact add chicken-breast --per 1 pack --kcal 165 --protei
     문자열 형식이 바뀌면 `추정`으로 보인다. 요약은 저장 뒤 한 번 더 읽는 것이라 그 사이 다른 쓰기가 있으면 그 값이 보일 수 있다(드묾).
   - **동기화 안내는 문구만이다.** 질문 답의 `/daily` 안내는 프롬프트 규칙이라 모델이 빠뜨릴 수 있다. `sync_request` 분류는 Haiku live 확인 두 문장뿐이다(누락률 미확인).
   - **프롬프트가 조금 길어져 Haiku가 형식을 틀릴 확률이 아주 조금 늘 수 있다**(틀리면 기존 재시도 규칙이 돈다).
+- **실패 이유·다시 보내기·기존 끼니에 더하기 (v2.5)**
+  - **Codex 웹 검색(사용자 결정 W3)은 켜지 못했다.** codex-cli 0.160.0은 웹 검색을 code mode 안에서만 한다(검색 item id가 `exec-…`). 격리 argv의
+    `--disable code_mode_host`가 있으면 `-c web_search="live"`도, 최상위 `--search`도 검색하지 않았다(모델은 "검색하겠습니다"라고 하고 빈 값을 돌려줌).
+    `code_mode_host`를 켜면 검색은 되지만 `functions.exec`, `tools.apply_patch`, `tools.web__run`이 생긴다(합성 확인: `-s read-only`에서
+    `apply_patch` 쓰기는 거절됨, `file://` 열기는 실패). 이것은 격리 argv를 바꾸는 일이라 사용자 결정이 필요하다. 그때까지 Codex 호출은 모두
+    `web_search="disabled"`이고 `_web_search_on()`도 그대로다(기본 설정에서는 검색 없음, `source`는 비고 `웹 검색 N회`도 없다). 켜게 되면 검색 횟수는
+    `--json` 이벤트의 `item.completed`/`type: web_search`/`action.type: "search"`를 id마다 한 번 센다(`open_page`는 검색이 아니다).
+  - **모델 이름은 바뀐다.** `gpt-6.1-sol`은 2026-10-21 기준 Codex의 Sonnet급 모델이다. 없어지면 Codex 호출이 실패하므로 `telegram_llm.json`의
+    `codex.model`/`photo_model`로 바꾼다. `{"codex": {"model": "x"}}`만 적으면 사진은 여전히 `gpt-6.1-sol`이다.
+  - **실패 이유는 CLI 문구에 기댄다.** 문구가 바뀌면 `other`(v2.4 문구 + 다시 보내기)로 떨어진다. 사용 한도는 live로 만들 수 없어 알려진 문구로만
+    맞췄다. `rate limit`·`quota`·`dns` 같은 낱말은 넓어서, Claude의 오류 결과나 stderr에 다른 뜻으로 나오면 잘못 분류될 수 있다(답장 문구만 달라진다).
+  - **Claude 네트워크 끊김은 시간 초과까지 기다린다.** CLI가 스스로 다시 시도하므로 `timeout_seconds`(기본 90 s, 검색 실행 150 s)가 지나야 답한다.
+  - **다시 보내기 원문은 bot이 도는 동안만 지운다.** bot이 꺼져 있으면 다음 시작 때 지운다. 메시지 원문은 v2처럼 기록과 기억에도 있다.
+  - **열린 제안이 있는 동안의 모든 글 메시지가 Sonnet으로 돈다**(Claude일 때, E1). 관계없는 질문도 그 60분 동안은 Sonnet이라 구독 사용량이 는다.
+  - **더하기 판단은 LLM의 `join_existing`에 기댄다.** 놓치면 `/add_`(같은 끼니가 하나일 때)와 기존 끼니 표시로 사용자가 고른다. Codex는 "하나에 같이"를
+    직전 기록의 `add_item` 수정으로 읽기도 한다(live 확인; 결과는 같다: 기존 끼니에 item이 더해지는 제안).
+  - **사용 한도 대체는 따로 동의 없이 두 번째 회사로 보낸다**(기본 켜짐, 사용자 결정 D2). 답장의 안내 줄로만 보인다. 끄려면 `"fallback_on_usage_limit": false`.
+  - `bot` 질문의 숫자 검사는 도움말의 숫자를 허용하지 않는다. `/refresh`의 "10개"처럼 도움말 숫자를 말한 답은 도움말 전체로 바뀐다.
+  - 동기화 상태는 coverage 기록에 기댄다. `garmin latest`·`garmin refresh`는 coverage를 남기지 않아 그것만 쓴 날은 `동기화 안 됨`으로 보인다.
 - 제안은 만들 때의 중복 확인(`--additional`)을 저장한다. 제안과 확인 사이에 같은 끼니가 기록되면 `nutrition log`의
   기존 거절 문구가 그대로 온다(두 번 기록되지 않는다).
 - 날짜는 오늘과 어제만 문장으로 정한다. 그 밖의 날짜는 `/log`로 보낸다.
