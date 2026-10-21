@@ -22,6 +22,9 @@ held here:
   any unexpected exception and after `MAX_CONSECUTIVE_REFRESH_FAILURES` failures in a row. One result
   reply with each activity's before/after count and how many still have UNKNOWN sets (a second read of
   the same list; never 0 when it cannot be read). The whole run is one handled update.
+- Daily Catch-up v1 `/sync <시작> <끝>`: up to 7 days runs `garmin sync --json` at once; a longer range gets an
+  offer with a one-time `/sync_ok_<id>` (10 minutes, same chat only). Open offers live in this object's memory
+  only (a restart drops them); a token is removed before its command runs, so it runs at most once.
 
 The Bot API token never reaches this module: the adapter holds it and redacts its messages.
 """
@@ -30,6 +33,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import traceback
 from collections import deque
 from collections.abc import Callable, Sequence
@@ -60,9 +64,21 @@ from muscle50.domain.telegram_commands import (
     refresh_progress_text,
     stale_text,
     summary_failed_text,
+    sync_invocation,
     undo_line,
     unexpected_error_text,
     usage_reply_text,
+)
+from muscle50.domain.telegram_sync import (
+    SYNC_CONFIRM_INVALID_TEXT,
+    SYNC_CONFIRM_TTL_S,
+    BotRefusal,
+    SyncConfirm,
+    SyncConfirmNeeded,
+    SyncRange,
+    sync_confirm_command,
+    sync_offer_text,
+    sync_summary_failed_text,
 )
 
 MAX_HANDLED_UPDATES = 100
@@ -270,6 +286,24 @@ class ReplySummaries(Protocol):
         """HTML messages for the result of a bare `/refresh`."""
         ...
 
+    def confirm_offer(self, body: str, command: str) -> Sequence[str]:
+        """HTML messages: ``body`` as the summary body, then ``command`` as a plain line (one tap sends it)."""
+        ...
+
+
+@dataclass(frozen=True)
+class _PendingSync:
+    """An open `/sync` offer (in memory only)."""
+
+    chat_id: int
+    range: SyncRange
+    expires_at: float
+    """`clock()` value from which the confirmation is refused."""
+
+
+def _random_token() -> str:
+    return secrets.token_hex(2)
+
 
 @dataclass(frozen=True)
 class LlmReply:
@@ -358,6 +392,7 @@ class RunTelegramBot:
         poll_timeout_s: int = POLL_TIMEOUT_S,
         llm: LlmMessageHandler | None = None,
         on_idle: Callable[[], None] | None = None,
+        new_token: Callable[[], str] = _random_token,
     ) -> None:
         self._api = api
         self._handled = handled
@@ -374,6 +409,8 @@ class RunTelegramBot:
         self._poll_timeout_s = poll_timeout_s
         self._llm = llm
         self._on_idle = on_idle
+        self._new_token = new_token
+        self._pending_syncs: dict[str, _PendingSync] = {}
         self._unexpected_updates = 0
         self._offset: int | None = None
         self._bot_id = 0
@@ -571,7 +608,49 @@ class RunTelegramBot:
             self._log(f"chat {chat_id}: {_usage_log(parsed)}")
             self._reply(chat_id, usage_reply_text(parsed, llm_enabled=self._llm is not None))
             return False
+        if isinstance(parsed, BotRefusal):
+            self._log(f"chat {chat_id}: /sync refused (no Garmin call)")
+            self._reply(chat_id, parsed.text)
+            return False
+        if isinstance(parsed, SyncConfirmNeeded):
+            self._offer_sync(chat_id, parsed.range)
+            return False
+        if isinstance(parsed, SyncConfirm):
+            return self._confirm_sync(chat_id, parsed.token)
         return self._run_command(chat_id, parsed)
+
+    def _offer_sync(self, chat_id: int, requested: SyncRange) -> None:
+        """A `/sync` over 7 days: an offer with a one-time token; it replaces this chat's earlier offer."""
+        now = self._clock()
+        self._pending_syncs = {
+            token: pending
+            for token, pending in self._pending_syncs.items()
+            if pending.chat_id != chat_id and now < pending.expires_at
+        }
+        token = self._new_token()
+        for _ in range(16):  # another chat's open offer keeps its token
+            if token not in self._pending_syncs:
+                break
+            token = self._new_token()
+        self._pending_syncs[token] = _PendingSync(chat_id, requested, now + SYNC_CONFIRM_TTL_S)
+        self._log(f"chat {chat_id}: /sync {requested.days} days offered for confirmation")
+        body = sync_offer_text(requested, self._today())
+        self._send_all(chat_id, self._summaries.confirm_offer(body, sync_confirm_command(token)))
+
+    def _confirm_sync(self, chat_id: int, token: str) -> bool:
+        """`/sync_ok_<token>`: runs the offered range once; True when the bot must stop (Ctrl+C)."""
+        pending = self._pending_syncs.get(token)
+        if pending is not None and self._clock() >= pending.expires_at:
+            del self._pending_syncs[token]
+            pending = None
+        if pending is None or pending.chat_id != chat_id:
+            self._log(f"chat {chat_id}: /sync_ok refused (unknown, expired, used or another chat's)")
+            self._reply(chat_id, SYNC_CONFIRM_INVALID_TEXT)
+            return False
+        if self._migrations_block(chat_id, "sync"):
+            return False  # the token is kept: it works once the migration is applied
+        del self._pending_syncs[token]  # before anything runs: at most once
+        return self._run_command(chat_id, sync_invocation(pending.range, self._today(), confirmed=True))
 
     def _llm_message(self, chat_id: int, update_id: int, message: IncomingMessage, username: str) -> tuple[bool, bool]:
         """Telegram LLM v2: (handled, stop). Ctrl+C during an LLM call stops the bot like a command."""
@@ -609,17 +688,8 @@ class RunTelegramBot:
         on_outcome: Callable[[CommandOutcome, str], str] | None = None,
     ) -> bool:
         name = invocation.command
-        if invocation.migrates:
-            pending = self._pending_migrations()
-            if pending is None:
-                self._log(f"chat {chat_id}: /{name} not run (cannot read schema_migrations)")
-                self._reply(chat_id, MIGRATION_STATUS_UNKNOWN_TEXT)
-                return False
-            if pending:
-                numbers = ", ".join(f"{version:03d}" for version in pending)
-                self._log(f"chat {chat_id}: /{name} not run (migration {numbers} not applied)")
-                self._reply(chat_id, pending_migration_text(pending))
-                return False
+        if invocation.migrates and self._migrations_block(chat_id, name):
+            return False
         if invocation.reply is ReplyKind.REFRESH_ALL:
             return self._refresh_all(chat_id, invocation)
         refresh_id = invocation.activity_id if invocation.reply is ReplyKind.REFRESH else None
@@ -627,6 +697,8 @@ class RunTelegramBot:
             self._reply(chat_id, DAILY_PROGRESS_TEXT)
         elif refresh_id is not None:
             self._reply(chat_id, refresh_progress_text(refresh_id))
+        elif invocation.progress_text is not None:
+            self._reply(chat_id, invocation.progress_text)
         # Read-only, before the refresh writes anything.
         before = self._count_unknown(chat_id, refresh_id) if refresh_id is not None else None
         self._running = (name, chat_id)
@@ -636,7 +708,10 @@ class RunTelegramBot:
             # `daily`/`garmin refresh` asked for a Garmin login on stdin, which the bot does not have.
             self._running = None
             self._log(f"chat {chat_id}: /{name} needs a Garmin login in a terminal")
-            self._reply(chat_id, GARMIN_LOGIN_TEXT if refresh_id is None else refresh_login_text(refresh_id))
+            if refresh_id is not None:
+                self._reply(chat_id, refresh_login_text(refresh_id))
+            else:
+                self._reply(chat_id, invocation.login_text if invocation.login_text is not None else GARMIN_LOGIN_TEXT)
             return False
         except Exception as exc:
             self._running = None
@@ -669,6 +744,20 @@ class RunTelegramBot:
         if on_outcome is not None:
             text = on_outcome(outcome, text)
         self._reply(chat_id, text)
+        return False
+
+    def _migrations_block(self, chat_id: int, name: str) -> bool:
+        """True (after the reply) when the database lacks a migration the code has, or its state cannot be read."""
+        pending = self._pending_migrations()
+        if pending is None:
+            self._log(f"chat {chat_id}: /{name} not run (cannot read schema_migrations)")
+            self._reply(chat_id, MIGRATION_STATUS_UNKNOWN_TEXT)
+            return True
+        if pending:
+            numbers = ", ".join(f"{version:03d}" for version in pending)
+            self._log(f"chat {chat_id}: /{name} not run (migration {numbers} not applied)")
+            self._reply(chat_id, pending_migration_text(pending))
+            return True
         return False
 
     def _run_sequence(self, chat_id: int, action: RunConfirmedSequence) -> bool:
@@ -861,11 +950,12 @@ class RunTelegramBot:
             messages = self._summaries.summary(invocation.reply, document)
         except SummaryUnavailableError as exc:
             self._log(f"chat {chat_id}: /{name} summary failed ({exc})")
-            failed = (
-                daily_summary_failed_text(outcome.exit_code)
-                if invocation.reply is ReplyKind.DAILY_SUMMARY
-                else summary_failed_text(name)
-            )
+            if invocation.reply is ReplyKind.DAILY_SUMMARY:
+                failed = daily_summary_failed_text(outcome.exit_code)
+            elif invocation.reply is ReplyKind.SYNC_SUMMARY:
+                failed = sync_summary_failed_text(outcome.exit_code)
+            else:
+                failed = summary_failed_text(name)
             self._reply(chat_id, failed)
             return
         self._send_all(chat_id, messages)

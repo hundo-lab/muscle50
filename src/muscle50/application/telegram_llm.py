@@ -246,6 +246,7 @@ from muscle50.domain.telegram_llm_prompt import (
     unregistered_unit_reason,
 )
 from muscle50.domain.telegram_llm_summary import MealSummary, SummaryVerb, edit_verb, parse_meal_summary
+from muscle50.domain.telegram_sync import older_unsynced_line, sync_command_text
 
 HISTORY_DEFAULT = 5
 HISTORY_MAX = 20
@@ -549,6 +550,7 @@ class TelegramLlmHandler:
         new_token: Callable[[], str],
         log: Callable[[str], None],
         claude_available: bool = False,
+        sync_gap: Callable[[], tuple[date, date] | None] | None = None,
     ) -> None:
         self._provider = provider
         self._files = files
@@ -570,6 +572,7 @@ class TelegramLlmHandler:
         self._log = log
         self._claude_available = claude_available
         """v2.5: Claude's executable was found at start, so a Codex answer may get a Claude web lookup."""
+        self._sync_gap = sync_gap
 
     # --- entry ----------------------------------------------------------------------------------------
 
@@ -811,8 +814,18 @@ class TelegramLlmHandler:
         elif intent in (Intent.MENU_SUGGEST, Intent.MENU):
             self._suggest(chat_id, words, interpretation, exchange)
         elif intent is Intent.SYNC_REQUEST:
-            # Nothing runs and nothing is stored: only the buttons for `/daily` and `/refresh`.
-            exchange.reply = ReplyText(SYNC_HINT_TEXT, ("/daily", "/refresh"))
+            # Nothing runs and nothing is stored: only the buttons for `/daily` and `/refresh`. Daily Catch-up v1: when
+            # the next `/daily` would leave older days out (`sync_gap`, read-only), one line names `/sync` for them.
+            body = SYNC_HINT_TEXT
+            try:
+                gap = self._sync_gap() if self._sync_gap is not None else None
+            except Exception as exc:
+                self._log(f"chat {chat_id}: sync gap not read ({type(exc).__name__}); sent the plain sync hint")
+                gap = None
+            if gap is not None:
+                today = self._today()
+                body += f"\n{older_unsynced_line(*gap, today, daily='/daily')}{sync_command_text(*gap, today)}"
+            exchange.reply = ReplyText(body, ("/daily", "/refresh"))
         elif intent is Intent.CHAT:
             reply = interpretation.reply
             if reply is None or unknown_numbers(reply, allowed_numbers([])):

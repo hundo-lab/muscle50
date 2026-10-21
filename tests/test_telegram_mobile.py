@@ -35,6 +35,7 @@ from muscle50.config import AppPaths
 from muscle50.domain.activity import ActivityType, NormalizedActivity
 from muscle50.domain.telegram_commands import (
     DAILY_PROGRESS_TEXT,
+    BotMessage,
     CliInvocation,
     ReplyKind,
     UsageReason,
@@ -197,7 +198,7 @@ def _main_calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
 # --- grammar and pinned texts ----------------------------------------------------------------------------------
 
 
-def _parse(text: str) -> CliInvocation | UsageReply:
+def _parse(text: str) -> BotMessage:
     return parse_bot_message(text, bot_username=BOT, today=TODAY)
 
 

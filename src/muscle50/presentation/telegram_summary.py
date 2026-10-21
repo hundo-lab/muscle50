@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from datetime import date
 from typing import Any
 
 from muscle50.application.activity_unknown_sets import ActivityUnknownSets
@@ -38,6 +39,7 @@ from muscle50.domain.strength_recommendation import (
     kg_text,
 )
 from muscle50.domain.swim_recommendation import SWIM_HISTORY_DAYS
+from muscle50.domain.sync_catch_up import CATCH_UP_LOOKBACK_DAYS
 from muscle50.domain.telegram_commands import (
     REFRESH_ALL_CAP,
     REFRESH_ALL_LINE,
@@ -45,6 +47,7 @@ from muscle50.domain.telegram_commands import (
     refresh_login_text,
     unexpected_error_text,
 )
+from muscle50.domain.telegram_sync import older_unsynced_line, range_text, sync_command_text
 from muscle50.presentation.telegram_format import BotReply, Code, Link, RichLine, reply_messages
 from muscle50.presentation.terminal import _duration, _fixed
 
@@ -97,6 +100,10 @@ class TelegramSummaries:
     def refresh_all(self, result: BulkRefreshResult) -> list[str]:
         return reply_messages(refresh_all_reply(result))
 
+    def confirm_offer(self, body: str, command: str) -> list[str]:
+        """Daily Catch-up v1 `/sync` offer: the body, then the `/sync_ok_` command as plain text (one tap sends it)."""
+        return reply_messages(BotReply(body, (((command,),),)))
+
 
 # --- /today and /daily -------------------------------------------------------------------------------
 
@@ -114,16 +121,19 @@ def daily_summary(document: Any) -> BotReply:
     warnings = [
         f"경고({_text(stage['stage'])}): {_text(warning)}" for stage in stages for warning in _list(stage["warnings"])
     ]
+    # Daily Catch-up v1: only when `daily` started before D-1 (the `catch_up` key is absent otherwise).
+    catch_up, catch_up_tail = _catch_up(daily)
     if not _bool(daily["ok"]):
         # Never a plan after a failed stage (the daily rule): the stage errors verbatim, then where to go.
         failed = [_text(item) for item in _list(daily["failed_stages"])]
-        lines = [f"daily {as_of}: 실패" + (f" ({', '.join(failed)} 단계)" if failed else "")]
+        lines = [f"daily {as_of}: 실패" + (f" ({', '.join(failed)} 단계)" if failed else ""), *catch_up]
         for stage in stages:
             if _text(stage["stage"]) in failed:
                 error = stage["error"]
                 lines.append(f"  {_text(stage['stage'])}: {_text(error) if error is not None else '오류 문구 없음'}")
         lines.extend(f"  {warning}" for warning in warnings)
         tail: RichGroups = (
+            *catch_up_tail,
             (
                 ("추천은 만들지 않았습니다. 이미 받은 데이터는 저장되어 있습니다.",),
                 ("저장된 데이터로 본 계획: /today · 다시 동기화: /daily",),
@@ -140,8 +150,86 @@ def daily_summary(document: Any) -> BotReply:
         days = sum(1 for item in outcomes if _text(item["status"]) in ("created", "updated"))
         updated = f"회복 {days}일 갱신"
     recommendation = _object(daily["recommendation"])
-    lines = [f"daily {as_of}: 동기화 완료 ({new}, {updated})", *warnings, *_plan_lines(recommendation)]
-    return BotReply("\n".join(lines), _plan_tail(recommendation))
+    lines = [f"daily {as_of}: 동기화 완료 ({new}, {updated})", *catch_up, *warnings, *_plan_lines(recommendation)]
+    return BotReply("\n".join(lines), (*catch_up_tail, *_plan_tail(recommendation)))
+
+
+def _catch_up(daily: dict[str, Any]) -> tuple[list[str], RichGroups]:
+    """The `이어 받기` line and, when `daily` left older days out, the `/sync` group (a `<code>` command: tapping a
+    command with arguments would send a bare `/sync`)."""
+    if "catch_up" not in daily:
+        return [], ()
+    catch_up = _object(daily["catch_up"])
+    start = _month_day(catch_up["from"])
+    last = catch_up["last_synced"]
+    if last is None:
+        line = f"이어 받기: {start}부터 (최근 {CATCH_UP_LOOKBACK_DAYS}일에 모두 동기화된 날 없음)"
+    else:
+        line = f"이어 받기: {start}부터 (마지막 동기화 {_month_day(last)})"
+    older = catch_up["older_unsynced"]
+    if older is None:
+        return [line], ()
+    # `/daily` runs for the bot's today, so `as_of` is the year `MM-DD` means.
+    today = _date(daily["as_of"])
+    first, end = _date(_object(older)["from"]), _date(_object(older)["to"])
+    group: tuple[RichLine, ...] = (
+        (older_unsynced_line(first, end, today, daily="daily"), Code(sync_command_text(first, end, today))),
+    )
+    return [line], (group,)
+
+
+# --- /sync (Daily Catch-up v1) -----------------------------------------------------------------------------
+
+
+def sync_summary(document: Any) -> BotReply:
+    """`garmin sync --json`: the range, new activities, new recovery days and what failed (never 0 for unknown)."""
+    sync = _object(document)
+    if _text(sync["mode"]) != "sync":
+        raise ValueError("not a garmin sync document")
+    start, end = _date(sync["sync_from"]), _date(sync["as_of"])
+    period = range_text(start, end, end)
+    stages = [_object(item) for item in _list(sync["stages"])]
+    warnings = [
+        f"경고({_text(stage['stage'])}): {_text(warning)}" for stage in stages for warning in _list(stage["warnings"])
+    ]
+    failures: list[str] = []
+    activities = sync["activities"]
+    if activities is None:
+        new_activities = f"운동 새로 저장 {UNKNOWN}"
+    else:
+        found = _object(activities)
+        new_activities = f"운동 새로 저장 {_int(found['inserted'])}건"
+        failures.extend(
+            f"운동 {_text(item['source_activity_id'])}"
+            for item in (_object(entry) for entry in _list(found["outcomes"]))
+            if _text(item["status"]) == "failed"
+        )
+    recovery = sync["recovery"]
+    if recovery is None:
+        new_recovery = f"회복 새로 저장 {UNKNOWN}"
+    else:
+        outcomes = [_object(item) for item in _list(_object(recovery)["outcomes"])]
+        statuses = [_text(item["status"]) for item in outcomes]
+        new_recovery = f"회복 새로 저장 {statuses.count('created')}일"
+        if statuses.count("updated"):
+            new_recovery += f" (갱신 {statuses.count('updated')}일)"
+        for item, status in zip(outcomes, statuses, strict=True):
+            if status == "failed":
+                failures.append(_month_day(item["calendar_date"]))
+            elif status == "not_attempted":
+                failures.append(f"{_month_day(item['calendar_date'])}(받지 않음)")
+    counts = " · ".join([new_activities, new_recovery, f"실패: {', '.join(failures)}" if failures else "실패 없음"])
+    if _bool(sync["ok"]):
+        return BotReply("\n".join([f"동기화했습니다: {period}", counts, *warnings]), ((("오늘 추천: /daily",),),))
+    failed = [_text(item) for item in _list(sync["failed_stages"])]
+    lines = [f"동기화 일부 실패: {period}" + (f" ({', '.join(failed)} 단계)" if failed else ""), counts]
+    for stage in stages:
+        if _text(stage["stage"]) in failed:
+            error = stage["error"]
+            lines.append(f"  {_text(stage['stage'])}: {_text(error) if error is not None else '오류 문구 없음'}")
+    lines.extend(f"  {warning}" for warning in warnings)
+    retry = ("이미 받은 데이터는 저장되어 있습니다. 다시 받기: ", Code(sync_command_text(start, end, end)))
+    return BotReply("\n".join(lines), ((retry,),))
 
 
 def _plan_lines(recommendation: dict[str, Any]) -> list[str]:
@@ -499,6 +587,7 @@ _BUILDERS: dict[ReplyKind, Callable[[Any], BotReply]] = {
     ReplyKind.DAILY_SUMMARY: daily_summary,
     ReplyKind.STATUS_SUMMARY: status_summary,
     ReplyKind.UNKNOWN_LIST: unknown_list,
+    ReplyKind.SYNC_SUMMARY: sync_summary,
 }
 
 
@@ -573,6 +662,10 @@ def _month_day(value: Any) -> str:
     if len(text) != 10:
         raise ValueError("expected a YYYY-MM-DD date")
     return text[5:]
+
+
+def _date(value: Any) -> date:
+    return date.fromisoformat(_text(value))
 
 
 def _activity_id(value: Any) -> str:

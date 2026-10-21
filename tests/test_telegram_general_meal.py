@@ -19,6 +19,7 @@ from test_telegram_bot import FakeTelegramApi, update
 import muscle50.cli as cli
 from muscle50.cli import main
 from muscle50.domain.telegram_commands import (
+    BotMessage,
     CliInvocation,
     ReplyKind,
     UsageReason,
@@ -72,7 +73,7 @@ def _configure(root: Path) -> None:
     config.write_text(json.dumps({"bot_token": TOKEN, "allowed_chat_ids": [ALLOWED]}), encoding="utf-8", newline="\n")
 
 
-def _parse(text: str) -> CliInvocation | UsageReply:
+def _parse(text: str) -> BotMessage:
     return parse_bot_message(text, bot_username=BOT, today=TODAY)
 
 

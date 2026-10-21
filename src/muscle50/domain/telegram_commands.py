@@ -2,6 +2,8 @@
 
 v1.2 adds the bare `/refresh` (every activity of the `/unknown` list, `REFRESH_ALL_CAP` at most).
 General Meal v1 adds the `/log` item `일반식 [메모]` (a general meal: `--general [--general-note=<memo>]`).
+Daily Catch-up v1 adds `/sync <시작> <끝>` (`garmin sync`) and its confirmation `/sync_ok_<id>`
+(grammar and texts in `domain/telegram_sync.py`).
 
 Pure and deterministic: no I/O, no clock (today's date is passed in). The bot never guesses: a
 message that does not match the grammar exactly gets the help or that command's usage, and
@@ -19,6 +21,18 @@ from enum import StrEnum
 
 from muscle50.domain.nutrition import GENERAL_MEAL_NAME, MealType, QuantityUnit
 from muscle50.domain.strength_recommendation import UNKNOWN_NOTICE_DAYS
+from muscle50.domain.telegram_sync import (
+    SYNC_CONFIRM_COMMAND,
+    BotRefusal,
+    SyncConfirm,
+    SyncConfirmNeeded,
+    SyncRange,
+    needs_confirmation,
+    parse_sync_arguments,
+    sync_argv,
+    sync_login_text,
+    sync_progress_text,
+)
 
 
 class ReplyKind(StrEnum):
@@ -33,6 +47,8 @@ class ReplyKind(StrEnum):
     REFRESH = "refresh"
     REFRESH_ALL = "refresh_all"
     """v1.2 bare `/refresh`: `garmin refresh` of every `/unknown` activity in turn, then one result reply."""
+    SYNC_SUMMARY = "sync_summary"
+    """Daily Catch-up v1 `/sync`: a short summary of `garmin sync --json`."""
 
 
 @dataclass(frozen=True)
@@ -49,6 +65,10 @@ class CliInvocation:
     reply: ReplyKind = ReplyKind.TEXT
     activity_id: str | None = None
     """`/refresh <id>` only: the Garmin activity id (ASCII digits)."""
+    progress_text: str | None = None
+    """`/sync` only: sent before the command runs (as the `/daily` progress text is)."""
+    login_text: str | None = None
+    """`/sync` only: the reply when the command needs a Garmin login in a terminal."""
 
 
 class UsageReason(StrEnum):
@@ -83,6 +103,7 @@ HELP_TEXT = "\n".join(
         "/show <meal_id> - 기록한 식사 하나 보기",
         "/inbody - InBody 체성분 추세",
         "/daily [full] - Garmin 동기화 후 오늘 계획 요약(시간이 걸림, full: 전체 리포트)",
+        "/sync <시작> <끝> - 그 기간의 Garmin 운동·회복 받기(MM-DD 또는 YYYY-MM-DD, 최대 31일, 7일 넘으면 확인)",
         "/unknown - Garmin UNKNOWN 세트가 있는 최근 운동(링크와 /refresh)",
         f"/refresh - UNKNOWN 세트가 있는 최근 운동을 모두 다시 받기(한 번에 {REFRESH_ALL_CAP}개까지)",
         "/refresh <activity_id> - Garmin에서 고친 운동 하나를 다시 받기",
@@ -105,6 +126,11 @@ _USAGE: dict[str, tuple[str, str]] = {
     "show": ("/show <meal_id>", "/show 2026-10-06-lunch-1"),
     "inbody": ("/inbody", "/inbody"),
     "daily": ("/daily [full]", "/daily"),
+    "sync": (
+        "/sync <시작> <끝>\n날짜는 YYYY-MM-DD 또는 MM-DD(올해)입니다. 끝은 오늘까지, 한 번에 최대 31일. "
+        "7일을 넘으면 확인 명령(/sync_ok_…)을 한 번 더 누릅니다. 운동·회복만 받고 추천은 만들지 않습니다.",
+        "/sync 10-09 10-18",
+    ),
     "unknown": ("/unknown", "/unknown"),
     "refresh": (
         "/refresh [activity_id]\nGarmin Connect에서 운동 이름을 고친 뒤 보냅니다. 인자가 없으면 UNKNOWN 세트가 있는 "
@@ -115,7 +141,8 @@ _USAGE: dict[str, tuple[str, str]] = {
     "start": ("/start", "/start"),
 }
 
-DAILY_PROGRESS_TEXT = "daily 실행 중: 어제와 오늘의 Garmin 동기화 후 오늘 계획을 만듭니다. 끝나면 결과를 보냅니다."
+DAILY_PROGRESS_TEXT = "daily 실행 중: Garmin 동기화 후 오늘 계획을 만듭니다. 끝나면 결과를 보냅니다."
+"""Daily Catch-up v1: no longer "어제와 오늘" (daily may start up to 7 days back)."""
 
 GARMIN_LOGIN_TEXT = (
     "오류: Garmin에 다시 로그인해야 합니다. "
@@ -251,11 +278,16 @@ _PLAIN_NUMBER = re.compile(r"[0-9]+(\.[0-9]+)?")
 _UNITS = frozenset(unit.value for unit in QuantityUnit)
 
 
-def parse_bot_message(text: str | None, *, bot_username: str, today: date) -> CliInvocation | UsageReply:
+BotMessage = CliInvocation | UsageReply | SyncConfirmNeeded | SyncConfirm | BotRefusal
+"""What one chat message parses to. The last three are Daily Catch-up v1 `/sync` outcomes the bot handles itself."""
+
+
+def parse_bot_message(text: str | None, *, bot_username: str, today: date) -> BotMessage:
     """The CLI invocation for a well-formed command; otherwise the help or a usage reply.
 
     A token that starts with ``-`` is refused in every command, so no message can inject a CLI flag
-    (for example ``/show --json``).
+    (for example ``/show --json``). `/sync` (Daily Catch-up v1) can also give a confirmation offer
+    (`SyncConfirmNeeded`), a refusal (`BotRefusal`), and `/sync_ok_<id>` a `SyncConfirm`.
     """
     if text is None:
         return UsageReply(UsageReason.NOT_A_COMMAND, None)
@@ -266,12 +298,22 @@ def parse_bot_message(text: str | None, *, bot_username: str, today: date) -> Cl
     if at and suffix.lower() != bot_username.lower():
         return UsageReply(UsageReason.UNKNOWN_COMMAND, head)
     command = name[1:]
+    confirm = SYNC_CONFIRM_COMMAND.fullmatch(command)
+    if confirm is not None:
+        return SyncConfirm(confirm.group(1)) if not rest else UsageReply(UsageReason.MALFORMED, "sync")
     if command not in KNOWN_COMMANDS:
         return UsageReply(UsageReason.UNKNOWN_COMMAND, head)
     tokens = rest.split()
     malformed = UsageReply(UsageReason.MALFORMED, command)
     if any(token.startswith("-") for token in tokens):
         return malformed
+    if command == "sync":
+        parsed = parse_sync_arguments(tokens, today)
+        if parsed is None:
+            return malformed
+        if isinstance(parsed, BotRefusal):
+            return parsed
+        return SyncConfirmNeeded(parsed) if needs_confirmation(parsed) else sync_invocation(parsed, today)
     if command in _NO_ARGUMENT_COMMANDS:
         if tokens:
             return malformed
@@ -309,6 +351,20 @@ def parse_bot_message(text: str | None, *, bot_username: str, today: date) -> Cl
         argv = ("nutrition", "meal", "void", meal_id, *((f"--reason={reason.strip()}",) if reason.strip() else ()))
         return CliInvocation(command, argv, True, False, False)
     return _log_command(rest)
+
+
+def sync_invocation(requested: SyncRange, today: date, *, confirmed: bool = False) -> CliInvocation:
+    """`garmin sync --from --to [--yes] --json` for `/sync` (or its confirmation); it migrates, so the bot checks."""
+    return CliInvocation(
+        "sync",
+        sync_argv(requested, confirmed=confirmed),
+        True,
+        False,
+        False,
+        ReplyKind.SYNC_SUMMARY,
+        progress_text=sync_progress_text(requested, today),
+        login_text=sync_login_text(requested),
+    )
 
 
 def _no_argument_command(command: str, today: date) -> CliInvocation | UsageReply:

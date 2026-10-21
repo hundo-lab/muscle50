@@ -1829,6 +1829,7 @@ def _telegram_run() -> int:
             clock=lambda: _now().timestamp(),
             llm=llm,
             on_idle=on_idle,
+            new_token=lambda: _new_proposal_token(),
         ).execute()
     except (
         ConfigurationError,
@@ -1926,6 +1927,7 @@ def _telegram_llm(
         new_token=lambda: _new_proposal_token(),
         log=log,
         claude_available=executables[ProviderName.CLAUDE].path is not None,
+        sync_gap=lambda: _older_unsynced(paths),
     )
     handler.purge_expired()  # v2.5: retry messages that expired while the bot was stopped
     return handler

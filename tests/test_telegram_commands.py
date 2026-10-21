@@ -15,6 +15,7 @@ from muscle50.domain.telegram_commands import (
     GARMIN_LOGIN_TEXT,
     HELP_TEXT,
     MIGRATION_STATUS_UNKNOWN_TEXT,
+    BotMessage,
     CliInvocation,
     UsageReason,
     UsageReply,
@@ -37,7 +38,7 @@ def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(urllib.request, "urlopen", lambda *args, **kwargs: pytest.fail("no network in tests"))
 
 
-def parse(text: str | None) -> CliInvocation | UsageReply:
+def parse(text: str | None) -> BotMessage:
     return parse_bot_message(text, bot_username=BOT, today=TODAY)
 
 
@@ -194,6 +195,7 @@ HELP_LINES = [
     "/show <meal_id> - 기록한 식사 하나 보기",
     "/inbody - InBody 체성분 추세",
     "/daily [full] - Garmin 동기화 후 오늘 계획 요약(시간이 걸림, full: 전체 리포트)",
+    "/sync <시작> <끝> - 그 기간의 Garmin 운동·회복 받기(MM-DD 또는 YYYY-MM-DD, 최대 31일, 7일 넘으면 확인)",
     "/unknown - Garmin UNKNOWN 세트가 있는 최근 운동(링크와 /refresh)",
     "/refresh - UNKNOWN 세트가 있는 최근 운동을 모두 다시 받기(한 번에 10개까지)",
     "/refresh <activity_id> - Garmin에서 고친 운동 하나를 다시 받기",
@@ -221,9 +223,7 @@ def test_bot_reply_texts_are_pinned() -> None:
     assert usage_text("day") == "사용법: /day [YYYY-MM-DD]\n예: /day 2026-10-05"
     assert usage_text("status") == "사용법: /status [full]\n예: /status full"
     assert undo_line("2026-10-06-lunch-1") == "취소: /void 2026-10-06-lunch-1"
-    assert DAILY_PROGRESS_TEXT == (
-        "daily 실행 중: 어제와 오늘의 Garmin 동기화 후 오늘 계획을 만듭니다. 끝나면 결과를 보냅니다."
-    )
+    assert DAILY_PROGRESS_TEXT == "daily 실행 중: Garmin 동기화 후 오늘 계획을 만듭니다. 끝나면 결과를 보냅니다."
     assert GARMIN_LOGIN_TEXT == (
         "오류: Garmin에 다시 로그인해야 합니다. "
         "PC 터미널에서 muscle50 daily를 한 번 실행해 로그인한 뒤 /daily를 다시 보내세요."
