@@ -1801,7 +1801,8 @@ def _telegram_llm(
     log(
         f"telegram llm: on, provider {settings.provider.value}, fallback {fallback}, "
         f"usage-limit fallback {'on' if settings.fallback_on_usage_limit else 'off'}, "
-        f"timeout {settings.timeout_seconds} s, {_web_search_text(settings)}; "
+        f"timeout {settings.timeout_seconds} s, "
+        f"{_web_search_text(settings, claude_found=executables[ProviderName.CLAUDE].path is not None)}; "
         + "; ".join(executables[provider].log_text() for provider in ProviderName)
     )
     handler = TelegramLlmHandler(
@@ -1829,11 +1830,13 @@ def _telegram_llm(
     return handler
 
 
-def _web_search_text(settings: LlmSettings) -> str:
+def _web_search_text(settings: LlmSettings, *, claude_found: bool = True) -> str:
     if not settings.web_search:
         return "web search off"
     limits = f"(max {settings.web_search_max}, {settings.web_search_timeout_seconds} s)"
     if settings.provider is ProviderName.CODEX:  # v2.5: Codex never searches; Claude looks up when an item wants it
+        if not claude_found:
+            return "web search off (claude not found)"
         return f"web search via claude when needed {limits}"
     return f"web search on {limits}"
 

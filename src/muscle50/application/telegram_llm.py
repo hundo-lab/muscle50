@@ -2269,7 +2269,7 @@ class TelegramLlmHandler:
                 self._settings.fallback_provider,
                 self._settings.timeout_seconds,
             )
-            if active is ProviderName.CODEX and self._settings.web_search:
+            if active is ProviderName.CODEX and self._settings.web_search and self._claude_available:
                 first += LOOKUP_LLM_SUFFIX
             if state.provider_override is None:
                 other = "codex" if active is ProviderName.CLAUDE else "claude"
@@ -2489,7 +2489,7 @@ class TelegramLlmHandler:
             reply=exchange.reply.plain(),
             proposal=exchange.proposal,
             retried=last.retried if last is not None else None,
-            attempts=_attempts_document(last),
+            attempts=_lookup_attempts_document(exchange.calls) or _attempts_document(last),
             web_searches=_searches(exchange.calls),
             recheck=exchange.recheck,
             failure_reason=_failure_value(last),
@@ -2882,6 +2882,16 @@ def _attempts_document(call: LlmCallResult | None) -> list[dict[str, Any]] | Non
         | ({"lookup": True} if item.lookup else {})
         for item in call.attempts
     ]
+
+
+def _lookup_attempts_document(calls: Sequence[LlmCallResult]) -> list[dict[str, Any]] | None:
+    """v2.5: when a Claude lookup ran in this exchange (ok or failed) and a later call followed it (the numeric
+    re-ask), the history keeps the whole chain: the Codex attempts, the lookup attempt and the re-ask's attempts.
+    None otherwise, so every other exchange records the attempts of its last call exactly as before."""
+    start = next((index for index, call in enumerate(calls) if any(item.lookup for item in call.attempts)), None)
+    if start is None or start == len(calls) - 1:
+        return None
+    return [document for call in calls[start:] for document in _attempts_document(call) or []]
 
 
 def _failure_value(call: LlmCallResult | None) -> str | None:

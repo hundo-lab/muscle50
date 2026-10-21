@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -22,8 +23,9 @@ from test_telegram_llm_recheck_bot import GOOD, WIDE, dish, doc
 
 import muscle50.cli as cli
 from muscle50.application.llm_provider import LlmAttempt, LlmCallResult, LlmRequest, SchemaName
+from muscle50.cli import _web_search_text
 from muscle50.domain.llm_failure import FailureReason
-from muscle50.domain.llm_settings import LlmSettings, ProviderName
+from muscle50.domain.llm_settings import DEFAULT_SETTINGS, LlmSettings, ProviderName
 from muscle50.domain.telegram_llm import LlmOutputError, check_history_entry, parse_interpretation
 from muscle50.infrastructure.llm.argv import claude_argv
 from muscle50.infrastructure.llm.executables import ResolvedExecutable
@@ -161,8 +163,22 @@ def test_without_claude_there_is_no_lookup(
 
     monkeypatch.setattr(cli, "_resolve_llm_executable", resolve)
     provider = LookupProvider(CODEX_MEAL)
-    bot._session(monkeypatch, capsys, provider, bot.text(1, BIG_MAC))
+    replies, err, _fake = bot._session(monkeypatch, capsys, provider, bot.text(1, BIG_MAC), bot.text(2, "/llm"))
     assert [chosen for _request, chosen in provider.requests] == [CODEX]
+    # The startup line and `/llm` do not promise a lookup that cannot run.
+    assert "timeout 90 s, web search off (claude not found); claude (not found)" in err
+    assert "web search via claude" not in err
+    assert replies[1].split("\n")[0].endswith("시간 상한 90초")
+    assert "웹 검색: Claude" not in replies[1]
+
+
+def test_the_startup_text_says_off_only_for_a_missing_claude_under_codex() -> None:
+    codex = DEFAULT_SETTINGS
+    claude = replace(DEFAULT_SETTINGS, provider=CLAUDE)
+    assert _web_search_text(codex, claude_found=False) == "web search off (claude not found)"
+    assert _web_search_text(codex, claude_found=True) == "web search via claude when needed (max 3, 150 s)"
+    assert _web_search_text(claude, claude_found=False) == "web search on (max 3, 150 s)"  # v2.4 text kept
+    assert _web_search_text(replace(codex, web_search=False), claude_found=False) == "web search off"
 
 
 def test_an_explicit_claude_provider_ignores_lookup_wanted(
@@ -305,7 +321,67 @@ def test_the_recheck_after_a_lookup_asks_claude_again_with_the_web_rules(
     ]
     reask = provider.requests[2][0]
     assert reask.pin is not None and reask.pin.model == "sonnet"  # Claude's retry model
-    assert bot._history(home)[0]["recheck"] == {"reasons": ["range_too_wide"], "outcome": "fixed"}
+    entry = bot._history(home)[0]
+    assert entry["recheck"] == {"reasons": ["range_too_wide"], "outcome": "fixed"}
+    # The history keeps the whole chain (verifier F1): Codex, the lookup, then the re-ask.
+    assert entry["attempts"] == [
+        {"provider": "codex", "model": "gpt-6.1-sol", "outcome": "ok", "retry": False},
+        {"provider": "claude", "model": "haiku", "outcome": "ok", "retry": False, "lookup": True},
+        {"provider": "claude", "model": "sonnet", "outcome": "ok", "retry": False},
+    ]
+    assert (entry["provider"], entry["model"], entry["web_searches"]) == ("claude", "sonnet", 4)
+    assert check_history_entry(entry) is entry
+    assert render_telegram_history([entry]).splitlines()[0] == (
+        "2026-10-06 12:00 +09:00 chat 111 text intent=meal_log "
+        "codex/gpt-6.1-sol ok -> lookup claude/haiku ok -> recheck claude/sonnet ok web=4 recheck=fixed proposal=7f3a"
+    )
+
+
+def test_a_failed_lookup_still_gets_the_numeric_reask_on_codex(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    """Orchestrator decision on verifier F2 (option b): the lookup runs once and nothing else falls back, but a Codex
+    answer that fails the numeric checks is still asked once more on Codex (the v2.2 guard)."""
+    _config(home)
+    wide = doc(dish(WIDE, lookup_wanted=True))
+    provider = LookupProvider(wide, ("failed", FailureReason.USAGE_LIMIT), doc(dish(GOOD, lookup_wanted=True)))
+    replies, err, _fake = bot._session(monkeypatch, capsys, provider, bot.text(1, "점심 국밥 먹었어"))
+    assert [(chosen, request.web_search) for request, chosen in provider.requests] == [
+        (CODEX, False),
+        (CLAUDE, True),
+        (CODEX, False),
+    ]
+    reask = provider.requests[2][0]
+    assert reask.pin is not None and reask.pin.model == "gpt-6.1-sol"  # Codex has no retry model
+    assert "(웹 검색은 하지 못했습니다: 사용 한도)" in replies[0].split("\n")  # the failed-lookup note is kept
+    assert "kcal 650~950" in replies[0]  # the re-asked answer
+    assert "llm lookup failed (usage_limit); kept the codex answer" in err
+    assert "llm interpret recheck: range_too_wide x1; asking again (gpt-6.1-sol)" in err
+    entry = bot._history(home)[0]
+    assert entry["recheck"] == {"reasons": ["range_too_wide"], "outcome": "fixed"}
+    assert entry["attempts"] == [
+        {"provider": "codex", "model": "gpt-6.1-sol", "outcome": "ok", "retry": False},
+        {"provider": "claude", "model": "haiku", "outcome": "failed", "retry": False, "lookup": True},
+        {"provider": "codex", "model": "gpt-6.1-sol", "outcome": "ok", "retry": False},
+    ]
+    assert (entry["provider"], entry["web_searches"], entry["failure_reason"]) == ("codex", None, None)
+    assert check_history_entry(entry) is entry
+    assert render_telegram_history([entry]).splitlines()[0] == (
+        "2026-10-06 12:00 +09:00 chat 111 text intent=meal_log "
+        "codex/gpt-6.1-sol ok -> lookup claude/haiku failed -> recheck codex/gpt-6.1-sol ok recheck=fixed proposal=7f3a"
+    )
+
+
+def test_a_reask_without_a_lookup_records_only_the_last_call_as_before(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    _config(home)
+    provider = LookupProvider(doc(dish(WIDE)), doc(dish(GOOD)))
+    bot._session(monkeypatch, capsys, provider, bot.text(1, "점심 국밥 먹었어"))
+    assert [chosen for _request, chosen in provider.requests] == [CODEX, CODEX]
+    entry = bot._history(home)[0]
+    assert entry["attempts"] == [{"provider": "codex", "model": "gpt-6.1-sol", "outcome": "ok", "retry": False}]
+    assert " -> " not in render_telegram_history([entry])
 
 
 def test_a_codex_answer_after_a_claude_usage_limit_is_not_looked_up(

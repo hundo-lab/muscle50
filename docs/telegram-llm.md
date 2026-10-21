@@ -82,6 +82,7 @@ byte 단위로 같다.** 모든 key는 선택이고 `{}`이면 아래 기본값�
 - 설정을 바꾸면 `telegram run`을 다시 시작한다. 시작할 때 콘솔에 한 줄이 늘어난다:
   `telegram llm: on, provider codex, fallback none, usage-limit fallback on, timeout 90 s, web search via claude when needed (max 3, 150 s); claude (C:\...\claude.exe); codex (C:\...\codex.exe)`
   (검색을 끄면 `web search off`, v2.5에서 `usage-limit fallback on|off`가 더해졌다). 제공자가 Claude면 v2.4처럼 `web search on (max 3, 150 s)`이다.
+  제공자가 Codex인데 Claude 실행 파일이 없으면 `web search off (claude not found)`.
   Codex 호출은 검색하지 않고, 검색이 필요한 메시지만 Claude가 한 번 더 읽는다(아래 v2.5 "웹 검색은 Claude로만").
 
 ### 모델 선택과 재시도
@@ -114,7 +115,7 @@ byte 단위로 같다.** 모든 key는 선택이고 `{}`이면 아래 기본값�
 - `/llm`의 첫 줄은 실제로 쓰이는 모델을 보여 준다. `"provider": "claude"`이면
   `LLM: claude · 글 haiku · 사진 sonnet · 형식 실패 시 재시도: sonnet (글만) · 대체 제공자: 없음 · 시간 상한 90초`, v2.5 기본값(`{}`)이면
   `LLM: codex · 글 gpt-6.1-sol · 사진 gpt-6.1-sol · 형식 실패 시 재시도: 없음 · 대체 제공자: 없음 · 시간 상한 90초 · 웹 검색: Claude(필요할 때만)`
-  (마지막 꼬리는 제공자가 Codex이고 `web_search`가 켜져 있을 때만).
+  (마지막 꼬리는 제공자가 Codex이고 `web_search`가 켜져 있고 Claude 실행 파일이 있을 때만).
   사진 모델이 재시도 모델과 같으면 사진은 재시도하지 않으므로 `(글만)`이 붙는다. 대체 제공자의 모델은 보여 주지 않는다.
 - 콘솔(ASCII, 메시지 원문 없음): 재시도 실행은 괄호 안에 `, retry`가 붙는다.
 
@@ -933,14 +934,20 @@ Codex는 격리 argv(`-c web_search="disabled"`, `--disable code_mode_host`)에�
   메시지(사진이면 같은 사진, 앨범이면 같은 장들)를 Claude에 **한 번** 보낸다: 웹 검색 규칙, 검색 최대 3회, 150 s, 모델은 Claude의 글/사진 모델
   (기본 haiku/sonnet), 재시도·대체 없음. 그 답이 Codex 답을 **통째로** 바꾼다(item, 값, 출처, 근거 문자열의 `(claude haiku)`). 숫자 재확인은 그 뒤의
   답에 대해 돌고, 다시 묻기도 웹 규칙으로 Claude에 간다.
-- Claude 확인이 실패하면 Codex 답을 그대로 쓰고 본문 끝에 `(웹 검색은 하지 못했습니다: 사용 한도)`처럼 이유 이름을 붙인다. 세 번째 호출은 없다.
-  사용 한도 대체 안내 줄은 붙지 않는다(답은 Codex의 것이다).
+- Claude 확인이 실패하면 Codex 답을 그대로 쓰고 본문 끝에 `(웹 검색은 하지 못했습니다: 사용 한도)`처럼 이유 이름을 붙인다. lookup은 한 번뿐이고
+  다른 대체 호출도 없다. Codex 답이 숫자 검사에 걸리면 Codex로 한 번 다시 묻는 기존 규칙은 그대로다(그때는 codex, claude, codex 세 번 돈다; 안내 줄은
+  남는다). 사용 한도 대체 안내 줄은 붙지 않는다(답은 Codex의 것이다).
 - 질문, 메뉴 제안, 고치기, 그 밖의 intent는 확인하지 않는다. 제공자가 Claude면 v2.4 그대로(처음부터 검색 규칙, `lookup_wanted`는 무시).
   Claude가 사용 한도나 실패로 끝나 Codex가 대신 답한 경우도 확인하지 않는다(Claude를 바로 다시 부르지 않는다). 새 설정 key는 없다: `"web_search": false`면 확인도 없다.
 - 보이는 곳: 제안의 `웹 검색 2회 (Claude)`(확인한 메시지는 0회여도 나온다), 콘솔 `chat 111: llm lookup on claude (haiku)`와 실패 때
   `chat 111: llm lookup failed (usage_limit); kept the codex answer`, `telegram history`의 사슬
   `codex/gpt-6.1-sol ok -> lookup claude/haiku ok web=2`, 기록 줄의 시도(`attempts`)에 `"lookup": true`(그 시도만 key 5개), `/llm` 꼬리, 시작 줄.
-  기록 줄의 `provider`/`model`/`web_searches`는 답을 낸 쪽(확인이 성공하면 Claude)이다.
+  기록 줄의 `provider`/`model`은 마지막 호출(확인이 성공하면 Claude, 다시 물었으면 그 호출)이고 `web_searches`는 메시지 전체의 합이다.
+- 확인 뒤에 숫자 재확인이 다시 물으면 `attempts`는 Codex 시도, 확인 시도, 다시 묻기 시도를 모두 담는다(확인이 실패한 경우도). `telegram history`는 확인
+  뒤의 시도를 `recheck`로 읽는다: `codex/gpt-6.1-sol ok -> lookup claude/haiku ok -> recheck claude/sonnet ok web=4 recheck=fixed`,
+  `codex/gpt-6.1-sol ok -> lookup claude/haiku failed -> recheck codex/gpt-6.1-sol ok recheck=fixed`. 확인이 없던 메시지는 전과 같이 마지막 호출의
+  시도만 남는다.
+- 제공자가 Codex인데 Claude 실행 파일을 찾지 못하면 확인할 수 없으므로 시작 줄은 `web search off (claude not found)`이고 `/llm`에 꼬리가 없다.
 
 ```text
 사용자: 점심 맥도날드 빅맥 세트 먹었어

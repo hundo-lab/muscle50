@@ -406,18 +406,28 @@ def _retry_note(entry: dict[str, Any]) -> str:
 
 
 def _attempt_chain(entry: dict[str, Any]) -> str | None:
-    """`claude/haiku bad_output -> retry claude/sonnet ok`; None unless the last call ran more than once."""
+    """`claude/haiku bad_output -> retry claude/sonnet ok`; None unless the last call ran more than once.
+
+    v2.5: an attempt after a Claude lookup is the numeric re-ask (the lookup is one pinned run, and the re-ask is the
+    only call that can follow it), so it reads `recheck`: `codex/x ok -> lookup claude/haiku ok -> recheck ...`."""
     attempts = entry.get("attempts")
     if not attempts or len(attempts) < 2:
         return None
     parts = []
+    looked_up = False
     for index, attempt in enumerate(attempts):
         label = f"{attempt['provider']}/{attempt['model'] or 'default'} {attempt['outcome']}"
         if index == 0:
             parts.append(label)
         else:
-            step = "lookup" if attempt.get("lookup") else "retry" if attempt["retry"] else "fallback"
+            if attempt.get("lookup"):
+                step = "lookup"
+            elif looked_up:
+                step = "recheck"
+            else:
+                step = "retry" if attempt["retry"] else "fallback"
             parts.append(f"{step} {label}")
+        looked_up = looked_up or bool(attempt.get("lookup"))
     return " -> ".join(parts)
 
 
