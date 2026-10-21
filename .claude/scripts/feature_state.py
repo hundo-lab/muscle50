@@ -22,7 +22,9 @@ Standard library only; runs on Python 3.9+.
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -111,7 +113,7 @@ def release_migration(feature_id: str) -> str | None:
         if owner.exists() and owner.read_text(encoding="utf-8").strip() == feature_id:
             for child in entry.iterdir():
                 child.unlink()
-            entry.rmdir()
+            _remove_empty_dir(entry)
             set_fields(feature_id, {"migration": "none"})
             return entry.name
     return None
@@ -169,7 +171,16 @@ def unlock(feature_id: str) -> None:
     if holder.split(" ", 1)[0] != feature_id:
         raise StateError(f"integration lock is held by {holder or '?'}, not {feature_id}")
     holder_file.unlink(missing_ok=True)
-    directory.rmdir()
+    _remove_empty_dir(directory)
+
+
+def _remove_empty_dir(directory: Path) -> None:
+    """rmdir, clearing the Windows read-only attribute once if that is what refuses it (WinError 5)."""
+    try:
+        directory.rmdir()
+    except PermissionError:
+        os.chmod(directory, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
+        directory.rmdir()
 
 
 class LockHeld(StateError):
