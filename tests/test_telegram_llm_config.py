@@ -62,7 +62,8 @@ def test_full_document_is_read(tmp_path: Path) -> None:
     settings = load_llm_settings(_write(tmp_path / "c.json", document))
     assert settings is not None
     assert (settings.provider, settings.fallback_provider) == (ProviderName.CODEX, ProviderName.CLAUDE)
-    assert settings.codex == ProviderSettings("gpt-5.5", r"C:\Tools\codex.exe")
+    # v2.5: `photo_model` keeps its own default (gpt-6.1-sol) when only `model` is set.
+    assert settings.codex == ProviderSettings("gpt-5.5", r"C:\Tools\codex.exe", "gpt-6.1-sol")
     assert settings.claude == ProviderSettings("haiku", None, "sonnet", "sonnet")
     assert (settings.persona_name, settings.persona_tone, settings.timeout_seconds, settings.keep_photos) == (
         "코치",

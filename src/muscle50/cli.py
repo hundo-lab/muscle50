@@ -1706,6 +1706,13 @@ def _telegram_run() -> int:
             log(line.encode("ascii", "backslashreplace").decode("ascii"))
 
         llm = _telegram_llm(paths, settings, api, commands, ascii_log) if settings is not None else None
+        tick = run_log.tick
+
+        def on_idle() -> None:
+            tick()
+            if llm is not None:
+                llm.purge_expired()  # v2.5: a failed message's text is kept for 60 minutes only
+
         RunTelegramBot(
             api,
             JsonHandledUpdateStore(paths.telegram_state_path),
@@ -1720,7 +1727,7 @@ def _telegram_run() -> int:
             sleep=lambda seconds: _telegram_sleep(seconds),
             clock=lambda: _now().timestamp(),
             llm=llm,
-            on_idle=run_log.tick,
+            on_idle=on_idle,
         ).execute()
     except (
         ConfigurationError,
@@ -1793,10 +1800,11 @@ def _telegram_llm(
     fallback = settings.fallback_provider.value if settings.fallback_provider is not None else "none"
     log(
         f"telegram llm: on, provider {settings.provider.value}, fallback {fallback}, "
+        f"usage-limit fallback {'on' if settings.fallback_on_usage_limit else 'off'}, "
         f"timeout {settings.timeout_seconds} s, {_web_search_text(settings)}; "
         + "; ".join(executables[provider].log_text() for provider in ProviderName)
     )
-    return TelegramLlmHandler(
+    handler = TelegramLlmHandler(
         provider=_llm_provider(settings, executables, log),
         files=cast(TelegramFileApi, api),
         catalog=SqliteFoodCatalogReader(paths.database_path),
@@ -1816,6 +1824,8 @@ def _telegram_llm(
         new_token=lambda: _new_proposal_token(),
         log=log,
     )
+    handler.purge_expired()  # v2.5: retry messages that expired while the bot was stopped
+    return handler
 
 
 def _web_search_text(settings: LlmSettings) -> str:

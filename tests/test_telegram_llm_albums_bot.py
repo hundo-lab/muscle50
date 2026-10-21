@@ -29,6 +29,7 @@ from muscle50.application.telegram_bot import (
     TelegramUnavailableError,
 )
 from muscle50.cli import main
+from muscle50.domain.llm_failure import retry_line
 from muscle50.domain.telegram_commands import stale_text
 from muscle50.domain.telegram_llm_prompt import PHOTO_DOWNLOAD_FAILED_TEXT, PHOTO_TOO_LARGE_TEXT
 
@@ -314,7 +315,8 @@ def test_an_album_whose_photos_all_fail_to_download_gets_the_download_failed_rep
     replies, _err, _fake = run(
         monkeypatch, capsys, provider, [member(1), member(2)], [], broken=frozenset({"file-1", "file-2"})
     )
-    assert replies == [PHOTO_DOWNLOAD_FAILED_TEXT] and provider.requests == []
+    # v2.5: no photo arrived at all, so `/retry_` is offered (it downloads the same photos again).
+    assert replies == [f"{PHOTO_DOWNLOAD_FAILED_TEXT}\n{retry_line('7f3a')}"] and provider.requests == []
 
 
 def test_a_failing_album_poll_still_uses_the_members_in_hand(
@@ -408,11 +410,13 @@ def test_a_failed_read_of_an_album_uses_the_album_caption(
 ) -> None:
     bot._llm_config(home, {"keep_photos": False})
     replies, _err, _fake = run(
-        monkeypatch, capsys, bot.FakeProvider("timeout"), [member(1), member(2, caption="점심 먹었어")], []
-    )
+        monkeypatch, capsys, bot.FakeProvider("bad_output"), [member(1), member(2, caption="점심 먹었어")], []
+    )  # v2.5: a timeout has its own reply now; reason `other` keeps the v2.4 caption rule
     assert replies[0].startswith("사진을 해석하지 못했습니다. 일반식으로만 기록할까요?")
-    replies, _err, _fake = run(monkeypatch, capsys, bot.FakeProvider("timeout"), [member(3), member(4)], [])
-    assert replies == ['사진을 해석하지 못했습니다. 사진에 "메뉴" 또는 "먹음"이라고 적어 다시 보내 주세요.']
+    replies, _err, _fake = run(monkeypatch, capsys, bot.FakeProvider("bad_output"), [member(3), member(4)], [])
+    assert replies == [
+        '사진을 해석하지 못했습니다. 사진에 "메뉴" 또는 "먹음"이라고 적어 다시 보내 주세요.\n' + retry_line("91c0")
+    ]
 
 
 # --- LLM off: the old loop --------------------------------------------------------------------------------------

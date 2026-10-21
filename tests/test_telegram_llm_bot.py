@@ -23,6 +23,7 @@ import muscle50.cli as cli
 from muscle50.application.llm_provider import LlmAttempt, LlmCallResult, LlmRequest, SchemaName
 from muscle50.application.telegram_bot import IncomingMessage, IncomingUpdate
 from muscle50.cli import main
+from muscle50.domain.llm_failure import retry_line
 from muscle50.domain.llm_settings import LlmSettings, ProviderName
 from muscle50.domain.telegram_commands import HELP_TEXT, help_text, pending_migration_text
 from muscle50.domain.telegram_llm_prompt import (
@@ -134,8 +135,11 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _llm_config(root: Path, document: dict[str, Any] | None = None) -> None:
+    """The LLM config file. The default provider is codex (user decision 2026-10-21), so a document without
+    `provider` gets an explicit `"provider": "claude"`: the tests written for the Claude default then pin that an
+    explicit Claude config behaves exactly as before. `{}` itself is tested in `test_telegram_llm_failures*.py`."""
     path = root / "config" / "telegram_llm.json"
-    path.write_text(json.dumps(document or {}), encoding="utf-8", newline="\n")
+    path.write_text(json.dumps({"provider": "claude", **(document or {})}), encoding="utf-8", newline="\n")
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, provider: FakeProvider) -> list[LlmSettings]:
@@ -518,7 +522,8 @@ def test_unclear_photo_asks_and_photo_failure_offers_a_plain_general_meal(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
 ) -> None:
     _llm_config(home, {"keep_photos": False})
-    provider = FakeProvider(meal(photo_kind="unclear"), "timeout")
+    # v2.5: a timeout has its own reply now; reason `other` (bad_output) keeps the v2.4 caption rule.
+    provider = FakeProvider(meal(photo_kind="unclear"), "bad_output")
     # v2.4: the plain general meal is offered after a failed read only when the caption says it was eaten.
     replies, _err, _fake = _session(monkeypatch, capsys, provider, photo(1), photo(2, "점심 먹었어"))
     assert replies[0] == PHOTO_KIND_UNCLEAR_TEXT
@@ -630,9 +635,11 @@ def test_provider_failure_writes_nothing(
     before = _tables(home)
     provider = FakeProvider("failed", {"intent": "not a schema"})
     replies, _err, _fake = _session(monkeypatch, capsys, provider, text(1, "점심"), text(2, "점심"))
-    assert replies == [PROVIDER_FAILED_TEXT, PROVIDER_FAILED_TEXT]
+    # v2.5: each failure reply has its one-tap retry; the state file holds only those retry entries.
+    assert replies == [f"{PROVIDER_FAILED_TEXT}\n{retry_line('7f3a')}", f"{PROVIDER_FAILED_TEXT}\n{retry_line('91c0')}"]
     assert _tables(home) == before
-    assert not (home / "config" / "telegram_llm_state.json").exists()
+    state = json.loads((home / "config" / "telegram_llm_state.json").read_text(encoding="utf-8"))
+    assert [proposal["kind"] for proposal in state["proposals"]] == ["retry", "retry"]
     assert [entry["provider_result"] for entry in _history(home)] == ["failed", "bad_output"]
 
 
@@ -663,7 +670,8 @@ def test_console_has_no_text_url_or_token(
     assert err.removesuffix(v1.STOPPED).isascii()
     for secret in ("비밀", "닭가슴살", "api.telegram.org", TOKEN, "제육"):
         assert secret not in err
-    assert "telegram llm: on, provider claude, fallback none, timeout 90 s" in err
+    # v2.5 adds the usage-limit fallback switch to the startup line.
+    assert "telegram llm: on, provider claude, fallback none, usage-limit fallback on, timeout 90 s" in err
 
 
 def test_source_has_no_company_site() -> None:
@@ -983,7 +991,8 @@ def test_llm_override_switches_the_provider(
     assert [chosen for _request, chosen in provider.requests] == [ProviderName.CODEX, ProviderName.CLAUDE]
     assert replies[6].startswith("사용법: /llm")
     assert json.loads((home / "config" / "telegram_llm.json").read_text(encoding="utf-8")) == {
-        "fallback_provider": "codex"
+        "provider": "claude",
+        "fallback_provider": "codex",
     }
 
 

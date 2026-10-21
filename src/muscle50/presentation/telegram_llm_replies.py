@@ -23,6 +23,7 @@ from muscle50.application.telegram_llm import (
     ProposalItemView,
     ReplyText,
 )
+from muscle50.domain.llm_failure import REASON_NAMES, FailureReason
 from muscle50.domain.llm_today_totals import amount_text, display_amount
 from muscle50.domain.menu_ranking import RankMode
 from muscle50.domain.nutrition import MealType, NutrientField
@@ -60,6 +61,7 @@ _KIND_NAMES = {
     "eat": "메뉴 고르기",
     "edit": "수정 확인",
     "fix": "고치기 선택",
+    "retry": "다시 보내기",
 }
 MEAL_NAMES_BY_VALUE = {meal.value: name for meal, name in MEAL_NAMES.items()}
 _INTENT_NAMES = {
@@ -283,6 +285,9 @@ def history_text(entries: Sequence[dict[str, Any]]) -> str:
         recheck = _recheck_outcome(entry)
         if recheck is not None:
             head.append(f"재확인({OUTCOME_HISTORY_TEXTS[recheck]})")
+        reason = _failure_reason(entry)
+        if reason is not None:
+            head.append(f"실패 이유: {REASON_NAMES[reason]}")
         lines = [" · ".join(head), f"나: {_user_text(entry, photo_word='사진', not_kept='보관 안 함')}"]
         if entry["reply"]:
             lines.append(f"bot: {entry['reply']}")
@@ -320,6 +325,9 @@ def render_telegram_history(entries: Sequence[dict[str, Any]]) -> str:
                 head.append(f"{entry['provider']}/{entry['model'] or 'default'}")
             if entry["provider_result"]:
                 head.append(str(entry["provider_result"]))
+        reason = _failure_reason(entry)
+        if reason is not None:
+            head.append(f"reason={reason.value}")
         if entry.get("web_searches") is not None:
             head.append(f"web={entry['web_searches']}")
         recheck = _recheck_outcome(entry)
@@ -334,6 +342,8 @@ def render_telegram_history(entries: Sequence[dict[str, Any]]) -> str:
                 head.append(f"meals={','.join(result['meal_ids'])}")
             elif result.get("meal_id"):
                 head.append(f"meal={result['meal_id']}")
+        if entry.get("retry_of"):
+            head.append(f"retry_of={entry['retry_of']}")
         lines.append(" ".join(head))
         lines.append(f"  user: {_user_text(entry, photo_word='photo', not_kept='not kept')}")
         if entry["reply"]:
@@ -351,6 +361,12 @@ def _recheck_outcome(entry: dict[str, Any]) -> RecheckOutcome | None:
     """The numeric re-check outcome of a v2.2 line; None for older lines and for messages that needed none."""
     recheck = entry.get("recheck")
     return RecheckOutcome(recheck["outcome"]) if isinstance(recheck, dict) else None
+
+
+def _failure_reason(entry: dict[str, Any]) -> FailureReason | None:
+    """Why the last LLM call of a v2.5 line failed; None for older lines and for calls that succeeded."""
+    value = entry.get("failure_reason")
+    return FailureReason(value) if isinstance(value, str) else None
 
 
 def _retry_note(entry: dict[str, Any]) -> str:

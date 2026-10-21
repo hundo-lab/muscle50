@@ -16,6 +16,7 @@ from decimal import ROUND_HALF_EVEN, Decimal
 from enum import StrEnum
 from typing import Any
 
+from muscle50.domain.llm_failure import FAILURE_REASON_VALUES
 from muscle50.domain.nutrition import (
     GENERAL_MEAL_NOTE_MAX_LENGTH,
     MealType,
@@ -570,7 +571,7 @@ def estimate_source(photo: bool) -> NutritionSourceType:
 # --- commands the LLM layer owns (only when the feature is on) ---------------------------------------
 
 PROPOSAL_TOKEN = re.compile(r"[0-9a-f]{4}")
-_PROPOSAL_COMMAND = re.compile(r"/(ok|plain|no|fix)_([0-9a-f]{4})")
+_PROPOSAL_COMMAND = re.compile(r"/(ok|plain|no|fix|retry)_([0-9a-f]{4})")
 _EAT_COMMAND = re.compile(r"/eat_([0-9a-f]{4})_([1-9][0-9]?)")
 LLM_COMMANDS = frozenset({"llm", "memory", "forget", "history"})
 
@@ -578,7 +579,7 @@ LLM_COMMANDS = frozenset({"llm", "memory", "forget", "history"})
 @dataclass(frozen=True)
 class ProposalCommand:
     action: str
-    """`ok`, `plain`, `no`, `fix` or `eat`."""
+    """`ok`, `plain`, `no`, `fix`, `eat` or (v2.5) `retry`."""
     token: str
     number: int | None = None
     """`/eat_<token>_<n>`: the menu number."""
@@ -626,6 +627,8 @@ class ProposalKind(StrEnum):
     MEAL = "meal"
     MENU = "menu"
     EDIT = "edit"
+    RETRY = "retry"
+    """v2.5: a failed message that `/retry_<token>` sends again (its payload is kept for 60 minutes only)."""
 
 
 class ProposalState(StrEnum):
@@ -680,6 +683,19 @@ class Proposal:
     """A meal proposal that overlaps a recorded meal: the one correction command `/fix_` proposes (empty: none)."""
     fix_change: str = ""
     """What `fix_argv` changes, in the words of the edit proposal."""
+    retry_text: str | None = None
+    """v2.5 retry: the failed text message (None for a photo, and once used or expired)."""
+    retry_caption: str | None = None
+    retry_file_ids: tuple[str, ...] = ()
+    """v2.5 retry: the Telegram file ids of the failed photo message (downloaded again on `/retry_`)."""
+    retry_album: int = 0
+    """v2.5 retry: how many photos the album had in all (0 for a single photo or a text)."""
+    received_unix: int = 0
+    """v2.5 retry: when the failed message was first handled; dates and meal slots are resolved from it."""
+
+    @property
+    def has_retry_payload(self) -> bool:
+        return self.retry_text is not None or self.retry_caption is not None or bool(self.retry_file_ids)
 
     @property
     def plain_available(self) -> bool:
@@ -697,6 +713,21 @@ class LlmState:
 
 
 EMPTY_STATE = LlmState(None, ())
+
+
+def blank_retry(proposal: Proposal) -> Proposal:
+    """A retry proposal without its message (text, caption, photo file ids): after use or expiry."""
+    return replace(proposal, retry_text=None, retry_caption=None, retry_file_ids=(), retry_album=0)
+
+
+def purge_expired_retries(proposals: tuple[Proposal, ...], now_unix: int) -> tuple[Proposal, ...]:
+    """The proposals with every expired retry's message removed (the same objects when nothing expired)."""
+    return tuple(
+        blank_retry(proposal)
+        if proposal.kind is ProposalKind.RETRY and proposal.has_retry_payload and now_unix >= proposal.expires_unix
+        else proposal
+        for proposal in proposals
+    )
 
 
 def prune_proposals(proposals: tuple[Proposal, ...], now_unix: int) -> tuple[Proposal, ...]:
@@ -779,14 +810,16 @@ HISTORY_KEYS_V1 = (
 )
 HISTORY_KEYS_V21 = (*HISTORY_KEYS_V1, "retried", "attempts")
 """Lines written by model routing (v2.1) have these 18 keys and stay valid."""
-HISTORY_KEYS = (*HISTORY_KEYS_V21, "web_searches", "recheck")
-"""New lines (v2.2) add the web search count and the numeric re-check; lines with 16 or 18 keys stay valid."""
+HISTORY_KEYS_V22 = (*HISTORY_KEYS_V21, "web_searches", "recheck")
+"""Lines of v2.2-v2.4 add the web search count and the numeric re-check; lines with 16 or 18 keys stay valid."""
+HISTORY_KEYS = (*HISTORY_KEYS_V22, "failure_reason", "retry_of")
+"""New lines (v2.5) add why the last LLM call failed and the `/retry_` token a message was sent again with."""
 RECHECK_OUTCOMES = frozenset({"fixed", "still_inconsistent", "reask_failed"})
 RECHECK_CODES = frozenset(
     {"range_too_wide", "range_is_a_point", "macros_vs_kcal", "macros_exceed_kcal", "assumption_number"}
 )
 HISTORY_ATTEMPT_KEYS = ("provider", "model", "outcome", "retry")
-HISTORY_KINDS = frozenset({"text", "photo", "confirm", "plain", "cancel", "eat", "edit", "fix"})
+HISTORY_KINDS = frozenset({"text", "photo", "confirm", "plain", "cancel", "eat", "edit", "fix", "retry"})
 
 
 def history_entry(**fields: Any) -> dict[str, Any]:
@@ -800,10 +833,10 @@ def history_entry(**fields: Any) -> dict[str, Any]:
 
 
 def check_history_entry(document: Any) -> dict[str, Any]:
-    """A stored line as read back (any of the three key shapes); ValueError when it is not a version-1 entry."""
+    """A stored line as read back (any of the four key shapes); ValueError when it is not a version-1 entry."""
     if (
         not isinstance(document, dict)
-        or tuple(document) not in (HISTORY_KEYS_V1, HISTORY_KEYS_V21, HISTORY_KEYS)
+        or tuple(document) not in (HISTORY_KEYS_V1, HISTORY_KEYS_V21, HISTORY_KEYS_V22, HISTORY_KEYS)
         or document["v"] != HISTORY_VERSION
     ):
         raise ValueError("not a version 1 history entry")
@@ -815,7 +848,15 @@ def check_history_entry(document: Any) -> dict[str, Any]:
         raise ValueError("not a version 1 history entry")
     if "recheck" in document and not _search_keys_ok(document["web_searches"], document["recheck"]):
         raise ValueError("not a version 1 history entry")
+    if "retry_of" in document and not _failure_keys_ok(document["failure_reason"], document["retry_of"]):
+        raise ValueError("not a version 1 history entry")
     return document
+
+
+def _failure_keys_ok(failure_reason: Any, retry_of: Any) -> bool:
+    if failure_reason is not None and failure_reason not in FAILURE_REASON_VALUES:
+        return False
+    return retry_of is None or (isinstance(retry_of, str) and PROPOSAL_TOKEN.fullmatch(retry_of) is not None)
 
 
 def _search_keys_ok(web_searches: Any, recheck: Any) -> bool:

@@ -71,15 +71,22 @@ class LlmSettings:
     """How many searches the prompt allows. Advisory: it is a prompt rule, counted afterwards, not a CLI limit."""
     web_search_timeout_seconds: int = 150
     """The time limit of a run that was given the search tool (instead of `timeout_seconds`)."""
+    fallback_on_usage_limit: bool = True
+    """v2.5: when the active provider stops on its usage limit, the call goes once to the other provider."""
 
     def provider_settings(self, provider: ProviderName) -> ProviderSettings:
         return self.claude if provider is ProviderName.CLAUDE else self.codex
 
 
+CODEX_DEFAULT_MODEL = "gpt-6.1-sol"
+"""v2.5: the Codex workhorse model (the Sonnet-class counterpart) for text and photos. Model names change over time;
+`telegram_llm.json` overrides it."""
+
 DEFAULT_SETTINGS = LlmSettings(
-    provider=ProviderName.CLAUDE,
+    # v2.5 (user decision 2026-10-21): Codex is the default provider; Claude is the other one.
+    provider=ProviderName.CODEX,
     claude=ProviderSettings(model="haiku", executable=None, photo_model="sonnet", retry_model="sonnet"),
-    codex=ProviderSettings(model=None, executable=None),
+    codex=ProviderSettings(model=CODEX_DEFAULT_MODEL, executable=None, photo_model=CODEX_DEFAULT_MODEL),
     persona_name="머슬",
     persona_tone="존댓말, 짧게, 담백하게",
     timeout_seconds=90,

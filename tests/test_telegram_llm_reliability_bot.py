@@ -22,6 +22,7 @@ from test_telegram_llm_domain import interpretation
 
 import muscle50.cli as cli
 from muscle50.application.telegram_bot import CommandOutcome, IncomingMessage, IncomingUpdate
+from muscle50.domain.llm_failure import retry_line
 from muscle50.domain.telegram_llm import MENU_PROPOSAL_TTL_S
 from muscle50.domain.telegram_llm_prompt import PROPOSAL_EXPIRED_TEXT, SYNC_HINT_TEXT, menu_expired_text
 from muscle50.infrastructure.telegram.cli_runner import InProcessCliRunner
@@ -179,8 +180,8 @@ def test_a_failed_read_with_a_clear_caption_offers_the_plain_meal(
 ) -> None:
     bot._llm_config(home, {"keep_photos": False})
     replies, _err, _fake = bot._session(
-        monkeypatch, capsys, bot.FakeProvider("timeout"), bot.photo(1, "점심으로 이거 먹었어")
-    )
+        monkeypatch, capsys, bot.FakeProvider("bad_output"), bot.photo(1, "점심으로 이거 먹었어")
+    )  # v2.5: a timeout has its own reply now; reason `other` keeps the v2.4 caption rule
     assert replies == ["\n".join(PLAIN_PHOTO_PROPOSAL)]
     assert len(state(home)) == 1
 
@@ -192,13 +193,15 @@ def test_a_failed_read_without_a_clear_caption_offers_nothing_and_writes_nothing
     bot._catalog(capsys)
     bot._llm_config(home, {"keep_photos": False})
     before = bot._tables(home)
-    replies, _err, _fake = bot._session(monkeypatch, capsys, bot.FakeProvider("timeout"), bot.photo(1, caption))
-    assert replies == [PHOTO_FAILED]
+    replies, _err, _fake = bot._session(monkeypatch, capsys, bot.FakeProvider("bad_output"), bot.photo(1, caption))
+    # v2.5: reason `other` keeps the v2.4 text and adds the one-tap retry (a timeout has its own reply now).
+    failed = f"{PHOTO_FAILED}\n{retry_line('7f3a')}"
+    assert replies == [failed]
     assert bot._tables(home) == before
-    assert not (home / "config" / "telegram_llm_state.json").exists()  # no proposal
+    assert [proposal["kind"] for proposal in state(home)] == ["retry"]  # no meal proposal
     assert not (home / "telegram" / "photos").exists()
     (entry,) = bot._history(home)
-    assert entry["reply"] == PHOTO_FAILED and entry["proposal"] is None
+    assert entry["reply"] == failed and entry["proposal"] is None
 
 
 # --- AC3: the chat memory keeps what a photo was ---

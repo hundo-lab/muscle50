@@ -48,6 +48,15 @@ from muscle50.application.telegram_bot import (
     SummaryUnavailableError,
     TelegramUnavailableError,
 )
+from muscle50.domain.llm_failure import (
+    RETRY_EXPIRED_TEXT,
+    RETRY_UNKNOWN_TEXT,
+    RETRY_USED_TEXT,
+    FailureReason,
+    failure_text,
+    retry_line,
+    usage_fallback_note,
+)
 from muscle50.domain.llm_number_guard import allowed_numbers, unknown_numbers
 from muscle50.domain.llm_settings import PROVIDER_COMPANIES, LlmSettings, ProviderName
 from muscle50.domain.llm_today_totals import (
@@ -104,6 +113,7 @@ from muscle50.domain.telegram_llm import (
     SuggestResult,
     Tense,
     Topic,
+    blank_retry,
     clean_memo,
     estimate_source,
     history_entry,
@@ -114,6 +124,7 @@ from muscle50.domain.telegram_llm import (
     parse_llm_command,
     parse_suggestions,
     prune_proposals,
+    purge_expired_retries,
     remember,
     resolve_date_expression,
 )
@@ -430,6 +441,21 @@ class LlmReplies(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class _Origin:
+    """v2.5: a message as it arrived, kept so that a failure can offer `/retry_` for exactly this message."""
+
+    text: str | None
+    caption: str | None
+    file_ids: tuple[str, ...]
+    """The photo's (or album's) Telegram file ids; empty for a text."""
+    album: int
+    received: datetime
+    """When it was first handled (a retry keeps the first time): dates and meal slots are resolved from it."""
+    retry_of: str | None
+    """The `/retry_` token it was sent again with (None: sent by the user)."""
+
+
 @dataclass
 class _Exchange:
     """What one message produced, for the reply, the history line and the memory."""
@@ -452,6 +478,8 @@ class _Exchange:
     """How a photo was read, in a few words, for the chat memory (None: the read failed)."""
     extra_photos: tuple[bytes, ...] = ()
     """The photos after the first of an album message; the numeric re-ask sends the same ones."""
+    origin: _Origin | None = None
+    """v2.5: the message as it arrived (None for a command such as `/eat_` or `/fix_`)."""
 
 
 class TelegramLlmHandler:
@@ -505,10 +533,51 @@ class TelegramLlmHandler:
             if command is None:
                 return None
             if isinstance(command, ProposalCommand):
+                if command.action == "retry":
+                    return self._retry(chat_id, update_id, command.token)
                 return self._proposal_command(chat_id, update_id, command)
             return self._llm_command(chat_id, command)
+        return self._incoming(chat_id, update_id, message, received=self._now(), retry_of=None)
+
+    def purge_expired(self) -> None:
+        """v2.5: remove the message of every expired `/retry_` proposal from the state file (saved only on a change).
+
+        Run at `telegram run` start and on every idle poll, so a failed message is kept for 60 minutes at most while
+        the bot runs.
+        """
+        state = self._proposals.load()
+        purged = purge_expired_retries(state.proposals, self._now_unix())
+        if purged != state.proposals:
+            self._proposals.save(LlmState(state.provider_override, purged))
+            self._log("llm retry: expired messages removed")
+
+    def _incoming(
+        self,
+        chat_id: int,
+        update_id: int,
+        message: IncomingMessage,
+        *,
+        received: datetime,
+        retry_of: str | None,
+    ) -> LlmAction | None:
+        """A non-command text or photo, first sent or sent again with `/retry_` (``retry_of``). ``received`` is when it
+        was first handled: dates and meal slots are resolved from it."""
+        text = message.text
+        file_ids: tuple[str, ...] = ()
+        if message.photo_file_id is not None:
+            file_ids = (message.photo_file_ids or (message.photo_file_id,))[:ALBUM_MAX_PHOTOS]
+        origin = _Origin(
+            text,
+            message.caption if text is None else None,
+            file_ids if text is None else (),
+            message.album_members,
+            received,
+            retry_of,
+        )
         if text is not None:
-            return self._message(chat_id, update_id, text=text, photo=None, caption=None, photo_path=None)
+            return self._message(
+                chat_id, update_id, text=text, photo=None, caption=None, photo_path=None, origin=origin
+            )
         if message.document_image:
             return self._fixed_photo_reply(chat_id, update_id, message, DOCUMENT_IMAGE_TEXT)
         if message.photo_too_large:
@@ -517,7 +586,6 @@ class TelegramLlmHandler:
             return None
         # A collected album (v2.4) has several file ids; a single photo has just `photo_file_id`. A photo that cannot be
         # downloaded is dropped and counted; the reply says so when fewer photos were read than were sent.
-        file_ids = (message.photo_file_ids or (message.photo_file_id,))[:ALBUM_MAX_PHOTOS]
         sent = max(message.album_members, len(file_ids))
         photos: list[bytes] = []
         paths: list[str] = []
@@ -534,7 +602,8 @@ class TelegramLlmHandler:
                 except OSError as exc:
                     self._log(f"chat {chat_id}: photo not kept ({type(exc).__name__})")
         if not photos:
-            return self._fixed_photo_reply(chat_id, update_id, message, PHOTO_DOWNLOAD_FAILED_TEXT)
+            # v2.5: no photo arrived at all; `/retry_` downloads the same file ids again.
+            return self._fixed_photo_reply(chat_id, update_id, message, PHOTO_DOWNLOAD_FAILED_TEXT, origin=origin)
         return self._message(
             chat_id,
             update_id,
@@ -544,6 +613,7 @@ class TelegramLlmHandler:
             photo_path=",".join(paths) if paths else None,
             extra_photos=tuple(photos[1:]),
             photos_sent=sent,
+            origin=origin,
         )
 
     # --- free text and photos ------------------------------------------------------------------------------
@@ -559,9 +629,10 @@ class TelegramLlmHandler:
         photo_path: str | None,
         extra_photos: tuple[bytes, ...] = (),
         photos_sent: int = 0,
+        origin: _Origin,
     ) -> LlmAction:
         words = text if text is not None else (caption or "")
-        exchange = _Exchange(extra_photos=extra_photos)
+        exchange = _Exchange(extra_photos=extra_photos, origin=origin)
         exchange.data = self._interpret_data(chat_id, words, exchange, text_only=photo is None)
         call = self._call(
             chat_id,
@@ -576,14 +647,19 @@ class TelegramLlmHandler:
         )
         exchange.calls.append(call)
         if not call.ok:
+            # v2.5: a known reason says what to do (and replaces the caption rule of a photo); `other` keeps v2.4.
+            reason = call.failure_reason or FailureReason.OTHER
+            said = failure_text(reason, call.provider, other_tried=call.other_tried)
             if photo is not None:
-                if caption_is_clearly_eaten(words):
+                if said is not None:
+                    self._failure_reply(chat_id, exchange, said, reason)
+                elif caption_is_clearly_eaten(words):
                     self._photo_failed_proposal(chat_id, exchange)
                 else:
                     # Neither "ate" nor "menu" is clear: a value-less meal would be a guess, so nothing is offered.
-                    exchange.reply = ReplyText(PHOTO_FAILED_TEXT)
+                    self._failure_reply(chat_id, exchange, PHOTO_FAILED_TEXT, reason)
             else:
-                exchange.reply = ReplyText(PROVIDER_FAILED_TEXT)
+                self._failure_reply(chat_id, exchange, said or PROVIDER_FAILED_TEXT, reason)
         else:
             interpretation: Interpretation = call.document
             exchange.outputs["interpret"] = interpretation.document
@@ -594,6 +670,10 @@ class TelegramLlmHandler:
             else:
                 self._text(chat_id, words, interpretation, exchange)
         assert exchange.reply is not None
+        limited = next((item for item in exchange.calls if item.usage_limited is not None), None)
+        if limited is not None and limited.usage_limited is not None and exchange.messages is None:
+            note = usage_fallback_note(limited.usage_limited, limited.provider)
+            exchange.reply = replace(exchange.reply, body=f"{exchange.reply.body}\n{note}")
         if photo is not None:
             partial = album_partial_line(photos_sent, 1 + len(extra_photos))
             if partial is not None:  # fewer photos were read than were sent
@@ -654,10 +734,74 @@ class TelegramLlmHandler:
         else:
             exchange.reply = ReplyText(PHOTO_KIND_UNCLEAR_TEXT)
 
-    def _fixed_photo_reply(self, chat_id: int, update_id: int, message: IncomingMessage, text: str) -> LlmAction:
-        exchange = _Exchange(reply=ReplyText(text))
+    def _fixed_photo_reply(
+        self, chat_id: int, update_id: int, message: IncomingMessage, text: str, *, origin: _Origin | None = None
+    ) -> LlmAction:
+        exchange = _Exchange(reply=ReplyText(text), origin=origin)
+        if origin is not None:  # v2.5: the photo did not arrive: offer to download it again
+            self._failure_reply(chat_id, exchange, text, None)
+        assert exchange.reply is not None
         self._record(chat_id, exchange, update_id=update_id, kind="photo", caption=message.caption)
-        return LlmReply(tuple(self._replies.messages(ReplyText(text))))
+        return LlmReply(tuple(self._replies.messages(exchange.reply)))
+
+    def _failure_reply(self, chat_id: int, exchange: _Exchange, body: str, reason: FailureReason | None) -> None:
+        """v2.5: a failure reply with the one-tap `/retry_<token>` (60 minutes, single use) for the same message."""
+        origin = exchange.origin
+        if origin is None:
+            exchange.reply = ReplyText(body)
+            return
+        token = self._new_proposal(
+            chat_id,
+            ProposalKind.RETRY,
+            retry_text=origin.text,
+            retry_caption=origin.caption,
+            retry_file_ids=origin.file_ids,
+            retry_album=origin.album,
+            received_unix=int(origin.received.timestamp()),
+        ).token
+        self._log(f"chat {chat_id}: retry {token} offered ({reason.value if reason is not None else 'download'})")
+        exchange.reply = ReplyText(body, (retry_line(token),))
+
+    def _retry(self, chat_id: int, update_id: int, token: str) -> LlmAction | None:
+        """`/retry_<token>`: the failed message once more, as if it had just arrived (dates from when it first did).
+
+        Refused for an unknown token or another chat's (the same text: nothing is told), a used one and an expired one.
+        Otherwise it is marked used and its message removed in one save before anything runs (at most once).
+        """
+        typed = f"/retry_{token}"
+        state = self._proposals.load()
+        proposal = next(
+            (
+                item
+                for item in state.proposals
+                if item.token == token and item.chat_id == chat_id and item.kind is ProposalKind.RETRY
+            ),
+            None,
+        )
+        refusal = None
+        if proposal is None:
+            refusal = RETRY_UNKNOWN_TEXT
+        elif proposal.state is not ProposalState.OPEN:
+            refusal = RETRY_USED_TEXT
+        elif self._now_unix() >= proposal.expires_unix or not proposal.has_retry_payload:
+            refusal = RETRY_EXPIRED_TEXT
+        if refusal is not None or proposal is None:
+            self._log(f"chat {chat_id}: /retry {token} refused")
+            return self._simple(chat_id, update_id, "retry", refusal or RETRY_UNKNOWN_TEXT, proposal=token, typed=typed)
+        self._update(state, blank_retry(proposal.with_state(ProposalState.USED)))
+        self._log(f"chat {chat_id}: retry {token} used")
+        ids = proposal.retry_file_ids
+        message = IncomingMessage(
+            chat_id,
+            proposal.retry_text,
+            proposal.received_unix,
+            photo_file_id=ids[0] if ids else None,
+            caption=proposal.retry_caption,
+            photo_file_ids=ids if len(ids) > 1 else (),
+            album_members=proposal.retry_album,
+        )
+        received = datetime.fromtimestamp(proposal.received_unix, self._now().tzinfo)
+        return self._incoming(chat_id, update_id, message, received=received, retry_of=token)
 
     # --- meal proposals -------------------------------------------------------------------------------------
 
@@ -671,7 +815,7 @@ class TelegramLlmHandler:
         *,
         photo_digest: str | None,
     ) -> None:
-        day = resolve_date_expression(interpretation.date_expression, self._today())
+        day = resolve_date_expression(interpretation.date_expression, self._received_day(exchange))
         if day is None:
             exchange.reply = ReplyText(DATE_OTHER_TEXT)
             return
@@ -836,7 +980,7 @@ class TelegramLlmHandler:
             extra_photos=exchange.extra_photos,
         )
         exchange.calls.append(second)
-        answer = self._usable_second_answer(chat_id, second, photo_digest, exchange.menu)
+        answer = self._usable_second_answer(chat_id, second, photo_digest, exchange.menu, self._received_day(exchange))
         if answer is None:
             outcome = RecheckOutcome.REASK_FAILED
             detail = "unusable answer" if second.ok else second.outcome.replace("_", " ")
@@ -859,7 +1003,7 @@ class TelegramLlmHandler:
         return final
 
     def _usable_second_answer(
-        self, chat_id: int, second: LlmCallResult, photo_digest: str | None, menu: Proposal | None
+        self, chat_id: int, second: LlmCallResult, photo_digest: str | None, menu: Proposal | None, today: date
     ) -> tuple[Interpretation, date, list[_Entry]] | None:
         """The re-ask's answer when it is still an eaten meal log with a date and items; else None."""
         if not second.ok:
@@ -869,7 +1013,7 @@ class TelegramLlmHandler:
             return None
         if photo_digest is not None and candidate.photo_kind is not PhotoKind.MEAL_PHOTO:
             return None
-        day = resolve_date_expression(candidate.date_expression, self._today())
+        day = resolve_date_expression(candidate.date_expression, today)
         if day is None:
             return None
         entries = self._link_items(chat_id, candidate, menu)
@@ -899,7 +1043,7 @@ class TelegramLlmHandler:
         for group in group_meals(entries, default_meal):
             meal_type = group.meal_type
             if meal_type is None:
-                meal_type, slot_from_time = meal_slot_for(self._now().time()), True
+                meal_type, slot_from_time = meal_slot_for(self._received(exchange).time()), True
             meals.setdefault(meal_type, []).extend(group.items)
         searches = _searches(exchange.calls) or 0
         if len(meals) == 1:
@@ -1040,12 +1184,12 @@ class TelegramLlmHandler:
         exchange.reply = self._replies.proposal(view)
 
     def _photo_failed_proposal(self, chat_id: int, exchange: _Exchange) -> None:
-        meal_type = meal_slot_for(self._now().time())
+        meal_type = meal_slot_for(self._received(exchange).time())
         entry = _Entry(None, None, None, None, (), False, None)
         self._store_meal_proposal(
             chat_id,
             exchange,
-            self._today(),
+            self._received_day(exchange),
             meal_type,
             [entry],
             [],
@@ -1114,7 +1258,7 @@ class TelegramLlmHandler:
             if len(visible) == 1:
                 slot = visible[0]
             else:
-                by_time = meal_slot_for(self._now().time())
+                by_time = meal_slot_for(self._received(exchange).time())
                 if visible and by_time not in visible:
                     exchange.reply = ReplyText(MENU_SLOT_UNKNOWN_TEXT)
                     return
@@ -1186,13 +1330,15 @@ class TelegramLlmHandler:
         call = self._call(chat_id, SchemaName.SUGGEST, PromptTask.SUGGEST, words, None, data, parse_suggestions)
         exchange.calls.append(call)
         if not call.ok:
-            exchange.reply = ReplyText(PROVIDER_FAILED_TEXT)
+            reason = call.failure_reason or FailureReason.OTHER
+            said = failure_text(reason, call.provider, other_tried=call.other_tried)
+            self._failure_reply(chat_id, exchange, said or PROVIDER_FAILED_TEXT, reason)
             return
         result: SuggestResult = call.document
         exchange.outputs["suggest"] = result.document
         exchange.summary = result.memory_summary or exchange.summary
         allowed = allowed_numbers([document for _label, document in data])
-        meal_type = interpretation.meal_type or meal_slot_for(self._now().time())
+        meal_type = interpretation.meal_type or meal_slot_for(self._received(exchange).time())
         rank_items, lines, choices = [], [], []
         for index, suggestion in enumerate(result.suggestions, start=1):
             kcal = _bounds(suggestion.estimate, NutrientField.CALORIES_KCAL)
@@ -1258,7 +1404,7 @@ class TelegramLlmHandler:
             ProposalKind.MENU,
             choices=tuple(choices[index] for index in ordered),
             meal_type=meal_type,
-            day=self._today(),
+            day=self._received_day(exchange),
             source=source,
             reference=reference,
             label=label,
@@ -1462,7 +1608,7 @@ class TelegramLlmHandler:
                 exchange.reply = ReplyText(EDIT_NO_RECENT_TEXT)
                 return None
             return recent
-        day = resolve_date_expression(interpretation.date_expression, self._today())
+        day = resolve_date_expression(interpretation.date_expression, self._received_day(exchange))
         if day is None:
             exchange.reply = ReplyText(DATE_OTHER_TEXT)
             return None
@@ -1792,6 +1938,8 @@ class TelegramLlmHandler:
     def _proposal_refusal(self, proposal: Proposal | None, command: ProposalCommand) -> str | None:
         if proposal is None:
             return PROPOSAL_UNKNOWN_TEXT
+        if proposal.kind is ProposalKind.RETRY:
+            return PROPOSAL_WRONG_KIND_TEXT  # only `/retry_` sends it again
         is_menu = proposal.kind is ProposalKind.MENU
         if (command.action == "eat") != is_menu and command.action != "no":
             return PROPOSAL_WRONG_KIND_TEXT
@@ -2097,6 +2245,8 @@ class TelegramLlmHandler:
             attempts=_attempts_document(last),
             web_searches=_searches(exchange.calls),
             recheck=exchange.recheck,
+            failure_reason=_failure_value(last),
+            retry_of=exchange.origin.retry_of if exchange.origin is not None else None,
         )
         self._append_history(chat_id, entry)
         self._log(
@@ -2115,7 +2265,7 @@ class TelegramLlmHandler:
         left cancelled by the same save (so at no point are both open)."""
         state = self._proposals.load()
         now = int(self._now().timestamp())
-        proposals = prune_proposals(state.proposals, now)
+        proposals = purge_expired_retries(prune_proposals(state.proposals, now), now)
         if cancel is not None:
             proposals = tuple(
                 item.with_state(ProposalState.CANCELLED)
@@ -2190,6 +2340,13 @@ class TelegramLlmHandler:
 
     def _today(self) -> date:
         return self._now().date()
+
+    def _received(self, exchange: _Exchange) -> datetime:
+        """When the message was first handled (v2.5: a `/retry_` keeps that time); now for anything else."""
+        return exchange.origin.received if exchange.origin is not None else self._now()
+
+    def _received_day(self, exchange: _Exchange) -> date:
+        return self._received(exchange).date()
 
     def _now_unix(self) -> int:
         return int(self._now().timestamp())
@@ -2449,6 +2606,12 @@ def _attempts_document(call: LlmCallResult | None) -> list[dict[str, Any]] | Non
         {"provider": item.provider.value, "model": item.model, "outcome": item.outcome, "retry": item.retry}
         for item in call.attempts
     ]
+
+
+def _failure_value(call: LlmCallResult | None) -> str | None:
+    """The history's `failure_reason`: why the last LLM call failed (None when it succeeded or there was none)."""
+    reason = call.failure_reason if call is not None else None
+    return reason.value if reason is not None else None
 
 
 def _recorded_meal_id(stdout: str) -> str | None:

@@ -41,6 +41,7 @@ _TOP_KEYS = frozenset(
         "web_search",
         "web_search_max",
         "web_search_timeout_seconds",
+        "fallback_on_usage_limit",
     }
 )
 _PROVIDER_KEYS = frozenset({"model", "photo_model", "retry_model", "executable"})
@@ -101,6 +102,9 @@ def _settings(document: Any) -> LlmSettings:
         raise ValueError(
             f"web_search_timeout_seconds must be an integer from {WEB_TIMEOUT_MIN_S} to {WEB_TIMEOUT_MAX_S}"
         )
+    usage_fallback = root.get("fallback_on_usage_limit", defaults.fallback_on_usage_limit)
+    if type(usage_fallback) is not bool:
+        raise ValueError("fallback_on_usage_limit must be true or false")
     return LlmSettings(
         provider=provider,
         claude=_provider_settings(root.get("claude", {}), "claude", defaults.claude),
@@ -113,6 +117,7 @@ def _settings(document: Any) -> LlmSettings:
         web_search=web_search,
         web_search_max=web_max,
         web_search_timeout_seconds=web_timeout,
+        fallback_on_usage_limit=usage_fallback,
     )
 
 

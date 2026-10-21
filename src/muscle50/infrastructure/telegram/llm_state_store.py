@@ -134,6 +134,11 @@ def _proposal_document(proposal: Proposal) -> dict[str, Any]:
         "outline": list(proposal.outline),
         "fix_argv": list(proposal.fix_argv),
         "fix_change": proposal.fix_change,
+        "retry_text": proposal.retry_text,
+        "retry_caption": proposal.retry_caption,
+        "retry_file_ids": list(proposal.retry_file_ids),
+        "retry_album": proposal.retry_album,
+        "received_unix": proposal.received_unix,
     }
 
 
@@ -193,7 +198,25 @@ def _proposal(item: dict[str, Any]) -> Proposal:
         outline=_strings(item.get("outline", [])),
         fix_argv=_strings(item.get("fix_argv", [])),
         fix_change=str(item.get("fix_change", "")),
+        # Keys of v2.5: a state file written before them still loads.
+        retry_text=_optional_string(item.get("retry_text")),
+        retry_caption=_optional_string(item.get("retry_caption")),
+        retry_file_ids=_strings(item.get("retry_file_ids", [])),
+        retry_album=_integer(item.get("retry_album", 0)),
+        received_unix=_integer(item.get("received_unix", 0)),
     )
+
+
+def _optional_string(value: Any) -> str | None:
+    if value is not None and not isinstance(value, str):
+        raise ValueError("expected a string or null")
+    return value
+
+
+def _integer(value: Any) -> int:
+    if type(value) is not int:
+        raise ValueError("bad integer")
+    return value
 
 
 def _strings(value: Any) -> tuple[str, ...]:

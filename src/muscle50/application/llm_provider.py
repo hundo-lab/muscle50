@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Literal, Protocol
 
+from muscle50.domain.llm_failure import FailureReason, reason_of
 from muscle50.domain.llm_settings import ProviderName
 
 
@@ -48,6 +49,9 @@ class LlmRequest:
     """A corrective re-ask: one run on the pinned model, no retry and no fallback."""
     extra_photos: tuple[bytes, ...] = ()
     """v2.4 albums: the photos after ``photo`` (``photo`` is the first). Empty for a single photo."""
+    strong_model: bool = False
+    """v2.5: start on the provider's `retry_model` (when set) instead of the text or photo model: an edit of an open
+    proposal. The normal retry and fallback rules still apply."""
 
     @property
     def has_photo(self) -> bool:
@@ -65,6 +69,8 @@ class LlmAttempt:
     """True for the one re-run on the retry model after a format failure."""
     web_searches: int | None = None
     """How many web searches the run made; None when the tool was not offered, 0 when offered but unused."""
+    reason: FailureReason | None = None
+    """v2.5: why a run that did not succeed failed (None for `ok`); decided from the exit and the CLI's error marks."""
 
 
 @dataclass(frozen=True)
@@ -90,6 +96,27 @@ class LlmCallResult:
         return sum(counts) if counts else None
 
     @property
+    def failure_reason(self) -> FailureReason | None:
+        """Why the call failed, from its last attempt; None when it succeeded."""
+        last = self.attempts[-1] if self.attempts else None
+        return reason_of(self.outcome, last.reason if last is not None else None)
+
+    @property
+    def usage_limited(self) -> ProviderName | None:
+        """The provider whose usage limit sent this successful call on to the other provider (None otherwise)."""
+        if not self.ok:
+            return None
+        for attempt in self.attempts:
+            if attempt.provider is not self.provider and attempt.reason is FailureReason.USAGE_LIMIT:
+                return attempt.provider
+        return None
+
+    @property
+    def other_tried(self) -> bool:
+        """True when some attempt ran on a provider other than the last attempt's."""
+        return any(attempt.provider is not self.provider for attempt in self.attempts)
+
+    @property
     def retried(self) -> bool:
         """True when some attempt was a re-run on the retry model."""
         return any(attempt.retry for attempt in self.attempts)
@@ -98,5 +125,6 @@ class LlmCallResult:
 class LlmProvider(Protocol):
     def call(self, request: LlmRequest, provider: ProviderName) -> LlmCallResult:
         """Try ``provider`` (the photo or text model), re-run once on the retry model after a format failure,
-        then the configured fallback provider once (with the same rules) when it differs and the provider failed."""
+        then the configured fallback provider once (with the same rules) when it differs and the provider failed.
+        v2.5: a usage limit of ``provider`` sends the call once to the other provider (`fallback_on_usage_limit`)."""
         ...

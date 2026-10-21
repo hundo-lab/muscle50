@@ -259,7 +259,7 @@ def test_the_history_line_has_the_search_count_and_no_query_or_page(
     meal_entry, confirm = bot._history(home)
     assert meal_entry["web_searches"] == 2 and meal_entry["recheck"] is None
     assert confirm["web_searches"] is None and confirm["recheck"] is None
-    assert len(meal_entry) == 20
+    assert len(meal_entry) == 22  # v2.5 adds failure_reason and retry_of
 
 
 def test_without_a_search_attempt_the_count_is_null(
@@ -327,12 +327,12 @@ def test_the_renderers_print_the_recorded_meals_of_a_multi_meal_confirm() -> Non
     assert "결과: 기록 a-1" in history_text([single]) and "exit=0 meal=a-1" in render_telegram_history([single])
 
 
-def test_a_twenty_key_line_with_a_recheck_object_round_trips_through_the_history_log(tmp_path: Path) -> None:
+def test_a_new_line_with_a_recheck_object_round_trips_through_the_history_log(tmp_path: Path) -> None:
     log = JsonlHistoryLog(tmp_path / "history")
     entry = entry_with(web_searches=3, recheck={"reasons": ["range_too_wide", "macros_vs_kcal"], "outcome": "fixed"})
     log.append(entry)
     (read,) = log.read(last=5)
-    assert read == entry and len(read) == 20
+    assert read == entry and len(read) == 22  # v2.5: 22 keys
 
 
 def test_the_startup_line_names_the_web_search_setting(

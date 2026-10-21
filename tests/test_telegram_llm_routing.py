@@ -32,11 +32,14 @@ from test_telegram_llm_domain import interpretation
 import muscle50.cli as cli
 from muscle50.application.llm_provider import LlmAttempt, LlmCallResult, LlmRequest, SchemaName
 from muscle50.cli import main
+from muscle50.domain.llm_failure import FailureReason, retry_line
 from muscle50.domain.llm_settings import DEFAULT_SETTINGS, LlmSettings, ProviderName, ProviderSettings
 from muscle50.domain.telegram_llm import (
     HISTORY_KEYS,
     HISTORY_KEYS_V1,
     HISTORY_KEYS_V21,
+    HISTORY_KEYS_V22,
+    ProposalKind,
     check_history_entry,
     history_entry,
 )
@@ -47,6 +50,7 @@ from muscle50.infrastructure.llm.process import ProcessResult
 from muscle50.infrastructure.llm.provider import TEMP_PREFIX, CliLlmProvider, load_schema
 from muscle50.infrastructure.telegram.history_log import JsonlHistoryLog
 from muscle50.infrastructure.telegram.llm_config_file import LlmConfigError, load_llm_settings
+from muscle50.infrastructure.telegram.llm_state_store import JsonLlmStateStore
 from muscle50.presentation.telegram_llm_replies import history_text, render_telegram_history
 
 home = bot.home  # the autouse fixture of the bot tests: temporary MUSCLE50_HOME, fake clock, no network
@@ -74,6 +78,10 @@ def _settings(**overrides: Any) -> LlmSettings:
     return replace(DEFAULT_SETTINGS, **overrides)
 
 
+def _proposals(root: Path) -> tuple[Any, ...]:
+    return JsonLlmStateStore(root / "config" / "telegram_llm_state.json").load().proposals
+
+
 def _write_config(path: Path, document: Any) -> Path:
     path.write_text(json.dumps(document), encoding="utf-8", newline="\n")
     return path
@@ -82,9 +90,12 @@ def _write_config(path: Path, document: Any) -> Path:
 # --- settings (AC1, AC2, AC8) ----------------------------------------------------------------------------
 
 
-def test_defaults_are_haiku_text_sonnet_photo_sonnet_retry_and_codex_unset() -> None:
+def test_defaults_are_haiku_text_sonnet_photo_sonnet_retry_and_codex_gpt_6_1_sol() -> None:
     assert DEFAULT_SETTINGS.claude == ProviderSettings("haiku", None, "sonnet", "sonnet")
-    assert DEFAULT_SETTINGS.codex == ProviderSettings(None, None, None, None)
+    # v2.5: default provider is codex (user decision 2026-10-21); its models are the Sonnet-class `gpt-6.1-sol`
+    # for text and photos, no retry model.
+    assert DEFAULT_SETTINGS.provider is CODEX
+    assert DEFAULT_SETTINGS.codex == ProviderSettings("gpt-6.1-sol", None, "gpt-6.1-sol", None)
 
 
 def test_empty_file_gives_the_defaults_and_a_v2_file_takes_defaults_for_the_new_keys(tmp_path: Path) -> None:
@@ -94,7 +105,7 @@ def test_empty_file_gives_the_defaults_and_a_v2_file_takes_defaults_for_the_new_
     # D5: an explicit `model` does not change the photo or retry default.
     opus = load_llm_settings(_write_config(tmp_path / "c.json", {"claude": {"model": "opus"}}))
     assert opus is not None and opus.claude == ProviderSettings("opus", None, "sonnet", "sonnet")
-    assert opus.codex == ProviderSettings(None, None, None, None)
+    assert opus.codex == ProviderSettings("gpt-6.1-sol", None, "gpt-6.1-sol", None)  # v2.5 Codex defaults
 
 
 def test_new_keys_can_be_set_or_null(tmp_path: Path) -> None:
@@ -185,7 +196,8 @@ def test_codex_uses_m_per_message_kind_and_none_omits_it(tmp_path: Path) -> None
     provider.call(_request(PHOTO), CODEX)
     assert [_model(call.argv, "-m") for call in runner.calls] == ["gpt-text", "gpt-photo"]
     plain = FakeRunner(codex_ok())
-    provider, _logs, _made = _provider(plain, tmp_path / "plain")
+    unset = _settings(codex=ProviderSettings(None, None))  # v2.5: the default Codex model is no longer None
+    provider, _logs, _made = _provider(plain, tmp_path / "plain", settings=unset)
     provider.call(_request(PHOTO), CODEX)
     assert "-m" not in plain.calls[0].argv
 
@@ -232,7 +244,7 @@ def test_format_failure_is_rerun_once_on_the_retry_model(tmp_path: Path) -> None
         claude_argv(CLAUDE_EXE, "sonnet", schema),
     ]
     assert result.attempts == (
-        LlmAttempt(CLAUDE, "haiku", "bad_output", 0.0, 0, False),
+        LlmAttempt(CLAUDE, "haiku", "bad_output", 0.0, 0, False, reason=FailureReason.OTHER),  # v2.5 reason
         LlmAttempt(CLAUDE, "sonnet", "ok", 0.0, 0, True),
     )
     assert logs == ["llm claude: bad output after 0 s (haiku)", "llm claude: ok after 0 s (sonnet, retry)"]
@@ -328,7 +340,10 @@ def test_codex_without_a_usable_last_json_retries(tmp_path: Path) -> None:
 )
 def test_cli_errors_and_other_outcomes_are_never_retried(tmp_path: Path, response: ProcessResult) -> None:
     runner = FakeRunner(response, claude_ok())
-    provider, logs, _made = _provider(runner, tmp_path)
+    # v2.5: a usage limit goes to the other provider by default (`fallback_on_usage_limit`); off here, so this test
+    # still pins that no CLI error is retried on the same provider.
+    settings = _settings(fallback_on_usage_limit=False)
+    provider, logs, _made = _provider(runner, tmp_path, settings=settings)
     result = provider.call(_request(), CLAUDE)
     assert result.outcome != "ok" and result.retried is False and len(runner.calls) == 1
     assert len(logs) == 1
@@ -355,7 +370,7 @@ def test_a_failed_first_run_goes_to_the_fallback_without_a_retry(tmp_path: Path,
     provider, logs, _made = _provider(runner, tmp_path, settings=_settings(fallback_provider=CODEX))
     result = provider.call(_request(), CLAUDE)
     assert (result.provider, result.used_fallback, result.retried, len(runner.calls)) == (CODEX, True, False, 2)
-    assert logs[-1] == "llm codex: ok after 0 s (default model)"
+    assert logs[-1] == "llm codex: ok after 0 s (gpt-6.1-sol)"  # v2.5 Codex default model
 
 
 def test_the_fallback_provider_follows_a_failed_retry_and_runs_at_most_four_times(tmp_path: Path) -> None:
@@ -383,7 +398,7 @@ def test_a_timeout_on_the_retry_goes_to_the_fallback(tmp_path: Path) -> None:
         "llm claude: bad output after 0 s (haiku)",
         "llm claude: timeout after 0 s (sonnet, retry)",
         "llm claude: timeout after 0 s (sonnet, retry); trying fallback codex",
-        "llm codex: ok after 0 s (default model)",
+        "llm codex: ok after 0 s (gpt-6.1-sol)",  # v2.5 Codex default model
     ]
 
 
@@ -490,9 +505,9 @@ def test_bot_two_format_failures_write_nothing_and_say_so(
     before = bot._tables(home)
     runner = FakeRunner(claude_text("x"), claude_text("y"))
     replies, _err, _fake = _real_session(monkeypatch, capsys, runner, tmp_path, bot.text(1, "점심"))
-    assert replies == [PROVIDER_FAILED_TEXT]
+    assert replies == [f"{PROVIDER_FAILED_TEXT}\n{retry_line('7f3a')}"]  # v2.5: the one-tap retry
     assert bot._tables(home) == before
-    assert not (home / "config" / "telegram_llm_state.json").exists()
+    assert [proposal.kind for proposal in _proposals(home)] == [ProposalKind.RETRY]
     entry = bot._history(home)[0]
     assert (entry["provider_result"], entry["retried"], len(entry["attempts"])) == ("bad_output", True, 2)
 
@@ -523,9 +538,11 @@ def test_bot_photo_failing_twice_without_a_clear_caption_offers_nothing(
     bot._llm_config(home, {"keep_photos": False, "claude": {"photo_model": "opus"}})
     runner = FakeRunner(claude_text("x"), claude_text("y"))
     replies, _err, _fake = _real_session(monkeypatch, capsys, runner, tmp_path, bot.photo(1))
-    assert replies == ['사진을 해석하지 못했습니다. 사진에 "메뉴" 또는 "먹음"이라고 적어 다시 보내 주세요.']
+    assert replies == [
+        '사진을 해석하지 못했습니다. 사진에 "메뉴" 또는 "먹음"이라고 적어 다시 보내 주세요.\n' + retry_line("7f3a")
+    ]
     assert [_model(call.argv) for call in runner.calls] == ["opus", "sonnet"]
-    assert not (home / "config" / "telegram_llm_state.json").exists()
+    assert [proposal.kind for proposal in _proposals(home)] == [ProposalKind.RETRY]  # no meal is offered
 
 
 def test_a_two_call_message_records_only_the_last_call(
@@ -577,8 +594,8 @@ DEFAULT_LINE = (
     [
         ({}, DEFAULT_LINE),
         (
-            {"provider": "codex"},
-            _llm_line("codex", "기본", "기본", "없음", "없음", 90),
+            {"provider": "codex"},  # v2.5 Codex default models
+            _llm_line("codex", "gpt-6.1-sol", "gpt-6.1-sol", "없음", "없음", 90),
         ),
         (
             {"claude": {"model": "sonnet"}},
@@ -637,7 +654,8 @@ def test_llm_with_an_override_describes_the_active_provider_and_the_other_lines_
     )
     assert replies[0] == "다음 메시지부터 codex(OpenAI)로 보냅니다. 메시지와 사진이 OpenAI로 전송됩니다."
     assert replies[1] == (
-        "LLM: codex · 글 gpt-5.5 · 사진 gpt-5.5 · 형식 실패 시 재시도: 없음 · 대체 제공자: 없음 · 시간 상한 90초\n"
+        # v2.5: `photo_model` keeps its own default (gpt-6.1-sol) when only `model` is set, as for Claude.
+        "LLM: codex · 글 gpt-5.5 · 사진 gpt-6.1-sol · 형식 실패 시 재시도: 없음 · 대체 제공자: 없음 · 시간 상한 90초\n"
         "(채팅에서 바꿈, 설정 파일: claude)"
     )
     assert replies[2] == "설정 파일의 제공자로 되돌렸습니다: claude(Anthropic)."
@@ -647,10 +665,12 @@ def test_llm_with_an_override_describes_the_active_provider_and_the_other_lines_
 # --- history keys and rendering (AC7) --------------------------------------------------------------------------
 
 
-def test_history_key_shapes_are_16_18_and_20() -> None:
+def test_history_key_shapes_are_16_18_20_and_22() -> None:
     assert len(HISTORY_KEYS_V1) == 16
     assert (*HISTORY_KEYS_V1, "retried", "attempts") == HISTORY_KEYS_V21 and len(HISTORY_KEYS_V21) == 18
-    assert (*HISTORY_KEYS_V21, "web_searches", "recheck") == HISTORY_KEYS and len(HISTORY_KEYS) == 20
+    assert (*HISTORY_KEYS_V21, "web_searches", "recheck") == HISTORY_KEYS_V22 and len(HISTORY_KEYS_V22) == 20
+    # v2.5 adds the failure reason and the retry token at the end.
+    assert (*HISTORY_KEYS_V22, "failure_reason", "retry_of") == HISTORY_KEYS and len(HISTORY_KEYS) == 22
     entry = history_entry(update_id=1, at="2026-10-13T12:00:00+09:00", chat_id=1, kind="plain")
     assert list(entry) == list(HISTORY_KEYS)
     assert (entry["retried"], entry["attempts"], entry["web_searches"], entry["recheck"]) == (None,) * 4
@@ -810,10 +830,10 @@ def test_the_isolation_argv_is_unchanged_by_the_retry(tmp_path: Path) -> None:
 
 
 def test_request_type_is_reused_unchanged() -> None:
-    # v2.2 added two optional fields at the end (web_search, pin) and v2.4 one more (extra_photos, for albums); the
-    # four original ones are unchanged.
+    # v2.2 added two optional fields at the end (web_search, pin), v2.4 one more (extra_photos, for albums) and v2.5
+    # one more (strong_model, for open-proposal edits); the four original ones are unchanged.
     assert list(LlmRequest.__dataclass_fields__) == [
-        *("prompt", "schema", "photo", "validate", "web_search", "pin", "extra_photos")
+        *("prompt", "schema", "photo", "validate", "web_search", "pin", "extra_photos", "strong_model")
     ]
     request = LlmRequest("p", SchemaName.ANSWER, None, lambda document: document)
     assert (request.web_search, request.pin, request.extra_photos) == (False, None, ())

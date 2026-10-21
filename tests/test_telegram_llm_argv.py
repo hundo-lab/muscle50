@@ -241,13 +241,15 @@ def test_codex_call_puts_only_the_photo_in_its_cwd_and_the_prompt_on_stdin(tmp_p
     runner = FakeRunner(codex_ok())
     provider, _logs, made = _provider(runner, tmp_path)
     result = provider.call(_request(PHOTO), ProviderName.CODEX)
-    assert result.outcome == "ok" and result.model is None
+    # v2.5 (user decision 2026-10-21): the default Codex model is gpt-6.1-sol, so the default argv carries `-m`.
+    assert result.outcome == "ok" and result.model == "gpt-6.1-sol"
     call = runner.calls[0]
     work, io = made[0] / "work", made[0] / "io"
     assert call.cwd == work and call.cwd_files == ["photo.jpg"] and call.io_files == ["schema.json"]
+    assert call.argv[-5:-3] == ("-m", "gpt-6.1-sol")
     assert call.argv == codex_argv(
         CODEX_EXE,
-        None,
+        "gpt-6.1-sol",
         schema_path=io / "schema.json",
         output_path=io / "last.json",
         work_dir=work,
