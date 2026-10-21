@@ -16,8 +16,10 @@ import test_telegram_llm_bot as bot
 from test_telegram_llm_reliability_bot import SYNC_REPLY, SYNC_REQUEST
 
 import muscle50.cli as cli
+from muscle50.domain.telegram_commands import help_text
 from muscle50.domain.telegram_llm import parse_llm_command
-from muscle50.domain.telegram_llm_prompt import SYNC_HINT_TEXT
+from muscle50.domain.telegram_llm_context import command_lines, known_commands
+from muscle50.domain.telegram_llm_prompt import SYNC_HINT_TEXT, TASKS, PromptTask
 from muscle50.domain.telegram_sync import SYNC_CONFIRM_INVALID_TEXT
 from muscle50.infrastructure.telegram.cli_runner import InProcessCliRunner
 
@@ -87,6 +89,25 @@ def test_an_unreadable_gap_keeps_the_plain_hint(
     replies, err, _fake = bot._session(monkeypatch, capsys, bot.FakeProvider(SYNC_REQUEST), bot.text(1, "동기화 해줘"))
     assert replies == [SYNC_REPLY]
     assert "chat 111: sync gap not read (RuntimeError); sent the plain sync hint" in err
+
+
+def test_the_answer_rule_points_to_sync_for_days_daily_does_not_fetch() -> None:
+    # v2.5's coverage rule named only /daily; with /sync (Daily Catch-up v1) the coach names /sync for days the next
+    # /daily leaves out (behind a synced day, or more than 7 days back) and never writes the day count (number guard).
+    rule = TASKS[PromptTask.ANSWER]
+    assert "/daily 로 동기화하라고 안내합니다" in rule  # the v2.4/v2.5 pin still holds
+    assert "/daily 는 마지막으로 동기화된 날의 다음 날부터, 오늘보다 7일 앞까지만 받습니다" in rule
+    assert "/daily 대신 /sync <시작> <끝>(적힌 날짜를 MM-DD로)을 안내하고, 일 수는 쓰지 않습니다" in rule
+
+
+def test_sync_is_a_known_command_and_its_tap_line_is_the_bare_command() -> None:
+    # The help line makes /sync a known command (after /daily, so the first three stay /today, /status, /day). An answer
+    # naming `/sync 10-09 10-13` gets a bare `/sync` tap line, which sends the usage reply (dates stay in the answer).
+    known = known_commands(help_text(True))
+    assert known[:3] == ("/today", "/status", "/day")
+    assert known.index("/sync") == known.index("/daily") + 1
+    answer = "10-09~10-13은 동기화되지 않았습니다. /sync 10-09 10-13 으로 받고, 오늘은 /daily 로 동기화하세요."
+    assert command_lines(answer, known) == ("/sync", "/daily")
 
 
 def test_sync_commands_are_not_llm_commands() -> None:
