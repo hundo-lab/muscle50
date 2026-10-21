@@ -135,8 +135,8 @@ def proposal_reply(view: MealProposalView) -> ReplyText:
     for number, item in enumerate(view.items, start=1):
         lines.extend(_item_lines(number, item, indent=""))
     lines.extend(view.dropped)
-    if view.searches:
-        lines.append(web_search_line(view.searches))
+    if view.searches or view.searched_by:
+        lines.append(web_search_line(view.searches, view.searched_by))
     if view.superseded:
         lines.append(superseded_line(view.superseded))
     token = view.token
@@ -169,8 +169,8 @@ def multi_proposal_reply(view: MultiMealProposalView) -> ReplyText:
             lines.append(MEAL_NAMES[block.meal_type])
         for number, item in enumerate(block.items, start=1):
             lines.extend(_item_lines(number, item, indent="  "))
-    if view.searches:
-        lines.append(web_search_line(view.searches))
+    if view.searches or view.searched_by:
+        lines.append(web_search_line(view.searches, view.searched_by))
     if view.superseded:
         lines.append(superseded_line(view.superseded))
     token = view.token
@@ -416,7 +416,8 @@ def _attempt_chain(entry: dict[str, Any]) -> str | None:
         if index == 0:
             parts.append(label)
         else:
-            parts.append(f"{'retry' if attempt['retry'] else 'fallback'} {label}")
+            step = "lookup" if attempt.get("lookup") else "retry" if attempt["retry"] else "fallback"
+            parts.append(f"{step} {label}")
     return " -> ".join(parts)
 
 

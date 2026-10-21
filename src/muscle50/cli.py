@@ -1823,6 +1823,7 @@ def _telegram_llm(
         local_timezone=lambda day: _local_timezone(day),
         new_token=lambda: _new_proposal_token(),
         log=log,
+        claude_available=executables[ProviderName.CLAUDE].path is not None,
     )
     handler.purge_expired()  # v2.5: retry messages that expired while the bot was stopped
     return handler
@@ -1831,7 +1832,10 @@ def _telegram_llm(
 def _web_search_text(settings: LlmSettings) -> str:
     if not settings.web_search:
         return "web search off"
-    return f"web search on (max {settings.web_search_max}, {settings.web_search_timeout_seconds} s)"
+    limits = f"(max {settings.web_search_max}, {settings.web_search_timeout_seconds} s)"
+    if settings.provider is ProviderName.CODEX:  # v2.5: Codex never searches; Claude looks up when an item wants it
+        return f"web search via claude when needed {limits}"
+    return f"web search on {limits}"
 
 
 def _telegram_history(last: int | None, day_text: str | None, *, as_json: bool) -> int:

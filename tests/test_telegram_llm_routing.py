@@ -594,8 +594,8 @@ DEFAULT_LINE = (
     [
         ({}, DEFAULT_LINE),
         (
-            {"provider": "codex"},  # v2.5 Codex default models
-            _llm_line("codex", "gpt-6.1-sol", "gpt-6.1-sol", "없음", "없음", 90),
+            {"provider": "codex"},  # v2.5 Codex default models; Claude looks up on the web when needed
+            _llm_line("codex", "gpt-6.1-sol", "gpt-6.1-sol", "없음", "없음", 90) + " · 웹 검색: Claude(필요할 때만)",
         ),
         (
             {"claude": {"model": "sonnet"}},
@@ -655,7 +655,9 @@ def test_llm_with_an_override_describes_the_active_provider_and_the_other_lines_
     assert replies[0] == "다음 메시지부터 codex(OpenAI)로 보냅니다. 메시지와 사진이 OpenAI로 전송됩니다."
     assert replies[1] == (
         # v2.5: `photo_model` keeps its own default (gpt-6.1-sol) when only `model` is set, as for Claude.
-        "LLM: codex · 글 gpt-5.5 · 사진 gpt-6.1-sol · 형식 실패 시 재시도: 없음 · 대체 제공자: 없음 · 시간 상한 90초\n"
+        # v2.5: under Codex the line ends with the Claude web lookup.
+        "LLM: codex · 글 gpt-5.5 · 사진 gpt-6.1-sol · 형식 실패 시 재시도: 없음 · 대체 제공자: 없음 · 시간 상한 90초"
+        " · 웹 검색: Claude(필요할 때만)\n"
         "(채팅에서 바꿈, 설정 파일: claude)"
     )
     assert replies[2] == "설정 파일의 제공자로 되돌렸습니다: claude(Anthropic)."

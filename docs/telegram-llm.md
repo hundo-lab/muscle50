@@ -80,8 +80,9 @@ byte 단위로 같다.** 모든 key는 선택이고 `{}`이면 아래 기본값�
   Claude에게 웹 검색을 허락하는 설정. 아래 "식사 추정·여러 끼니·웹 검색 (v2.2)"를 본다. 잘못된 형식·범위는 key 이름만
   말하고 값은 쓰지 않으며, 이 key가 없는 v2.1 파일은 기본값으로 읽는다(그래서 **재시작 뒤 검색이 켜진다**).
 - 설정을 바꾸면 `telegram run`을 다시 시작한다. 시작할 때 콘솔에 한 줄이 늘어난다:
-  `telegram llm: on, provider codex, fallback none, usage-limit fallback on, timeout 90 s, web search on (max 3, 150 s); claude (C:\...\claude.exe); codex (C:\...\codex.exe)`
-  (검색을 끄면 `web search off`, v2.5에서 `usage-limit fallback on|off`가 더해졌다). `web search on`은 설정 값이고, Codex 호출은 검색하지 않는다(아래 v2.5 절).
+  `telegram llm: on, provider codex, fallback none, usage-limit fallback on, timeout 90 s, web search via claude when needed (max 3, 150 s); claude (C:\...\claude.exe); codex (C:\...\codex.exe)`
+  (검색을 끄면 `web search off`, v2.5에서 `usage-limit fallback on|off`가 더해졌다). 제공자가 Claude면 v2.4처럼 `web search on (max 3, 150 s)`이다.
+  Codex 호출은 검색하지 않고, 검색이 필요한 메시지만 Claude가 한 번 더 읽는다(아래 v2.5 "웹 검색은 Claude로만").
 
 ### 모델 선택과 재시도
 
@@ -112,7 +113,8 @@ byte 단위로 같다.** 모든 key는 선택이고 `{}`이면 아래 기본값�
   Codex 재시도에서도 사진은 새 `work\` 폴더에 다시 쓴다. 격리 argv는 바뀌지 않는다.
 - `/llm`의 첫 줄은 실제로 쓰이는 모델을 보여 준다. `"provider": "claude"`이면
   `LLM: claude · 글 haiku · 사진 sonnet · 형식 실패 시 재시도: sonnet (글만) · 대체 제공자: 없음 · 시간 상한 90초`, v2.5 기본값(`{}`)이면
-  `LLM: codex · 글 gpt-6.1-sol · 사진 gpt-6.1-sol · 형식 실패 시 재시도: 없음 · 대체 제공자: 없음 · 시간 상한 90초`.
+  `LLM: codex · 글 gpt-6.1-sol · 사진 gpt-6.1-sol · 형식 실패 시 재시도: 없음 · 대체 제공자: 없음 · 시간 상한 90초 · 웹 검색: Claude(필요할 때만)`
+  (마지막 꼬리는 제공자가 Codex이고 `web_search`가 켜져 있을 때만).
   사진 모델이 재시도 모델과 같으면 사진은 재시도하지 않으므로 `(글만)`이 붙는다. 대체 제공자의 모델은 보여 주지 않는다.
 - 콘솔(ASCII, 메시지 원문 없음): 재시도 실행은 괄호 안에 `, retry`가 붙는다.
 
@@ -887,7 +889,7 @@ bot:   인터넷 연결이 끊긴 것 같아 해석하지 못했습니다. 연�
 
 ### 기존 끼니에 더하기 (`join_existing`, `/new_`, `/add_`)
 
-해석 schema의 item에 `join_existing`(boolean, 필수, item key 15개)이 생겼다. 사용자가 "같이", "하나에", "기존 ~에 추가", "~에 더해"라고 하면 그 끼니의
+해석 schema의 item에 `join_existing`(boolean, 필수)이 생겼다(아래 `lookup_wanted`까지 item key 16개). 사용자가 "같이", "하나에", "기존 ~에 추가", "~에 더해"라고 하면 그 끼니의
 item마다 true다.
 
 ```text
@@ -919,6 +921,36 @@ item마다 true다.
 - **spec 범위 6의 "앞선 수정을 되돌리면 형식 실패로 보고 한 번 더" 검사는 하지 않는다**(D5 R0, 사용자 결정 2026-10-21). outline이 같은지 비교하는 방법은
   실제 사례(두 번째 수정이 다른 item도 바꿈)를 잡지 못하고, 이름으로 맞추는 방법은 거짓 양성마다 Sonnet 실행을 더 쓴다. 대신 위의 모델과 요청 사슬로
   원인을 줄이고, 고친 제안 전체가 `/ok` 전에 보인다.
+
+### 웹 검색은 Claude로만 (사용자 결정 W3, 2026-10-21)
+
+Codex는 격리 argv(`-c web_search="disabled"`, `--disable code_mode_host`)에서 검색할 수 없다(아래 Known issues). 그래서 Codex 격리는 main 그대로 두고,
+검색이 필요한 메시지만 Claude가 한 번 더 읽는다.
+
+- 해석 schema의 item에 `lookup_wanted`(boolean, 필수)가 생겼다. 상표·식당·체인·포장 제품처럼 웹에서 찾은 값이 추정을 크게 바꿀 item만 true다
+  (`맥도날드 빅맥 세트`, `스타벅스 카페라떼`). 밥, 김치, 계란말이 같은 집밥은 false다.
+- Codex가 먼저 **검색 없이** 읽는다. 답이 `meal_log`이고 item 하나라도 `lookup_wanted`이고 `web_search`가 켜져 있고 Claude 실행 파일이 있으면, 같은
+  메시지(사진이면 같은 사진, 앨범이면 같은 장들)를 Claude에 **한 번** 보낸다: 웹 검색 규칙, 검색 최대 3회, 150 s, 모델은 Claude의 글/사진 모델
+  (기본 haiku/sonnet), 재시도·대체 없음. 그 답이 Codex 답을 **통째로** 바꾼다(item, 값, 출처, 근거 문자열의 `(claude haiku)`). 숫자 재확인은 그 뒤의
+  답에 대해 돌고, 다시 묻기도 웹 규칙으로 Claude에 간다.
+- Claude 확인이 실패하면 Codex 답을 그대로 쓰고 본문 끝에 `(웹 검색은 하지 못했습니다: 사용 한도)`처럼 이유 이름을 붙인다. 세 번째 호출은 없다.
+  사용 한도 대체 안내 줄은 붙지 않는다(답은 Codex의 것이다).
+- 질문, 메뉴 제안, 고치기, 그 밖의 intent는 확인하지 않는다. 제공자가 Claude면 v2.4 그대로(처음부터 검색 규칙, `lookup_wanted`는 무시).
+  Claude가 사용 한도나 실패로 끝나 Codex가 대신 답한 경우도 확인하지 않는다(Claude를 바로 다시 부르지 않는다). 새 설정 key는 없다: `"web_search": false`면 확인도 없다.
+- 보이는 곳: 제안의 `웹 검색 2회 (Claude)`(확인한 메시지는 0회여도 나온다), 콘솔 `chat 111: llm lookup on claude (haiku)`와 실패 때
+  `chat 111: llm lookup failed (usage_limit); kept the codex answer`, `telegram history`의 사슬
+  `codex/gpt-6.1-sol ok -> lookup claude/haiku ok web=2`, 기록 줄의 시도(`attempts`)에 `"lookup": true`(그 시도만 key 5개), `/llm` 꼬리, 시작 줄.
+  기록 줄의 `provider`/`model`/`web_searches`는 답을 낸 쪽(확인이 성공하면 Claude)이다.
+
+```text
+사용자: 점심 맥도날드 빅맥 세트 먹었어
+bot:   이렇게 기록할까요? (점심, 10-21)
+       1. 일반식 (메모: 맥도날드 빅맥 세트)
+          추정: kcal 1050~1250, 단백질 30~36 g (estimated)
+          출처: 맥도날드
+       웹 검색 2회 (Claude)
+       기록: /ok_5c1d   일반식만 기록(값 없이): /plain_5c1d   취소: /no_5c1d
+```
 
 ### 코치가 bot 명령과 동기화 상태를 안다
 
@@ -952,7 +984,8 @@ item마다 true다.
 | 로그인 없음 | Claude: exit 1, `result` 오류 `Not logged in · Please run /login` → `login`. Codex: `401 Unauthorized … Missing bearer` → `login` |
 | 연결 안 됨(`HTTPS_PROXY=http://127.0.0.1:9`) | Claude: 상태 없는 `system/api_retry`만 반복하다 시간 초과 → `network`. Codex: `workspace routing discovery failed`, exit 1 → `network` |
 | Codex stderr | 매 실행 프롬프트를 그대로 다시 찍는다 → 분류 전에 지우고 `error` 줄만 본다 |
-| Codex 웹 검색(W3) | **켜지 못함**(아래 Known issues) |
+| Codex 웹 검색(W3) | **켜지 못함**(아래 Known issues). 사용자 결정으로 Claude 확인으로 바꿈 |
+| `lookup_wanted`(16 key schema) | Codex(`gpt-6.1-sol`): `점심에 맥도날드 빅맥 세트 먹었어` → true, `점심에 밥 한공기 계란말이 먹었어` → 두 item 모두 false. Claude(haiku)도 같은 schema로 `ok`, 빅맥 true |
 
 사용 한도는 일부러 만들 수 없어 실제 문구로 확인하지 못했다(CLI가 알려진 문구를 쓴다고 가정).
 
@@ -960,7 +993,7 @@ item마다 true다.
 
 - 바뀜: 기본 제공자와 Codex 모델(`{}` 설정), 실패 답장과 사진 받기 실패 답장의 `/retry_` 줄, `PHOTO_FAILED_TEXT` 뒤의 줄, 사용 한도 안내 줄, 기존 끼니에
   더하기·`/new_`·`/add_` 제안과 답장, 질문 답 프롬프트(`[bot 명령]`, `<동기화 상태>`, 바뀐 규칙)와 `bot` 주제 답, 해석 프롬프트·schema, 열린 제안 고치기의
-  모델과 근거 문자열(`(claude sonnet)`), 상태 파일의 새 key, 기록의 두 key, `telegram history`·`/history`의 새 줄 꼬리, 시작 줄과 실패 콘솔 줄, LLM이 켜졌을 때
+  모델과 근거 문자열(`(claude sonnet)`), `lookup_wanted`와 Claude 확인(`웹 검색 N회 (Claude)`, 실패 안내 줄, 시도의 `lookup`, `/llm` 꼬리), 상태 파일의 새 key, 기록의 두 key, `telegram history`·`/history`의 새 줄 꼬리, 시작 줄과 실패 콘솔 줄, LLM이 켜졌을 때
   손으로 친 `/new_x`·`/add_x`·`/retry_x`(전에는 v1의 모르는 명령 답, 이제 고정 거절 문구).
 - 바뀌지 않음: 모든 `muscle50` CLI 명령의 출력(`telegram history`의 옛 줄 포함), `telegram_llm.json`이 없을 때의 bot(답장·DB·상태 파일·`getUpdates`), 손으로 친
   `/log /void /day /status /show /help /llm` 답, `/llm` 첫 줄의 모양, 새 규칙 외의 해석·메뉴 제안 프롬프트, Claude argv와 `-m` 외의 Codex argv.
@@ -997,6 +1030,7 @@ muscle50 nutrition food fact add chicken-breast --per 1 pack --kcal 165 --protei
   제공자를 켜면 두 회사 모두로 갈 수 있다.
   - v2.2부터 **글과 사진 해석 호출마다** 카탈로그 목록(음식 ID, 이름, 별칭 최대 3개, 등록 단위; 최대 120개·6000자)이
     같이 간다. 질문 답과 메뉴 제안 호출에는 가지 않는다.
+  - v2.5 기본(Codex)에서는 `lookup_wanted`인 메시지만 Claude 확인으로 Anthropic에도 간다(메시지, 사진, 같은 데이터 블록).
   - 웹 검색이 켜져 있으면 Claude가 만든 **검색어**(상표·식당·제품 이름)가 Anthropic의 검색으로 간다. 사진에서 읽은
     제품명·식당 이름도 같다(사진 자체는 이미 Anthropic으로 간다). 검색어와 결과는 muscle50이 저장하거나 기록하지 않는다.
 - v2.3부터 글 해석 호출에는 최근에 기록한 식사 둘, 열린 제안, 최근 메뉴의 이름·메모·값도 같이 간다(위 "전송되는 데이터 (v2.3)").
@@ -1138,6 +1172,13 @@ muscle50 nutrition food fact add chicken-breast --per 1 pack --kcal 165 --protei
     `apply_patch` 쓰기는 거절됨, `file://` 열기는 실패). 이것은 격리 argv를 바꾸는 일이라 사용자 결정이 필요하다. 그때까지 Codex 호출은 모두
     `web_search="disabled"`이고 `_web_search_on()`도 그대로다(기본 설정에서는 검색 없음, `source`는 비고 `웹 검색 N회`도 없다). 켜게 되면 검색 횟수는
     `--json` 이벤트의 `item.completed`/`type: web_search`/`action.type: "search"`를 id마다 한 번 센다(`open_page`는 검색이 아니다).
+    사용자 결정("검색은 Claude로만")으로 Codex는 그대로 두고, 필요한 메시지만 Claude가 검색한다(위 "웹 검색은 Claude로만").
+  - **Claude 확인은 호출이 둘이다.** 확인하는 메시지는 Codex 답(약 12~17 s) 뒤에 Claude 검색 실행(최대 150 s)을 기다려서 늦다. Claude 구독 사용량도
+    그만큼 생기고, 메시지(사진 포함)와 검색어가 OpenAI와 Anthropic **둘 다**로 간다. Claude 확인의 실패는 Codex 답으로 덮는다(안내 줄만).
+  - **확인할지는 Codex의 `lookup_wanted`가 정한다.** 표시를 놓치면 검색 없이 Codex 추정만 남고(`출처` 없음), 집밥에 잘못 켜면 쓸데없이 Claude를
+    부른다. live 확인은 위 두 문장뿐이다(누락률 미확인). Claude가 확인한 답의 `lookup_wanted`는 쓰지 않는다(한 번만 확인).
+  - **Codex 사용 한도로 Claude가 대신 답하면 검색하지 않는다.** `fallback_provider`가 없으면 그 대체 실행은 v2.4의 사용 한도 대체 그대로(검색 규칙 없음)라서 상표 음식도 `출처` 없이
+    추정만 나온다. 반대로 `"provider": "claude"`에서 Claude가 막혀 Codex가 답하면 확인을 건너뛴다(위).
   - **모델 이름은 바뀐다.** `gpt-6.1-sol`은 2026-10-21 기준 Codex의 Sonnet급 모델이다. 없어지면 Codex 호출이 실패하므로 `telegram_llm.json`의
     `codex.model`/`photo_model`로 바꾼다. `{"codex": {"model": "x"}}`만 적으면 사진은 여전히 `gpt-6.1-sol`이다.
   - **실패 이유는 CLI 문구에 기댄다.** 문구가 바뀌면 `other`(v2.4 문구 + 다시 보내기)로 떨어진다. 사용 한도는 live로 만들 수 없어 알려진 문구로만

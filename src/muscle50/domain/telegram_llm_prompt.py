@@ -103,6 +103,9 @@ TASKS = {
             "intent=meal_edit. 아니면 null.",
             "- <열린 제안>에 '앞선 수정 요청'이 있으면 그 요청(양, 추가, 삭제)을 모두 그대로 둔 채 이번 수정을 "
             "더합니다. 앞선 수정을 되돌리지 않습니다.",
+            "- lookup_wanted: 상표, 식당, 체인점, 포장 제품처럼 이름이 정해진 음식이라 웹에서 찾으면 영양값이 "
+            "크게 달라질 item만 true('맥도날드 빅맥 세트', '스타벅스 카페라떼'). 밥, 김치, 계란말이 같은 흔한 "
+            "집밥·일반 음식은 false.",
             "- join_existing: meal_log에서 사용자가 이미 기록한 같은 끼니에 더해 달라고 하면('같이', '하나에', "
             "'기존 ~에 추가', '~에 더해') 그 끼니의 item마다 true, 아니면 false.",
             "- question_topics: question이면 training, nutrition, body, bot(이 bot의 명령이나 쓰는 법을 묻는 말: "
@@ -268,8 +271,18 @@ def unregistered_unit_hint(food_id: str, unit: str) -> str:
     return f"등록: muscle50 nutrition food fact add {food_id} --per 1 {unit} ... --new-unit"
 
 
-def web_search_line(count: int) -> str:
-    return f"웹 검색 {count}회"
+def web_search_line(count: int, by: str | None = None) -> str:
+    """`웹 검색 2회`; v2.5: `웹 검색 2회 (Claude)` when a Claude lookup answered a message Codex read first."""
+    return f"웹 검색 {count}회" + (f" ({by})" if by else "")
+
+
+LOOKUP_LLM_SUFFIX = " · 웹 검색: Claude(필요할 때만)"
+"""v2.5: the end of the `/llm` first line when Codex answers and the web search setting is on."""
+
+
+def lookup_failed_line(reason_name: str) -> str:
+    """v2.5: the Claude lookup failed, so the proposal is Codex's own reading (no further call)."""
+    return f"(웹 검색은 하지 못했습니다: {reason_name})"
 
 
 def multi_proposal_head(day_text: str, meals: int, label: str | None = None) -> str:

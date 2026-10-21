@@ -49,7 +49,9 @@ from muscle50.application.telegram_bot import (
     TelegramUnavailableError,
 )
 from muscle50.domain.llm_failure import (
+    REASON_NAMES,
     RETRY_EXPIRED_TEXT,
+    RETRY_TTL_S,
     RETRY_UNKNOWN_TEXT,
     RETRY_USED_TEXT,
     FailureReason,
@@ -197,6 +199,7 @@ from muscle50.domain.telegram_llm_prompt import (
     FORGET_TEXT,
     HISTORY_USAGE_TEXT,
     LLM_USAGE_TEXT,
+    LOOKUP_LLM_SUFFIX,
     MEAL_NAMES,
     MEMORY_EMPTY_TEXT,
     MEMORY_HEAD_TEXT,
@@ -233,6 +236,7 @@ from muscle50.domain.telegram_llm_prompt import (
     join_none_text,
     join_target_gone_text,
     llm_status_text,
+    lookup_failed_line,
     menu_expired_text,
     provider_default_text,
     provider_switched_text,
@@ -379,6 +383,8 @@ class MealProposalView:
     """v2.5: why a requested join does not happen (no meal of that type, or several)."""
     alt_action: str = ""
     """v2.5: `new` (with a join) or `add` (`/add_` adds to the one recorded meal of that type instead)."""
+    searched_by: str | None = None
+    """v2.5: `Claude` when a Claude lookup answered after Codex (`웹 검색 N회 (Claude)`, shown even for 0)."""
 
 
 @dataclass(frozen=True)
@@ -413,6 +419,7 @@ class MultiMealProposalView:
     superseded: str | None = None
     new_available: bool = False
     """v2.5: some meal adds to a recorded one, so `/new_` (every meal as a new one) is offered."""
+    searched_by: str | None = None
 
 
 @dataclass(frozen=True)
@@ -513,6 +520,10 @@ class _Exchange:
     """The photos after the first of an album message; the numeric re-ask sends the same ones."""
     origin: _Origin | None = None
     """v2.5: the message as it arrived (None for a command such as `/eat_` or `/fix_`)."""
+    looked_up: bool = False
+    """v2.5: a Claude web lookup answered this message after Codex read it (`웹 검색 N회 (Claude)`)."""
+    lookup_note: str | None = None
+    """v2.5: the Claude lookup failed: `(웹 검색은 하지 못했습니다: ...)` is added to the reply."""
 
 
 class TelegramLlmHandler:
@@ -537,6 +548,7 @@ class TelegramLlmHandler:
         local_timezone: Callable[[date], tzinfo],
         new_token: Callable[[], str],
         log: Callable[[str], None],
+        claude_available: bool = False,
     ) -> None:
         self._provider = provider
         self._files = files
@@ -556,6 +568,8 @@ class TelegramLlmHandler:
         self._local_timezone = local_timezone
         self._new_token = new_token
         self._log = log
+        self._claude_available = claude_available
+        """v2.5: Claude's executable was found at start, so a Codex answer may get a Claude web lookup."""
 
     # --- entry ----------------------------------------------------------------------------------------
 
@@ -680,6 +694,8 @@ class TelegramLlmHandler:
             # v2.5: while a meal proposal is open, a text may correct it: the stronger retry model reads it.
             strong_model=photo is None and self._open_meal_proposal(chat_id) is not None,
         )
+        if call.ok:
+            call = self._lookup(chat_id, words, photo, call, exchange)
         exchange.calls.append(call)
         if not call.ok:
             # v2.5: a known reason says what to do (and replaces the caption rule of a photo); `other` keeps v2.4.
@@ -709,6 +725,8 @@ class TelegramLlmHandler:
         if limited is not None and limited.usage_limited is not None and exchange.messages is None:
             note = usage_fallback_note(limited.usage_limited, limited.provider)
             exchange.reply = replace(exchange.reply, body=f"{exchange.reply.body}\n{note}")
+        if exchange.lookup_note is not None and exchange.messages is None:
+            exchange.reply = replace(exchange.reply, body=f"{exchange.reply.body}\n{exchange.lookup_note}")
         if photo is not None:
             partial = album_partial_line(photos_sent, 1 + len(extra_photos))
             if partial is not None:  # fewer photos were read than were sent
@@ -730,6 +748,54 @@ class TelegramLlmHandler:
         self._remember_turn(chat_id, user, exchange)
         messages = exchange.messages if exchange.messages is not None else tuple(self._replies.messages(exchange.reply))
         return LlmReply(messages)
+
+    def _lookup(
+        self, chat_id: int, words: str, photo: bytes | None, codex: LlmCallResult, exchange: _Exchange
+    ) -> LlmCallResult:
+        """v2.5 "search only on Claude": Codex read the message first (it never searches). When an item of its meal log
+        wants a lookup (`lookup_wanted`), the web search setting is on and Claude can run, the same interpret request
+        runs once on Claude with web search (its text or photo model, the v2.2 web rules) and its answer replaces
+        Codex's. A failed lookup keeps Codex's answer with a note. Both runs are one chain in the history. A Codex
+        answer reached by falling back from Claude (a Claude usage limit or failure) is never looked up: Claude
+        already failed this message, and an explicit Claude provider keeps v2.4."""
+        interpretation: Interpretation = codex.document
+        if (
+            codex.provider is not ProviderName.CODEX
+            or codex.used_fallback
+            or codex.usage_limited is not None
+            or not self._settings.web_search
+            or not self._claude_available
+            or interpretation.intent is not Intent.MEAL_LOG
+            or not any(item.lookup_wanted for item in interpretation.items)
+        ):
+            return codex
+        model = self._settings.claude.model_for(photo=photo is not None)
+        self._log(f"chat {chat_id}: llm lookup on claude ({model or 'default model'})")
+        lookup = self._call(
+            chat_id,
+            SchemaName.INTERPRET,
+            PromptTask.INTERPRET,
+            words,
+            photo,
+            exchange.data,
+            parse_interpretation,
+            web_search=True,
+            pin=RunPin(model),  # one run: no format retry and no fallback
+            provider=ProviderName.CLAUDE,
+            extra_photos=exchange.extra_photos,
+        )
+        chain = (*codex.attempts, *(replace(attempt, lookup=True) for attempt in lookup.attempts))
+        if lookup.ok:
+            exchange.looked_up = True
+            return replace(
+                lookup, seconds=codex.seconds + lookup.seconds, used_fallback=codex.used_fallback, attempts=chain
+            )
+        reason = lookup.failure_reason or FailureReason.OTHER
+        self._log(f"chat {chat_id}: llm lookup failed ({reason.value}); kept the codex answer")
+        exchange.lookup_note = lookup_failed_line(REASON_NAMES[reason])
+        # The failed run's answer is thrown away, so are its searches (the proposal must not show them).
+        failed = tuple(replace(attempt, web_searches=None) if attempt.lookup else attempt for attempt in chain)
+        return replace(codex, seconds=codex.seconds + lookup.seconds, attempts=failed)
 
     def _text(self, chat_id: int, words: str, interpretation: Interpretation, exchange: _Exchange) -> None:
         intent = interpretation.intent
@@ -1013,7 +1079,7 @@ class TelegramLlmHandler:
             photo,
             exchange.data,
             parse_interpretation,
-            web_search=self._web_search_on() and first.provider is ProviderName.CLAUDE,
+            web_search=(self._web_search_on() or exchange.looked_up) and first.provider is ProviderName.CLAUDE,
             recheck_note=recheck_note([(entry.index, failure) for entry, failure in failures]),
             pin=RunPin(model),
             provider=first.provider,
@@ -1157,6 +1223,7 @@ class TelegramLlmHandler:
             label,
             cancel,
             any(command.argv_new for command in commands),
+            "Claude" if exchange.looked_up else None,
         )
         exchange.reply = self._replies.multi_proposal(view)
 
@@ -1266,6 +1333,7 @@ class TelegramLlmHandler:
             join,
             join_note,
             alt_action,
+            "Claude" if exchange.looked_up else None,
         )
         exchange.reply = self._replies.proposal(view)
 
@@ -2201,6 +2269,8 @@ class TelegramLlmHandler:
                 self._settings.fallback_provider,
                 self._settings.timeout_seconds,
             )
+            if active is ProviderName.CODEX and self._settings.web_search:
+                first += LOOKUP_LLM_SUFFIX
             if state.provider_override is None:
                 other = "codex" if active is ProviderName.CLAUDE else "claude"
                 second = f"바꾸기: /llm {other} · 설정 파일로 되돌리기: /llm default"
@@ -2458,7 +2528,12 @@ class TelegramLlmHandler:
             token = self._new_token()
         else:
             raise RuntimeError("no free proposal token")
-        lifetime = MENU_PROPOSAL_TTL_S if kind is ProposalKind.MENU else PROPOSAL_TTL_S
+        if kind is ProposalKind.MENU:
+            lifetime = MENU_PROPOSAL_TTL_S
+        elif kind is ProposalKind.RETRY:
+            lifetime = RETRY_TTL_S
+        else:
+            lifetime = PROPOSAL_TTL_S
         proposal = Proposal(token, chat_id, kind, now, now + lifetime, ProposalState.OPEN, **fields)
         self._proposals.save(LlmState(state.provider_override, (*proposals, proposal)))
         return proposal
@@ -2804,6 +2879,7 @@ def _attempts_document(call: LlmCallResult | None) -> list[dict[str, Any]] | Non
         return None
     return [
         {"provider": item.provider.value, "model": item.model, "outcome": item.outcome, "retry": item.retry}
+        | ({"lookup": True} if item.lookup else {})
         for item in call.attempts
     ]
 

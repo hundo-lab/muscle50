@@ -179,6 +179,9 @@ class InterpretItem:
     """The number of the recently shown menu item the user says they ate (the bot checks it)."""
     join_existing: bool = False
     """v2.5: the user asked to add this food to the day's meal of that type that is already recorded ("같이")."""
+    lookup_wanted: bool = False
+    """v2.5: a named brand, restaurant, chain or packaged product whose values a web lookup would change; under Codex
+    such an item sends the message once more to Claude with web search."""
 
 
 @dataclass(frozen=True)
@@ -387,7 +390,7 @@ def _menu_ref(value: Any, where: str) -> int | None:
 
 def _item(value: Any, index: int) -> InterpretItem:
     where = f"items[{index}]"
-    entry = _object(value, where, 15)
+    entry = _object(value, where, 16)
     quantity_estimated = entry["quantity_estimated"]
     if type(quantity_estimated) is not bool:
         raise LlmOutputError(f"{where}.quantity_estimated must be a boolean")
@@ -397,6 +400,9 @@ def _item(value: Any, index: int) -> InterpretItem:
     join_existing = entry["join_existing"]
     if type(join_existing) is not bool:
         raise LlmOutputError(f"{where}.join_existing must be a boolean")
+    lookup_wanted = entry["lookup_wanted"]
+    if type(lookup_wanted) is not bool:
+        raise LlmOutputError(f"{where}.lookup_wanted must be a boolean")
     return InterpretItem(
         kind=_enum(ItemKind, entry["kind"], f"{where}.kind"),
         food_text=_text(entry["food_text"], f"{where}.food_text", FOOD_TEXT_MAX),
@@ -415,6 +421,7 @@ def _item(value: Any, index: int) -> InterpretItem:
         portions=_portions(entry["portions"], f"{where}.portions"),
         menu_ref=_menu_ref(entry["menu_ref"], f"{where}.menu_ref"),
         join_existing=join_existing,
+        lookup_wanted=lookup_wanted,
     )
 
 
@@ -852,6 +859,8 @@ RECHECK_CODES = frozenset(
     {"range_too_wide", "range_is_a_point", "macros_vs_kcal", "macros_exceed_kcal", "assumption_number"}
 )
 HISTORY_ATTEMPT_KEYS = ("provider", "model", "outcome", "retry")
+HISTORY_LOOKUP_ATTEMPT_KEYS = (*HISTORY_ATTEMPT_KEYS, "lookup")
+"""v2.5: the attempt of a Claude web lookup after a Codex answer has a fifth key, always true (others keep four)."""
 HISTORY_KINDS = frozenset({"text", "photo", "confirm", "plain", "cancel", "eat", "edit", "fix", "retry"})
 
 
@@ -912,6 +921,11 @@ def _routing_keys_ok(retried: Any, attempts: Any) -> bool:
     if attempts is None:
         return True
     return isinstance(attempts, list) and all(
-        isinstance(item, dict) and tuple(item) == HISTORY_ATTEMPT_KEYS and type(item["retry"]) is bool
+        isinstance(item, dict)
+        and (
+            tuple(item) == HISTORY_ATTEMPT_KEYS
+            or (tuple(item) == HISTORY_LOOKUP_ATTEMPT_KEYS and item["lookup"] is True)
+        )
+        and type(item["retry"]) is bool
         for item in attempts
     )

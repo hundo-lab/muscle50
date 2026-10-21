@@ -365,8 +365,13 @@ def test_unknown_web_key_is_named_without_its_value(tmp_path: Path) -> None:
 
 
 def test_the_startup_line_names_the_web_search_setting() -> None:
-    assert _web_search_text(DEFAULT_SETTINGS) == "web search on (max 3, 150 s)"
+    # v2.5: the default provider is codex (user decision 2026-10-21), and Codex never searches; only a Claude lookup
+    # does (user decision W3 "search only on Claude"). An explicit Claude provider keeps the v2.2 text.
+    claude = replace(DEFAULT_SETTINGS, provider=ProviderName.CLAUDE)
+    assert _web_search_text(DEFAULT_SETTINGS) == "web search via claude when needed (max 3, 150 s)"
+    assert _web_search_text(claude) == "web search on (max 3, 150 s)"
     assert _web_search_text(replace(DEFAULT_SETTINGS, web_search=False)) == "web search off"
-    assert _web_search_text(replace(DEFAULT_SETTINGS, web_search_max=5, web_search_timeout_seconds=200)) == (
+    assert _web_search_text(replace(claude, web_search=False)) == "web search off"
+    assert _web_search_text(replace(claude, web_search_max=5, web_search_timeout_seconds=200)) == (
         "web search on (max 5, 200 s)"
     )

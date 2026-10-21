@@ -71,6 +71,8 @@ class LlmAttempt:
     """How many web searches the run made; None when the tool was not offered, 0 when offered but unused."""
     reason: FailureReason | None = None
     """v2.5: why a run that did not succeed failed (None for `ok`); decided from the exit and the CLI's error marks."""
+    lookup: bool = False
+    """v2.5: the run was the Claude web lookup after a Codex answer (recorded in the same chain)."""
 
 
 @dataclass(frozen=True)
@@ -107,6 +109,8 @@ class LlmCallResult:
         if not self.ok:
             return None
         for attempt in self.attempts:
+            if attempt.lookup:
+                continue
             if attempt.provider is not self.provider and attempt.reason is FailureReason.USAGE_LIMIT:
                 return attempt.provider
         return None
@@ -114,7 +118,7 @@ class LlmCallResult:
     @property
     def other_tried(self) -> bool:
         """True when some attempt ran on a provider other than the last attempt's."""
-        return any(attempt.provider is not self.provider for attempt in self.attempts)
+        return any(attempt.provider is not self.provider for attempt in self.attempts if not attempt.lookup)
 
     @property
     def retried(self) -> bool:
