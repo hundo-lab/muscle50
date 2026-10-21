@@ -41,6 +41,12 @@ from muscle50.domain.strength_recommendation import (
 )
 from muscle50.domain.swim_recommendation import SwimSegment, pace_text
 from muscle50.domain.swimming import NormalizedSwimActivity, derive_lap_metrics
+from muscle50.domain.sync_catch_up import (
+    CATCH_UP_LIMIT_DAYS,
+    CATCH_UP_LOOKBACK_DAYS,
+    GARMIN_SYNC_UNCONFIRMED_MAX_DAYS,
+    DailyCatchUp,
+)
 from muscle50.domain.training_recommendation import TrainingRecommendation
 from muscle50.presentation.nutrition_terminal import nutrition_context_lines, nutrition_context_payload
 from muscle50.presentation.sync_coverage_terminal import sync_coverage_freshness_lines, sync_coverage_payload
@@ -767,17 +773,23 @@ def render_daily_sync_json(result: DailySyncResult) -> str:
         if result.recommendation is None
         else json.loads(render_training_recommendation_json(result.recommendation, result.nutrition)),
     }
+    catch_up = result.catch_up
+    if catch_up is not None:
+        # Daily Catch-up v1 (additive): only when the range starts before D-1, so other output is unchanged.
+        older = catch_up.older_unsynced
+        payload["catch_up"] = {
+            "from": catch_up.start.isoformat(),
+            "limit_days": CATCH_UP_LIMIT_DAYS,
+            "last_synced": catch_up.last_synced.isoformat() if catch_up.last_synced is not None else None,
+            "older_unsynced": None if older is None else {"from": older[0].isoformat(), "to": older[1].isoformat()},
+        }
     return json.dumps(payload, indent=2, ensure_ascii=True)
 
 
 def render_daily_sync(result: DailySyncResult) -> str:
     # ASCII labels (cp949 consoles); Garmin error messages are printed as received.
-    lines = [f"muscle50 daily for {result.as_of.isoformat()} ({result.mode.value.replace('_', '-')})", "Stages:"]
-    for item in result.stages:
-        lines.append(f"  {item.stage}: {item.status.value}{_daily_stage_detail(result, item.stage)}")
-        if item.error:
-            lines.append(f"    error: {item.error}")
-        lines.extend(f"    warning: {warning}" for warning in item.warnings)
+    lines = [f"muscle50 daily for {result.as_of.isoformat()} ({result.mode.value.replace('_', '-')})"]
+    lines.extend(_daily_stage_lines(result))
     recommendation = result.recommendation
     if recommendation is not None:
         freshness = recommendation.data_freshness
@@ -797,10 +809,64 @@ def render_daily_sync(result: DailySyncResult) -> str:
             )
     elif result.mode is DailyMode.AFTER_WORKOUT:
         lines.append("Imported. The next `muscle50 daily` will count this workout.")
+    if result.catch_up is not None:
+        lines.extend(_catch_up_lines(result.catch_up))
     text = "\n".join(lines)
     if recommendation is None:
         return text
     return f"{text}\n\n{render_training_recommendation(recommendation, result.nutrition)}"
+
+
+def render_garmin_sync(result: DailySyncResult) -> str:
+    """`garmin sync --from/--to` text: the daily stage block for the range; no recommendation."""
+    lines = [f"muscle50 garmin sync {result.sync_from.isoformat()}..{result.as_of.isoformat()}"]
+    lines.extend(_daily_stage_lines(result))
+    if result.ok:
+        lines.append("Synced. No recommendation was built; plan today with: muscle50 daily")
+    else:
+        failed = ", ".join(result.failed_stages) or "none"
+        lines.append(f"FAILED stages: {failed}. Data already synced is kept; rerunning the same command is safe.")
+    return "\n".join(lines)
+
+
+def _daily_stage_lines(result: DailySyncResult) -> list[str]:
+    lines = ["Stages:"]
+    for item in result.stages:
+        lines.append(f"  {item.stage}: {item.status.value}{_daily_stage_detail(result, item.stage)}")
+        if item.error:
+            lines.append(f"    error: {item.error}")
+        lines.extend(f"    warning: {warning}" for warning in item.warnings)
+    return lines
+
+
+def _catch_up_lines(catch_up: DailyCatchUp) -> list[str]:
+    """Why the range starts before D-1 and, when the cap left older days out, how to fetch them."""
+    last = catch_up.last_synced
+    if catch_up.activities_only:
+        why = (
+            f"caught up after the last day with activities synced {last.isoformat()}"
+            if last is not None
+            else f"no day with activities synced in the last {CATCH_UP_LOOKBACK_DAYS} days"
+        )
+    else:
+        why = (
+            f"caught up after the last fully synced day {last.isoformat()}"
+            if last is not None
+            else f"no fully synced day in the last {CATCH_UP_LOOKBACK_DAYS} days"
+        )
+    lines = [
+        f"Sync range: {catch_up.start.isoformat()}..{catch_up.as_of.isoformat()} "
+        f"({why}; limit {CATCH_UP_LIMIT_DAYS} days)"
+    ]
+    older = catch_up.older_unsynced
+    if older is not None:
+        first, end = older[0].isoformat(), older[1].isoformat()
+        confirm = " --yes" if (older[1] - older[0]).days + 1 > GARMIN_SYNC_UNCONFIRMED_MAX_DAYS else ""
+        lines.append(
+            f"Older unsynced days: {first}..{end}. Run: muscle50 garmin sync --from {first} --to {end}{confirm} "
+            f"(Telegram: /sync {first} {end})"
+        )
+    return lines
 
 
 def _daily_stage_detail(result: DailySyncResult, stage: str) -> str:

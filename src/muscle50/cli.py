@@ -18,6 +18,7 @@ from typing import Any, Literal, cast
 
 from muscle50.application.activity_unknown_sets import ActivityUnknownSets, CountActivityUnknownSets
 from muscle50.application.backfill_activity_load_metrics import BackfillActivityLoadMetrics
+from muscle50.application.daily_catch_up import PlanDailyCatchUp
 from muscle50.application.daily_sync import DailyMode, RunDailySync, daily_sync_start
 from muscle50.application.food_lookup import ResolveFoodReference
 from muscle50.application.imported_load_metrics import FillImportedLoadMetrics
@@ -68,6 +69,7 @@ from muscle50.application.sync_coverage import (
     COMMAND_DAILY,
     COMMAND_GARMIN_ACTIVITIES,
     COMMAND_GARMIN_RECOVERY,
+    COMMAND_GARMIN_SYNC,
     BackfillRecoveryCoverage,
     CoverageRecordResult,
     RecordSyncCoverage,
@@ -75,6 +77,7 @@ from muscle50.application.sync_coverage import (
     coverage_not_recorded_message,
 )
 from muscle50.application.sync_garmin_recovery import (
+    MAX_RECOVERY_RANGE_DAYS,
     RECOVERY_ENDPOINTS_PER_DATE,
     InvalidRecoveryRangeError,
     RecoveryRangeOutcome,
@@ -118,6 +121,7 @@ from muscle50.domain.nutrition_targets import ExactTarget, NutrientTarget, Nutri
 from muscle50.domain.recovery_normalization import RecoveryNormalizationError, validate_calendar_date
 from muscle50.domain.strength_recommendation import StrengthFocus
 from muscle50.domain.swim_normalization import SwimNormalizationError
+from muscle50.domain.sync_catch_up import CATCH_UP_LIMIT_DAYS, GARMIN_SYNC_UNCONFIRMED_MAX_DAYS, DailyCatchUp
 from muscle50.domain.sync_coverage import InvalidCoverageRangeError, coverage_range_dates
 from muscle50.infrastructure.decimal_text import decimal_from_text
 from muscle50.infrastructure.garmin.client import (
@@ -187,6 +191,7 @@ from muscle50.presentation.terminal import (
     render_activity_load_backfill_result,
     render_daily_sync,
     render_daily_sync_json,
+    render_garmin_sync,
     render_imported_load_metrics,
     render_range_result,
     render_recovery_range_result,
@@ -236,6 +241,22 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"confirm a range longer than {_RECOVERY_UNCONFIRMED_MAX_DAYS} days "
         f"(about {RECOVERY_ENDPOINTS_PER_DATE} Garmin requests per date)",
     )
+    sync = garmin_commands.add_parser(
+        "sync",
+        help="Sync Garmin activities, load metrics and recovery for an inclusive --from/--to range with one login "
+        "(no recommendation; for days `daily` did not catch up)",
+    )
+    sync.add_argument("--from", dest="from_date", required=True, metavar="YYYY-MM-DD", help="first date")
+    sync.add_argument(
+        "--to", dest="to_date", required=True, metavar="YYYY-MM-DD", help="last date (inclusive; today at the latest)"
+    )
+    sync.add_argument(
+        "--yes",
+        action="store_true",
+        help=f"confirm a range longer than {GARMIN_SYNC_UNCONFIRMED_MAX_DAYS} days "
+        f"(about {RECOVERY_ENDPOINTS_PER_DATE} Garmin recovery requests per date)",
+    )
+    sync.add_argument("--json", action="store_true", help="print the stage results as JSON (the `daily --json` shape)")
     refresh = garmin_commands.add_parser("refresh", help="Refresh one existing Garmin activity")
     refresh.add_argument("activity_id", help="Garmin activity ID")
     backfill = garmin_commands.add_parser(
@@ -300,7 +321,8 @@ def build_parser() -> argparse.ArgumentParser:
     recommend.add_argument("--json", action="store_true", help="print the full recommendation with evidence as JSON")
     daily = commands.add_parser(
         "daily",
-        help="Sync yesterday-to-today Garmin activities, load metrics and recovery, then recommend the day "
+        help="Sync Garmin activities, load metrics and recovery from the day after the last synced day "
+        f"(at least yesterday, at most {CATCH_UP_LIMIT_DAYS} days back) to today, then recommend the day "
         "(one command for the normal daily workflow)",
     )
     daily.add_argument(
@@ -768,6 +790,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 1
             return _garmin_recovery(args.date)
         return _garmin_recovery_range(args.date, args.from_date, args.to_date, confirmed=args.yes)
+    if args.command == "garmin" and args.garmin_command == "sync":
+        return _garmin_sync(args.from_date, args.to_date, confirmed=args.yes, as_json=args.json)
     if args.command == "garmin" and args.garmin_command == "refresh":
         return _garmin_refresh(args.activity_id)
     if args.command == "garmin" and args.garmin_command == "backfill-load-metrics":
@@ -965,6 +989,52 @@ def _garmin_recovery_range(
             return 1
         return 0
     except (ConfigurationError, GarminConnectorError) as exc:
+        print(f"오류: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\n취소되었습니다.", file=sys.stderr)
+        return 130
+
+
+def _garmin_sync(from_text: str, to_text: str, *, confirmed: bool, as_json: bool) -> int:
+    # Every check here runs before any directory, migration or login, so a refused request costs nothing.
+    try:
+        from_date = date.fromisoformat(validate_calendar_date(from_text))
+        to_date = date.fromisoformat(validate_calendar_date(to_text))
+    except RecoveryNormalizationError:
+        print("오류: --from/--to는 YYYY-MM-DD 형식이어야 합니다.", file=sys.stderr)
+        return 1
+    if from_date > to_date:
+        print("오류: --from은 --to보다 이후일 수 없습니다.", file=sys.stderr)
+        return 1
+    today = _today()
+    if to_date > today:
+        print(f"오류: --to는 오늘({today.isoformat()}) 이후일 수 없습니다.", file=sys.stderr)
+        return 1
+    days = (to_date - from_date).days + 1
+    if days > MAX_RECOVERY_RANGE_DAYS:
+        print(f"오류: 범위는 최대 {MAX_RECOVERY_RANGE_DAYS}일입니다 (요청: {days}일).", file=sys.stderr)
+        return 1
+    estimated_calls = days * RECOVERY_ENDPOINTS_PER_DATE
+    if days > GARMIN_SYNC_UNCONFIRMED_MAX_DAYS and not confirmed:
+        print(
+            f"오류: {days}일 범위는 Garmin 요청 약 {estimated_calls}회가 필요합니다. 계속하려면 --yes를 추가하세요.",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        paths = AppPaths.from_environment()
+        use_case = _daily_sync_use_case(paths, command=COMMAND_GARMIN_SYNC, with_nutrition=False)
+        print(
+            f"muscle50 garmin sync {from_date.isoformat()}..{to_date.isoformat()} "
+            f"({days} days, about {estimated_calls} recovery requests)",
+            file=sys.stderr,
+        )
+        result = use_case.execute(to_date, DailyMode.SYNC, sync_from=from_date)
+        print(render_daily_sync_json(result) if as_json else render_garmin_sync(result))
+        return 0 if result.ok else 1
+    except ConfigurationError as exc:
         print(f"오류: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
@@ -1195,28 +1265,11 @@ def _daily(
 
     try:
         paths = AppPaths.from_environment()
-        paths.ensure_directories()
-        activity_repository = ActivityRepository(paths.database_path)
-        activity_repository.migrate()
-        recovery_repository = DailyRecoveryRepository(paths.database_path)
-        recovery_repository.migrate()
-        raw_store = RawStore(paths.raw_dir, paths.root, paths.tmp_dir)
-        recovery_raw_store = RecoveryRawStore(paths.recovery_raw_dir, paths.root, paths.tmp_dir)
-        use_case = RunDailySync(
-            connect=lambda: PythonGarminConnector.authenticate(paths.auth_dir, input_fn=_prompt_on_stderr),
-            activity_ingest=lambda connector: IngestGarminActivityRange(connector, activity_repository, raw_store),
-            load_metric_backfill=BackfillActivityLoadMetrics(activity_repository, raw_store),
-            recovery_sync=lambda connector: SyncGarminRecovery(connector, recovery_repository, recovery_raw_store),
-            # A read-only reader built exactly as `recommend` builds it; it reads after the sync stages write.
-            recommender=BuildTrainingRecommendation(SqliteAnalyticsReader(paths.database_path)),
-            nutrition=_nutrition_context(paths),
-            coverage=_sync_coverage(paths, COMMAND_DAILY),
-        )
-        print(
-            f"muscle50 daily {as_of.isoformat()}: syncing {daily_sync_start(as_of).isoformat()}..{as_of.isoformat()}",
-            file=sys.stderr,
-        )
-        result = use_case.execute(as_of, mode, avoid, focus)
+        use_case = _daily_sync_use_case(paths, command=COMMAND_DAILY, with_nutrition=True)
+        catch_up = _daily_catch_up(paths, as_of, activities_only=after_workout)
+        start = catch_up.start if catch_up is not None else daily_sync_start(as_of)
+        print(f"muscle50 daily {as_of.isoformat()}: syncing {start.isoformat()}..{as_of.isoformat()}", file=sys.stderr)
+        result = use_case.execute(as_of, mode, avoid, focus, catch_up=catch_up)
         print(render_daily_sync_json(result) if as_json else render_daily_sync(result))
         return 0 if result.ok else 1
     except ConfigurationError as exc:
@@ -1225,6 +1278,54 @@ def _daily(
     except KeyboardInterrupt:
         print("\n취소되었습니다.", file=sys.stderr)
         return 130
+
+
+def _daily_sync_use_case(paths: AppPaths, *, command: str, with_nutrition: bool) -> RunDailySync:
+    """`daily` and `garmin sync`: creates the directories and migrates, then wires the existing sync use cases."""
+    paths.ensure_directories()
+    activity_repository = ActivityRepository(paths.database_path)
+    activity_repository.migrate()
+    recovery_repository = DailyRecoveryRepository(paths.database_path)
+    recovery_repository.migrate()
+    raw_store = RawStore(paths.raw_dir, paths.root, paths.tmp_dir)
+    recovery_raw_store = RecoveryRawStore(paths.recovery_raw_dir, paths.root, paths.tmp_dir)
+    return RunDailySync(
+        connect=lambda: PythonGarminConnector.authenticate(paths.auth_dir, input_fn=_prompt_on_stderr),
+        activity_ingest=lambda connector: IngestGarminActivityRange(connector, activity_repository, raw_store),
+        load_metric_backfill=BackfillActivityLoadMetrics(activity_repository, raw_store),
+        recovery_sync=lambda connector: SyncGarminRecovery(connector, recovery_repository, recovery_raw_store),
+        # A read-only reader built exactly as `recommend` builds it; it reads after the sync stages write.
+        # `garmin sync` (DailyMode.SYNC) never calls it.
+        recommender=BuildTrainingRecommendation(SqliteAnalyticsReader(paths.database_path)),
+        nutrition=_nutrition_context(paths) if with_nutrition else None,
+        coverage=_sync_coverage(paths, command),
+    )
+
+
+def _daily_catch_up(paths: AppPaths, as_of: date, *, activities_only: bool) -> DailyCatchUp | None:
+    """Daily Catch-up v1: where `daily` starts, from the recorded coverage (read-only, after migrate()).
+
+    None when the coverage cannot be read: `daily` then syncs D-1..D as before and says so on stderr.
+    """
+    try:
+        return PlanDailyCatchUp(SqliteAnalyticsReader(paths.database_path)).execute(
+            as_of, activities_only=activities_only, local_timezone=_local_timezone
+        )
+    except AnalyticsDatabaseError as exc:
+        start = daily_sync_start(as_of).isoformat()
+        print(f"경고: sync coverage를 읽지 못해 어제({start})부터 받습니다: {exc}", file=sys.stderr)
+        return None
+
+
+def _older_unsynced(paths: AppPaths) -> tuple[date, date] | None:
+    """The unsynced days the next `daily` would leave out (Telegram LLM sync hint); None when unknown. Read-only."""
+    try:
+        plan = PlanDailyCatchUp(SqliteAnalyticsReader(paths.database_path)).execute(
+            _today(), activities_only=False, local_timezone=_local_timezone
+        )
+    except AnalyticsDatabaseError:
+        return None
+    return plan.older_unsynced
 
 
 def _nutrition_context(paths: AppPaths) -> BuildNutritionContext:

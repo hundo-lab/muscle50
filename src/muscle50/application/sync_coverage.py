@@ -32,6 +32,7 @@ from muscle50.domain.sync_coverage import (
 COMMAND_GARMIN_ACTIVITIES = "garmin activities"
 COMMAND_GARMIN_RECOVERY = "garmin recovery"
 COMMAND_DAILY = "daily"
+COMMAND_GARMIN_SYNC = "garmin sync"
 COMMAND_RECOVERY_COVERAGE_BACKFILL = "garmin backfill-recovery-coverage"
 
 

@@ -3,12 +3,16 @@
 Stages, in order:
 
 1. ``garmin_login``: one authenticated connector shared by every Garmin stage.
-2. ``activities``: ``IngestGarminActivityRange`` over D-1..D.
+2. ``activities``: ``IngestGarminActivityRange`` over the sync range.
 3. ``load_metrics``: ``BackfillActivityLoadMetrics`` (RAW-only, idempotent).
-4. ``recovery``: ``SyncGarminRecovery.execute_range`` over D-1..D (full mode only).
+4. ``recovery``: ``SyncGarminRecovery.execute_range`` over the sync range (full and sync modes).
 5. ``recommendation``: ``BuildTrainingRecommendation`` for D (full mode only), plus the
    optional nutrition context for D from ``BuildNutritionContext`` (not a stage: it never
    changes the plan or the outcome, and unreadable nutrition is reported, not failed).
+
+The sync range ends on D. It starts on D-1 by default, on the catch-up start when `daily`
+passes a ``DailyCatchUp`` plan (Daily Catch-up v1: between D-7 and D-1), or on an explicit
+``sync_from`` (`garmin sync --from/--to`, ``DailyMode.SYNC``).
 
 No Garmin normalization, persistence, recovery or recommendation rule lives here; each stage
 is the existing use case, so its idempotency and RAW snapshot semantics are unchanged.
@@ -46,6 +50,7 @@ from muscle50.domain.normalization import NormalizationError
 from muscle50.domain.recovery_normalization import RecoveryNormalizationError
 from muscle50.domain.strength_recommendation import StrengthFocus
 from muscle50.domain.swim_normalization import SwimNormalizationError
+from muscle50.domain.sync_catch_up import DailyCatchUp
 from muscle50.domain.training_recommendation import TrainingRecommendation
 from muscle50.infrastructure.garmin.client import GarminConnector, GarminConnectorError, GarminRecoveryConnector
 from muscle50.infrastructure.raw_store import RawStoreError
@@ -56,8 +61,6 @@ STAGE_ACTIVITIES = "activities"
 STAGE_LOAD_METRICS = "load_metrics"
 STAGE_RECOVERY = "recovery"
 STAGE_RECOMMENDATION = "recommendation"
-# Stages after-workout mode runs; the rest are skipped in that mode.
-_IMPORT_STAGES = frozenset({STAGE_ACTIVITIES, STAGE_LOAD_METRICS})
 
 # Errors a sync stage reports as its own failure; the same families the standalone commands catch.
 _SYNC_STAGE_ERRORS = (
@@ -77,6 +80,8 @@ class DailyMode(StrEnum):
     """Activities, load metrics, recovery, then today's recommendation."""
     AFTER_WORKOUT = "after_workout"
     """Activities and load metrics only: no recovery sync, no recommendation."""
+    SYNC = "sync"
+    """`garmin sync`: activities, load metrics and recovery over an explicit range; no recommendation."""
 
 
 class StageStatus(StrEnum):
@@ -136,7 +141,7 @@ class DailySyncResult:
     as_of: date
     mode: DailyMode
     sync_from: date
-    """First day of the activity and recovery sync range (D-1)."""
+    """First day of the activity and recovery sync range (D-1 unless caught up or given)."""
     stages: tuple[StageReport, ...]
     activities: RangeIngestResult | None
     load_metrics: ActivityLoadBackfillResult | None
@@ -144,6 +149,8 @@ class DailySyncResult:
     recommendation: TrainingRecommendation | None
     nutrition: NutritionContext | None = None
     """Nutrition context for the recommended date; only present with a recommendation."""
+    catch_up: DailyCatchUp | None = None
+    """Daily Catch-up v1: the plan, only when the range starts before D-1 (otherwise None)."""
 
     @property
     def failed_stages(self) -> tuple[str, ...]:
@@ -157,6 +164,22 @@ class DailySyncResult:
 def daily_sync_start(as_of: date) -> date:
     """D-1: yesterday's late activities and yesterday's end-of-day recovery belong to today's plan."""
     return as_of - timedelta(days=1)
+
+
+def _sync_start(as_of: date, mode: DailyMode, sync_from: date | None, catch_up: DailyCatchUp | None) -> date:
+    if sync_from is not None and catch_up is not None:
+        raise ValueError("pass either sync_from or catch_up, not both")
+    if mode is DailyMode.SYNC and sync_from is None:
+        raise ValueError("sync mode needs an explicit sync_from")
+    if sync_from is not None:
+        if sync_from > as_of:
+            raise ValueError("sync_from is after the last day of the range")
+        return sync_from
+    if catch_up is not None:
+        if catch_up.as_of != as_of:
+            raise ValueError("the catch-up plan is for another day")
+        return catch_up.start
+    return daily_sync_start(as_of)
 
 
 class RunDailySync:
@@ -184,8 +207,13 @@ class RunDailySync:
         mode: DailyMode = DailyMode.FULL,
         avoid_muscles: Iterable[MuscleGroup] = (),
         requested_focus: StrengthFocus | None = None,
+        *,
+        sync_from: date | None = None,
+        catch_up: DailyCatchUp | None = None,
     ) -> DailySyncResult:
-        start = daily_sync_start(as_of)
+        start = _sync_start(as_of, mode, sync_from, catch_up)
+        reported = catch_up if catch_up is not None and catch_up.reported else None
+        syncs_recovery = mode in (DailyMode.FULL, DailyMode.SYNC)
         full = mode is DailyMode.FULL
         stages: list[StageReport] = []
 
@@ -193,11 +221,12 @@ class RunDailySync:
             connector = self._connect()
         except GarminConnectorError as exc:
             stages.append(StageReport(STAGE_GARMIN_LOGIN, StageStatus.FAILED, str(exc)))
+            runs = {STAGE_RECOVERY: syncs_recovery, STAGE_RECOMMENDATION: full}
             stages.extend(
-                StageReport(stage, StageStatus.NOT_RUN if full or stage in _IMPORT_STAGES else StageStatus.SKIPPED)
+                StageReport(stage, StageStatus.NOT_RUN if runs.get(stage, True) else StageStatus.SKIPPED)
                 for stage in (STAGE_ACTIVITIES, STAGE_LOAD_METRICS, STAGE_RECOVERY, STAGE_RECOMMENDATION)
             )
-            return DailySyncResult(as_of, mode, start, tuple(stages), None, None, None, None)
+            return DailySyncResult(as_of, mode, start, tuple(stages), None, None, None, None, catch_up=reported)
         stages.append(StageReport(STAGE_GARMIN_LOGIN, StageStatus.OK))
 
         activities, report = self._activities(connector, start, as_of)
@@ -208,7 +237,7 @@ class RunDailySync:
         stages.append(report)
 
         recovery: RecoveryRangeSyncResult | None = None
-        if full:
+        if syncs_recovery:
             recovery, report = self._recovery(connector, start, as_of)
             if recovery is not None and self._coverage is not None:
                 report = _with_coverage_warning(report, self._coverage.recovery(recovery.outcomes))
@@ -234,7 +263,16 @@ class RunDailySync:
         if recommendation is not None and self._nutrition is not None:
             nutrition = self._nutrition.execute(as_of, recommendation)
         return DailySyncResult(
-            as_of, mode, start, tuple(stages), activities, load_metrics, recovery, recommendation, nutrition
+            as_of,
+            mode,
+            start,
+            tuple(stages),
+            activities,
+            load_metrics,
+            recovery,
+            recommendation,
+            nutrition,
+            catch_up=reported,
         )
 
     def _activities(
