@@ -97,6 +97,7 @@ muscle50 telegram run      # long polling. Ctrl+C까지 동작(exit 130). 설정
 | `/show <meal_id>` | `nutrition meal show <meal_id>` |
 | `/inbody` | `inbody trend` |
 | `/daily` | `daily` |
+| `/sync <시작> <끝>`, `/sync_ok_<id>` | `garmin sync --from --to [--yes] --json` (Daily Catch-up v1, [daily-catch-up.md](daily-catch-up.md)) |
 | `/help`, `/start` | (bot의 명령 목록) |
 
 `<오늘>`과 날짜 기본값은 CLI와 같다(이 컴퓨터의 오늘, `_today()`/`_local_timezone`).
@@ -199,7 +200,7 @@ Whole day: muscle50 nutrition day --date 2026-10-06
 
 ### `/daily`
 
-- 먼저 `daily 실행 중: 어제와 오늘의 Garmin 동기화 후 오늘 계획을 만듭니다. 끝나면 결과를 보냅니다.`를 보내고, 끝나면
+- 먼저 `daily 실행 중: Garmin 동기화 후 오늘 계획을 만듭니다. 끝나면 결과를 보냅니다.`를 보내고, 끝나면
   `daily` stdout을 보낸다. 실행 중에 온 다른 메시지는 끝난 뒤 순서대로 처리한다.
 - Garmin 로그인이 다시 필요하면(첫 로그인, token 만료, MFA) bot은 입력을 받을 수 없다. stdin이 빈 입력이라 로그인
   prompt가 바로 끝나고, 어떤 sync 단계도 쓰기 전에 멈춘 뒤 다음처럼 답한다.

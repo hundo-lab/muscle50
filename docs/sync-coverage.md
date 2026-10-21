@@ -33,7 +33,8 @@ Spec: `docs/specs/sync-coverage.md`. Migration 010 (`010_sync_coverage.sql`, tab
 | `garmin activities --from --to` | 범위 전체 | - |
 | `garmin recovery D` | - | D |
 | `garmin recovery --from --to` | - | 시도한 날짜 |
-| `daily` | D-1..D | D-1..D (full mode) |
+| `daily` | 이어 받기 범위(D-7..D-1 중 시작, [daily-catch-up.md](daily-catch-up.md)) ~ D | 같은 범위 (full mode) |
+| `garmin sync --from --to` | 범위 전체 | 시도한 날짜 |
 | `garmin backfill-recovery-coverage` | - | 기록 없는 recovery 날짜(`raw_backfill`) |
 
 - Coverage는 sync use case가 돌려준 결과 객체로 계산한다. Sync 자체의 동작, 출력, exit code는 바뀌지 않는다.
@@ -169,3 +170,5 @@ Partial: 2026-09-03 (missing: respiration)
 - `garmin latest`, `garmin refresh`는 coverage를 기록하지 않는다(v2 후보).
 - Coverage는 추천 결정에 쓰이지 않는다. 예: `synced`이고 activity가 없는 날을 실제 휴식으로 확정하는 것은 v2 후보다.
 - `garmin coverage` 범위 최대 366일, text activities 열 폭 30은 기본값이다.
+- `garmin coverage` text의 `Recorded by:` 줄은 `garmin sync`(Daily Catch-up v1)를 적지 않는다. 출력을 바꾸지 않으려고 그대로 뒀다.
+  `--json`의 `command`에는 `garmin sync`가 나온다.
