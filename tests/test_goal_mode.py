@@ -145,9 +145,12 @@ def test_establish_baseline_and_unloaded_add_reps_are_kept() -> None:
 
 
 def test_cut_changes_only_progression_targets() -> None:
-    history = [_squat("1", 6, (12, 12, 12), 60.0), _squat("2", 3, (10, 9, 8), 60.0)]
+    # No regression (best reps rose 10 -> 12 at 60 kg), so the gain plan really increases the load.
+    history = [_squat("1", 6, (10, 10, 9), 60.0), _squat("2", 3, (12, 12, 11), 60.0)]
     gain = _plan(history)
     cut = _plan(history, goal=CUT)
+    assert gain.strength.exercises[0].progression.action is ProgressionAction.INCREASE_LOAD
+    assert cut.strength.exercises[0].progression.action is ProgressionAction.MAINTAIN_LOAD
     assert cut.strength.focus == gain.strength.focus
     assert cut.strength.working_sets == gain.strength.working_sets
     assert [item.sets for item in cut.strength.exercises] == [item.sets for item in gain.strength.exercises]
