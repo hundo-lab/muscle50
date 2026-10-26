@@ -191,6 +191,8 @@ class ProgressionAction(StrEnum):
     ADD_REPS = "add_reps"
     MAINTAIN = "maintain"
     ESTABLISH_BASELINE = "establish_baseline"
+    MAINTAIN_LOAD = "maintain_load"
+    """Cut goal only (``goal_mode.apply_cut_progression``): keep the last load and reps (MAINT-02)."""
 
 
 @dataclass(frozen=True, order=True)

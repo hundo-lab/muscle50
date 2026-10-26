@@ -132,9 +132,11 @@ from muscle50.domain.swim_normalization import SwimNormalizationError
 from muscle50.domain.sync_catch_up import CATCH_UP_LIMIT_DAYS, GARMIN_SYNC_UNCONFIRMED_MAX_DAYS, DailyCatchUp
 from muscle50.domain.sync_coverage import InvalidCoverageRangeError, coverage_range_dates
 from muscle50.domain.training_goal import (
+    DEFAULT_SLEEP_SETTING,
     GOAL_FLAGS,
     GoalMode,
     GoalSettingsError,
+    SleepThresholdSetting,
     TrainingGoal,
     TrainingGoalError,
     WeeklyRateRange,
@@ -1298,9 +1300,8 @@ def _recommend(as_of_text: str, avoid: list[MuscleGroup], focus: StrengthFocus |
         return 1
     try:
         paths = AppPaths.from_environment()
-        recommendation = BuildTrainingRecommendation(SqliteAnalyticsReader(paths.database_path)).execute(
-            as_of, avoid, focus
-        )
+        goal, sleep_setting = _goal_settings(paths)
+        recommendation = _recommender(paths, goal, sleep_setting).execute(as_of, avoid, focus)
         # Built after the plan and from it; nutrition never changes the training recommendation.
         nutrition = _nutrition_context(paths).execute(as_of, recommendation)
         print(
@@ -1309,7 +1310,7 @@ def _recommend(as_of_text: str, avoid: list[MuscleGroup], focus: StrengthFocus |
             else render_training_recommendation(recommendation, nutrition)
         )
         return 0
-    except (AnalyticsDatabaseError, ConfigurationError) as exc:
+    except (AnalyticsDatabaseError, ConfigurationError, GoalSettingsError) as exc:
         print(f"오류: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
@@ -1352,14 +1353,19 @@ def _daily(
 
     try:
         paths = AppPaths.from_environment()
-        use_case = _daily_sync_use_case(paths, command=COMMAND_DAILY, with_nutrition=True)
+        # Read before anything is created or migrated: an invalid settings file costs no Garmin call.
+        # `--after-workout` builds no recommendation, so it never reads them.
+        goal, sleep_setting = (None, DEFAULT_SLEEP_SETTING) if after_workout else _goal_settings(paths)
+        use_case = _daily_sync_use_case(
+            paths, command=COMMAND_DAILY, with_nutrition=True, goal=goal, sleep_setting=sleep_setting
+        )
         catch_up = _daily_catch_up(paths, as_of, activities_only=after_workout)
         start = catch_up.start if catch_up is not None else daily_sync_start(as_of)
         print(f"muscle50 daily {as_of.isoformat()}: syncing {start.isoformat()}..{as_of.isoformat()}", file=sys.stderr)
         result = use_case.execute(as_of, mode, avoid, focus, catch_up=catch_up)
         print(render_daily_sync_json(result) if as_json else render_daily_sync(result))
         return 0 if result.ok else 1
-    except ConfigurationError as exc:
+    except (ConfigurationError, GoalSettingsError) as exc:
         print(f"오류: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
@@ -1367,8 +1373,36 @@ def _daily(
         return 130
 
 
-def _daily_sync_use_case(paths: AppPaths, *, command: str, with_nutrition: bool) -> RunDailySync:
-    """`daily` and `garmin sync`: creates the directories and migrates, then wires the existing sync use cases."""
+def _goal_settings(paths: AppPaths) -> tuple[TrainingGoal | None, SleepThresholdSetting]:
+    """The training goal and sleep thresholds (read-only; a missing file means no goal / the defaults)."""
+    goal = JsonTrainingGoalRepository(paths.training_goal_path).load()
+    return goal, JsonSleepThresholdRepository(paths.sleep_thresholds_path).load()
+
+
+def _recommender(
+    paths: AppPaths, goal: TrainingGoal | None, sleep_setting: SleepThresholdSetting
+) -> BuildTrainingRecommendation:
+    # InBody is read (read-only) only when a goal is set, for the goal lines.
+    return BuildTrainingRecommendation(
+        SqliteAnalyticsReader(paths.database_path),
+        goal=goal,
+        sleep=sleep_setting,
+        body_composition=SqliteBodyCompositionReader(paths.database_path) if goal is not None else None,
+    )
+
+
+def _daily_sync_use_case(
+    paths: AppPaths,
+    *,
+    command: str,
+    with_nutrition: bool,
+    goal: TrainingGoal | None = None,
+    sleep_setting: SleepThresholdSetting = DEFAULT_SLEEP_SETTING,
+) -> RunDailySync:
+    """`daily` and `garmin sync`: creates the directories and migrates, then wires the existing sync use cases.
+
+    Only `daily` passes the goal settings; `garmin sync` never builds a recommendation.
+    """
     paths.ensure_directories()
     activity_repository = ActivityRepository(paths.database_path)
     activity_repository.migrate()
@@ -1383,7 +1417,7 @@ def _daily_sync_use_case(paths: AppPaths, *, command: str, with_nutrition: bool)
         recovery_sync=lambda connector: SyncGarminRecovery(connector, recovery_repository, recovery_raw_store),
         # A read-only reader built exactly as `recommend` builds it; it reads after the sync stages write.
         # `garmin sync` (DailyMode.SYNC) never calls it.
-        recommender=BuildTrainingRecommendation(SqliteAnalyticsReader(paths.database_path)),
+        recommender=_recommender(paths, goal, sleep_setting),
         nutrition=_nutrition_context(paths) if with_nutrition else None,
         coverage=_sync_coverage(paths, command),
     )

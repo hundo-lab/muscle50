@@ -166,28 +166,9 @@ def build_body_composition_trend(
     goals: TrainingGoals,
 ) -> BodyCompositionTrend:
     validate_trend_range(from_date, to_date)
-    keyed = [_measurement(row) for row in rows]
-    in_range = [
-        item
-        for item in keyed
-        if (from_date is None or item[1].local_date >= from_date) and (to_date is None or item[1].local_date <= to_date)
-    ]
-    in_range.sort(key=lambda item: item[0])
-    measurements = tuple(item[1] for item in in_range)
+    measurements = _measurements_in_range(rows, from_date, to_date)
     dates = tuple(sorted({item.local_date for item in measurements}))
-
-    points: dict[TrendMetric, dict[date, Decimal]] = {metric: {} for metric in METRICS}
-    conflicts: list[MetricConflict] = []
-    for day in dates:
-        same_day = [item for item in measurements if item.local_date == day]
-        for metric in METRICS:
-            values = tuple(value for item in same_day if (value := item.value(metric)) is not None)
-            if not values:
-                continue
-            if len(set(values)) == 1:
-                points[metric][day] = values[0]
-            else:
-                conflicts.append(MetricConflict(day, metric, values))
+    points, conflicts = _points(measurements, dates)
 
     intervals = tuple(
         IntervalChange(
@@ -212,6 +193,49 @@ def build_body_composition_trend(
         last_measurement_date=last_date,
         days_since_last_measurement=(reference_date - last_date).days if last_date is not None else None,
     )
+
+
+def metric_points(
+    rows: Sequence[StoredBodyComposition], *, to_date: date | None = None
+) -> dict[TrendMetric, dict[date, Decimal]]:
+    """One rounded point per metric and local date up to ``to_date``; conflicting dates are left out.
+
+    The same points the trend uses (same rounding and conflict rule), for readers outside `inbody trend`.
+    """
+    measurements = _measurements_in_range(rows, None, to_date)
+    points, _conflicts = _points(measurements, tuple(sorted({item.local_date for item in measurements})))
+    return points
+
+
+def _measurements_in_range(
+    rows: Sequence[StoredBodyComposition], from_date: date | None, to_date: date | None
+) -> tuple[TrendMeasurement, ...]:
+    keyed = [_measurement(row) for row in rows]
+    in_range = [
+        item
+        for item in keyed
+        if (from_date is None or item[1].local_date >= from_date) and (to_date is None or item[1].local_date <= to_date)
+    ]
+    in_range.sort(key=lambda item: item[0])
+    return tuple(item[1] for item in in_range)
+
+
+def _points(
+    measurements: Sequence[TrendMeasurement], dates: Sequence[date]
+) -> tuple[dict[TrendMetric, dict[date, Decimal]], list[MetricConflict]]:
+    points: dict[TrendMetric, dict[date, Decimal]] = {metric: {} for metric in METRICS}
+    conflicts: list[MetricConflict] = []
+    for day in dates:
+        same_day = [item for item in measurements if item.local_date == day]
+        for metric in METRICS:
+            values = tuple(value for item in same_day if (value := item.value(metric)) is not None)
+            if not values:
+                continue
+            if len(set(values)) == 1:
+                points[metric][day] = values[0]
+            else:
+                conflicts.append(MetricConflict(day, metric, values))
+    return points, conflicts
 
 
 type _SortKey = tuple[date, time, str, int]

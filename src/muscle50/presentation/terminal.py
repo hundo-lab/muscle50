@@ -48,6 +48,7 @@ from muscle50.domain.sync_catch_up import (
     DailyCatchUp,
 )
 from muscle50.domain.training_recommendation import TrainingRecommendation
+from muscle50.presentation.goal_terminal import goal_mode_lines, goal_mode_payload
 from muscle50.presentation.nutrition_terminal import nutrition_context_lines, nutrition_context_payload
 from muscle50.presentation.sync_coverage_terminal import sync_coverage_freshness_lines, sync_coverage_payload
 
@@ -531,8 +532,13 @@ def render_training_recommendation_json(
         del payload["data_freshness"]["sync_coverage"]
     else:
         payload["data_freshness"]["sync_coverage"] = sync_coverage_payload(window)
+    # Always removed here: a goal adds `goal_mode` as the last key (after `nutrition`), and without
+    # a goal the document is byte-identical to before Training Goal Mode v1.
+    del payload["goal_mode"]
     if nutrition is not None:
         payload["nutrition"] = nutrition_context_payload(nutrition)
+    if recommendation.goal_mode is not None:
+        payload["goal_mode"] = goal_mode_payload(recommendation.goal_mode)
     return json.dumps(payload, indent=2, ensure_ascii=True, default=_json_default)
 
 
@@ -661,6 +667,9 @@ def render_training_recommendation(
     if nutrition_lines:
         lines.append("")
         lines.extend(nutrition_lines)
+    if recommendation.goal_mode is not None:
+        lines.append("")
+        lines.extend(goal_mode_lines(recommendation.goal_mode))
 
     freshness = recommendation.data_freshness
     lines.extend(

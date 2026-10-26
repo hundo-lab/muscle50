@@ -22,7 +22,14 @@ from datetime import date, timedelta
 
 from muscle50.domain.activity import ActivityType, NormalizedActivity
 from muscle50.domain.analytics import activity_local_date
+from muscle50.domain.body_composition_trend import StoredBodyComposition
 from muscle50.domain.exercise_taxonomy import MuscleGroup
+from muscle50.domain.goal_mode import (
+    CutProgressionChange,
+    GoalModeReport,
+    apply_cut_progression,
+    build_goal_mode_report,
+)
 from muscle50.domain.recovery import DailyRecovery
 from muscle50.domain.recovery_assessment import RecoveryAssessment, assess_recovery
 from muscle50.domain.strength_recommendation import (
@@ -44,6 +51,7 @@ from muscle50.domain.swim_recommendation import (
     build_swim_recommendation,
 )
 from muscle50.domain.sync_coverage import RecordedCoverage, SyncCoverageWindow, coverage_window
+from muscle50.domain.training_goal import DEFAULT_SLEEP_SETTING, GoalMode, SleepThresholdSetting, TrainingGoal
 from muscle50.domain.training_goals import DEFAULT_TRAINING_GOALS, TrainingGoals
 
 RECOMMENDATION_VERSION = 1
@@ -95,6 +103,8 @@ class TrainingRecommendation:
     latest_recovery_date: date | None
     data_freshness: DataFreshness
     notices: tuple[RecommendationNotice, ...]
+    goal_mode: GoalModeReport | None = None
+    """Only with a training goal set (Training Goal Mode v1); rendered as a trailing section/key."""
 
 
 def history_start(as_of: date) -> date:
@@ -111,7 +121,16 @@ def build_training_recommendation(
     undated_source_activity_ids: Sequence[str] = (),
     requested_focus: StrengthFocus | None = None,
     sync_coverage: Sequence[RecordedCoverage] = (),
+    goal: TrainingGoal | None = None,
+    body_composition: Sequence[StoredBodyComposition] | None = (),
+    body_composition_error: str | None = None,
+    sleep: SleepThresholdSetting = DEFAULT_SLEEP_SETTING,
 ) -> TrainingRecommendation:
+    """Without ``goal`` and with the default ``sleep`` setting the result is exactly as before.
+
+    ``body_composition`` None means the InBody rows could not be read (``body_composition_error``);
+    they are used for goal-mode display lines only.
+    """
     start = history_start(as_of)
     previous_day = as_of - timedelta(days=1)
     dated = [
@@ -128,7 +147,7 @@ def build_training_recommendation(
     )
     window_activities = [activity for _day, activity in dated]
 
-    recovery = assess_recovery(as_of, recoveries)
+    recovery = assess_recovery(as_of, recoveries, sleep.thresholds)
     swim_sessions = analyze_swims(as_of, window_activities)
     overlaps = tuple(
         SwimOverlap(
@@ -146,6 +165,10 @@ def build_training_recommendation(
     strength = build_strength_recommendation(
         as_of, window_activities, recovery, overlaps, goals, avoid_muscles, requested_focus
     )
+    cut_changes: tuple[CutProgressionChange, ...] = ()
+    if goal is not None and goal.mode is GoalMode.CUT:
+        # After every other rule; only progression targets change (sets, exercises and focus never do).
+        strength, cut_changes = apply_cut_progression(strength)
 
     previous_sets = primary_muscle_sets_on(previous_day, window_activities)
     context = StrengthContext(
@@ -198,6 +221,18 @@ def build_training_recommendation(
         latest_recovery_date=latest_recovery,
         data_freshness=freshness,
         notices=notices,
+        goal_mode=None
+        if goal is None
+        else build_goal_mode_report(
+            goal,
+            as_of,
+            window_activities,
+            recoveries,
+            cut_changes,
+            body_composition,
+            body_composition_error,
+            sleep,
+        ),
     )
 
 
