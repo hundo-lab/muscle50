@@ -78,6 +78,7 @@ muscle50이 무엇을 향해 가는지 적은 문서다. 기능을 고르거나 
 2026-10-13: Telegram 자유 문장·사진·코치 v2(`docs/specs/telegram-llm.md`)가 통합됐다. 다음은 4, 5 순서다.
 2026-10-16: Telegram LLM Corrections and Range Totals v2.3(`docs/specs/telegram-llm-corrections.md`)이 통합됐다. 남은 사용 중 문제는 v2.4(`docs/specs/telegram-llm-reliability.md`)다. 다음 순서는 그대로다.
 2026-10-20: Telegram LLM Reliability and Replies v2.4(`docs/specs/telegram-llm-reliability.md`)가 통합됐다. 다음 순서는 그대로다.
+2026-10-26: 사용자 목표를 cut으로 정했다: 체지방률 18 %(기한 2027-02-28), 골격근량 41 kg 이상 유지, 주당 0.3~0.5 % 감량. `muscle50 goal set`으로 저장한다(`docs/training-goal-mode.md`). 2절의 "체중 입력 기능을 만들지 않는다"는 그대로다(cut 동안의 체중은 InBody에서만 읽는다).
 
 목표에 직접 기여하지 않는 정리 작업(`auto-load-metrics`, `sync-coverage`, `meal-void-edit` 등)은 위 순서를
 막지 않을 때 하거나, 실제로 불편해졌을 때 한다.

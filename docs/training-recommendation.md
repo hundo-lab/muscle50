@@ -64,6 +64,10 @@ Goal model이 없었으므로 최소 `TrainingGoals`(code default)를 추가했�
 | continuous_swim_baseline_meters / target | 1000 / 1500 |
 | target_1500m_fastest/slowest_seconds | 24:00 / 27:30 (= 1:36-1:50/100 m) |
 
+사용자의 목표 모드(cut / maintain / gain)는 위 code default와 따로 `config\training_goal.json`(`muscle50 goal set`)에
+저장한다. 파일이 없으면 이 문서의 규칙 그대로(gain)다. 목표 모드가 바꾸는 것은 cut의 진행 목표(아래 표)와 표시 줄뿐이다:
+`docs/training-goal-mode.md`.
+
 ## Strength 규칙
 
 ### 종목 identity
@@ -199,6 +203,7 @@ Focus region에 28일 내 익숙한 종목이 없으면 다음 region으로 넘�
 | range 하한 미달 | `add_reps` | 같은 무게로 하한 rep |
 | 1 set만 상한 도달 | `add_reps` | 같은 무게로 2 set 이상 상한 |
 | 그 외 | `add_reps` | 같은 무게, best + 1 rep |
+| cut 목표(`goal set --mode cut`), 위 결과가 `increase_load`/`add_reps`이고 마지막 session에 load 기록 있음 | `maintain_load` [MAINT-02, MAINT-06] | 마지막 work load, reps = min(best, 상한). 원래 목표는 선택(optional)으로 표시 [PROG-03]. 아래 모든 규칙 뒤에 적용, set 수 불변 (`docs/training-goal-mode.md`) |
 
 - **Performance 신호**: 같은 work load였던 직전 occurrence보다 best reps가 2 이상 줄면 `maintain`(마지막 수행 반복).
   무게가 낮아진 것만으로는 regression이 아니다(같은 label 안에 다른 장비가 섞일 수 있음).
@@ -264,6 +269,11 @@ Row가 없고 아래 lookback도 발동하지 않으면 level `normal` + "no rec
 | `training_readiness_level` (D, Garmin `AFTER_WAKEUP_RESET` 아침 값) | LOW | POOR |
 | `recovery_time_minutes` (D, 같은 아침 readiness 항목) | ≥ 720 | ≥ 1440 |
 | `training_status_key` (**D-1**, 하루 끝 값) | STRAINED, OVERREACHING, UNPRODUCTIVE | |
+
+수면 세 기준(`sleep_seconds` < 5 h hold, < 4 h reduce, `sleep_score` < 50 hold)은 **근거 없음(SLEEP-05), 설계 선택,
+사용자 설정**이다. 근거가 주는 숫자는 건강 목표 "밤 7시간 이상"뿐이고 훈련을 바꾸는 기준은 없다. 그래서 이 세 값은
+`muscle50 settings sleep show|set|reset`(`config\sleep_thresholds.json`)으로 바꿀 수 있다. 파일이 없으면 위 기본값이고
+동작은 지금과 같다. Lookback도 같은 설정을 쓴다. 바꾼 값은 발동한 규칙 문구에 그대로 나온다(예 `sleep_seconds < 21600s`).
 
 Body battery, stress, resting HR은 사용하지 않는다(저장 값이 D의 운동 이후 상태일 수 있음).
 `training_readiness_score`는 표시만 한다(level이 Garmin의 banding).
@@ -520,4 +530,5 @@ Bias 확인(counterfactual, 2026-08-01~10-01 62일 매일 실행, `distribution.
   Butterfly 임계값은 100 m에서 9/21 swim이 발동해 200 m로 올렸다 → 발동 빈도는 보정에 쓴 같은 데이터 기준이다.
 - 2026-09-12 readiness는 하루 끝 값이 저장돼 있다(위 recovery 절).
 - 임계값(HR zone 5 120 s, anaerobic TE 2.5, butterfly 200 m, sleep 4/5 h 등)은 이 계정의 2026-07~09 데이터로
-  보정했다. 데이터가 늘면 발동 빈도를 다시 확인한다.
+  보정했다. 데이터가 늘면 발동 빈도를 다시 확인한다. 수면 기준은 근거 규칙집(SLEEP-05)에서 근거 없음으로 확인돼
+  사용자 설정(`settings sleep`)으로 옮겼다(기본값은 그대로).

@@ -8,6 +8,10 @@ Spec: `docs/specs/inbody-trend.md`. Migration 없음(`007_inbody.sql`의 기존 
   SMM 목표(1차 43 kg, 장기 50 kg)까지 남은 양, 마지막 측정 후 경과 일수를 한 명령으로 보여 준다.
 - 사용자가 수치를 보려고 직접 실행하는 명령이므로 값을 출력한다. `inbody sync`의 "기본은 값 숨김, `--show-values`로만 표시"
   정책은 그대로다. 다른 명령(`daily`, `recommend`, `nutrition` 등)에는 체성분 값을 추가하지 않는다.
+  - 2026-10-26 사용자 결정(D1, Training Goal Mode v1, `docs/training-goal-mode.md`): 목표가 설정되면 `recommend`/`daily`는
+    InBody에서 계산한 **상대 값만**(주당 체중 변화 %, SMM 하한 아래/이상 표시, 목표에 필요한 주당 %) 보여 준다. 측정 kg은
+    보여 주지 않는다. cut 목표의 `nutrition status`는 PRO-05 단백질 범위(g/일)만 보여 준다(제지방량 kg은 출력하지 않음).
+    측정 kg은 여전히 이 명령(`inbody trend`)에만 나온다.
 - Non-goal:
   - 저장 데이터 변경 없음. 같은 측정으로 보이는 행의 자동 병합 없음.
   - 판단·권고 문구 없음(좋다/나쁘다, 칼로리 조정 등). 목표 도달 시점 예측 없음.
@@ -153,6 +157,8 @@ Text 변형:
   "fewer than 2 measurement dates"다. 두 행의 체중이 0.1 단위로 다르면 weight conflict가 보이는데, 이는 정상 동작이다.
 - **여행 중 같은 날짜의 다른 offset 측정**은 UTC 순서가 아니라 저장된 현지 시각 순서로 나온다(위 정렬 규칙).
 - **목표는 코드 기본값**이다. 설정이나 이력이 없고, 목표를 바꾸면 과거 출력도 새 목표로 계산된다.
+- **`inbody trend`는 여전히 SMM 43/50 kg 목표(코드 기본값)를 보여 준다.** 2026-10-26의 cut 목표(`goal set`, SMM 하한 41 kg)는
+  이 명령에 반영되지 않는다. 두 목표가 다르게 보이는 것은 알려진 불일치다(후속 후보: `inbody trend`가 목표 파일 읽기).
 - **오류 언어**: `inbody trend`는 다른 read-only 명령처럼 `오류:`로 시작하고, `inbody sync`는 계속 영어(`InBody sync failed:`)다.
 - **WAL sidecar**: WAL 모드 DB를 read-only로 열면 SQLite가 빈 `-wal`/`-shm` 파일을 남길 수 있다(analytics reader와 같다).
   DB 내용, mtime, WAL 내용은 바뀌지 않는다.
