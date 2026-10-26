@@ -167,6 +167,8 @@ muscle50 daily --after-workout              # 운동 후: activity 가져오기 
 `muscle50 recommend --date <날짜>`와 같은 내용을 그 아래에 그대로 출력합니다. 어느 sync 단계든 실패하면 실패한 단계를
 표시하고 exit code 1로 끝나며, 불완전할 수 있는 데이터로 추천을 만들지 않습니다(이미 저장된 데이터는 유지).
 `garmin refresh`, InBody import, Garmin 첫 로그인(MFA)은 여전히 별도 명령입니다.
+목표 모드가 설정돼 있으면 `daily`는 Garmin 접속 전에 목표·수면 설정 파일을 읽고(깨졌으면 exit 1), 추천에 `recommend`와 같은
+goal 절과 진행 목표가 들어갑니다. `--after-workout`은 목표 파일을 읽지 않습니다(아래 Training goal mode).
 
 **이어 받기**: 동기화 범위는 sync coverage 기록으로 정합니다. 운동·회복이 모두 `synced`이고 그 날이 끝난 뒤에 기록된 마지막
 날의 다음 날부터 오늘까지 받습니다. 시작일은 어제보다 늦지 않고(매일 아침 `daily`를 돌리면 지금처럼 어제~오늘) 7일 전보다
@@ -201,7 +203,46 @@ muscle50 recommend --date 2026-09-24 --focus shoulders   # 오늘 할 focus 직�
 "not synced" 날짜 구분)이, JSON `data_freshness`에는 `sync_coverage_recorded: true`와 마지막 key `sync_coverage`가 추가됩니다
 (`daily`의 추천도 같음). 기록이 없으면 출력은 기존과 같습니다. coverage는 표시만 하고 추천 결정은 바꾸지 않습니다.
 
-규칙과 한계는 `docs/training-recommendation.md`를 참고하세요.
+규칙과 한계는 `docs/training-recommendation.md`를 참고하세요. 목표 모드(cut/maintain/gain)가 설정돼 있으면 아래
+Training goal mode의 goal 절과 진행 목표가 더해집니다.
+
+## Training goal mode (v1)
+
+목표를 **cut(근육 유지하며 감량) / maintain / gain** 중 하나로 직접 정하면 `recommend`, `daily`, `nutrition status`의 진행 목표와
+표시가 그 목표에 맞게 바뀝니다. 목표를 계산하거나 식단 목표·운동 계획을 자동으로 바꾸지 않습니다. 목표는
+`%LOCALAPPDATA%\muscle50\config\training_goal.json`에 저장됩니다(DB migration 없음, 파일은 `goal set`만 만듦).
+
+```powershell
+# <...>에는 본인 목표를 넣으세요(예시 값 없음). 값은 모두 선택이고, 목표 체지방률과 목표 체중은 하나만.
+muscle50 goal set --mode cut --target-body-fat <PCT> --by <YYYY-MM-DD> --min-smm <KG> --weekly-loss <MIN> <MAX>
+muscle50 goal set --mode maintain                         # 또는 --mode gain
+muscle50 goal show                                        # --json 가능. 목표가 없으면 기본 규칙(gain)
+muscle50 goal unset                                       # 목표 지우기(기존 출력으로 돌아감)
+# 훈련 수면 기준(지금 기본값: 5시간 미만 유지, 4시간 미만 감소, 점수 50 미만 유지)
+muscle50 settings sleep show                              # --json 가능
+muscle50 settings sleep set --hold-below-hours <H> --reduce-below-hours <H> --hold-below-score <N>
+muscle50 settings sleep reset                             # 기본값으로
+```
+
+`goal set`은 목표 문서 전체를 바꿉니다(주지 않은 값은 지워짐; 영양소별로 합치는 `nutrition target set`과 다름). 잘못된 값은
+flag와 범위만 말하고 값은 출력하지 않으며 exit 1로 거부합니다(파일은 그대로). 두 명령 모두 DB와 Garmin을 쓰지 않습니다.
+
+- **cut 모드의 진행 목표**: 마지막 session에 무게가 기록된 종목의 `increase_load`/`add_reps`가 `maintain_load`(같은 무게, 같은
+  횟수)가 되고 원래 증가 목표는 선택으로 보여 줍니다. set 수, 종목, focus는 바뀌지 않습니다. maintain과 gain의 진행은 지금과
+  같습니다.
+- **goal 절**(`== Goal: ... ==`, `== Data freshness ==` 앞): 목표, 진행 규칙, 근육별 주 10세트 미만(primary 1, secondary 0.5),
+  InBody 두 측정(7일 이상 간격) 사이 주당 체중 변화 %(cut이면 사용자 목표 범위 밖과 근거 상한 1 %/주 초과를 알림), 골격근량 하한
+  위/아래, 목표까지 필요한 주당 속도, 같은 날 3시간 안에 붙은 러닝과 하체 근력(러닝이 먼저면 "근력 먼저"), 7시간 미만 수면 밤 수. 모두 표시만
+  하고 줄마다 근거 ID(`docs/evidence/training-nutrition-evidence.md`) 또는 `[design]`이 붙습니다. 측정 kg은 보여 주지 않고 속도와
+  flag만 보여 줍니다(측정값은 `inbody trend`). 값이 없으면 0이 아니라 `unknown`입니다.
+- `recommend --json`과 `daily --json`의 추천에는 마지막 key `goal_mode`가 붙고 `recommendation_version`은 1 그대로입니다.
+- 목표 파일이나 수면 설정 파일이 깨졌으면 `recommend`/`daily`는 Garmin 접속 전에 `오류:`로 끝납니다(exit 1). `goal unset`
+  또는 `settings sleep reset`으로 지웁니다.
+- 수면 기준은 근거가 없는 설계 값(SLEEP-05)이라 사용자 설정으로 두었습니다. 설정 파일이 없으면 동작은 이전과 같습니다.
+- 목표가 없으면 `recommend`, `daily`, `analytics snapshot`, `nutrition status` 출력은 이전과 byte-identical입니다. Telegram
+  코치는 `recommend --json`/`nutrition status --json`을 읽으므로 `goal_mode`/`goal_reference`(상대값과 단백질 g 범위)를 받습니다.
+
+상세와 한계: `docs/training-goal-mode.md`.
 
 ## Nutrition logging (MVP)
 
@@ -295,6 +336,12 @@ muscle50 nutrition status                                 # 오늘 섭취 vs 목
 계획된 날의 carbohydrate). 식사 기록이 없으면 0으로 보지 않고 "status를 쓰지 않음"만 표시하며, 값이 없는 item이 있으면 남은 양을
 말하지 않습니다. 영양은 운동 계획을 바꾸거나 취소하지 않습니다. JSON은 끝에 `nutrition` key만 추가됩니다. 상세:
 `docs/nutrition-recommendation.md`.
+
+목표 모드가 cut이면 `nutrition status` 끝에 `Cut goal reference` 줄이 붙습니다: 최근 InBody의 제지방량(체중 - 체지방량) 기준
+감량기 단백질 범위(kg당 2.3~3.1 g, PRO-05)를 g/일로, 열량 결손 상한(하루 약 500 kcal, PRO-04)은 측정할 수 없다는 안내와 함께
+보여 줍니다. 참고일 뿐 목표 값은 바꾸지 않으며, `--json`은 끝에 `goal_reference` key가 붙습니다. 목표 파일이 깨졌으면 이 부분만
+"unavailable" 한 줄이 되고 status는 계속 나옵니다. maintain/gain이나 목표가 없으면 출력은 그대로입니다. 상세:
+`docs/training-goal-mode.md`.
 
 ## 개발 검증
 
