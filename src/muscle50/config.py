@@ -34,6 +34,16 @@ class AppPaths:
         return self.root / "config" / "nutrition_targets.json"
 
     @property
+    def training_goal_path(self) -> Path:
+        # Created only by `goal set` (not by ensure_directories); `goal unset` deletes it.
+        return self.root / "config" / "training_goal.json"
+
+    @property
+    def sleep_thresholds_path(self) -> Path:
+        # Created only by `settings sleep set` (not by ensure_directories); `settings sleep reset` deletes it.
+        return self.root / "config" / "sleep_thresholds.json"
+
+    @property
     def telegram_config_path(self) -> Path:
         # Written by the user (bot token, allowed chats); never created by muscle50.
         return self.root / "config" / "telegram.json"

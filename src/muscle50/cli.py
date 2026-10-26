@@ -96,6 +96,14 @@ from muscle50.application.telegram_bot import (
     TelegramUnavailableError,
 )
 from muscle50.application.telegram_llm import TelegramFileApi, TelegramLlmHandler
+from muscle50.application.training_goal import (
+    ResetSleepThresholds,
+    SetSleepThresholds,
+    SetTrainingGoal,
+    ShowSleepThresholds,
+    ShowTrainingGoal,
+    UnsetTrainingGoal,
+)
 from muscle50.application.training_snapshot import BuildTrainingSnapshot
 from muscle50.config import AppPaths, ConfigurationError
 from muscle50.domain.analytics import DEFAULT_LOOKBACK_DAYS, MAX_LOOKBACK_DAYS, InvalidSnapshotWindowError
@@ -123,6 +131,14 @@ from muscle50.domain.strength_recommendation import StrengthFocus
 from muscle50.domain.swim_normalization import SwimNormalizationError
 from muscle50.domain.sync_catch_up import CATCH_UP_LIMIT_DAYS, GARMIN_SYNC_UNCONFIRMED_MAX_DAYS, DailyCatchUp
 from muscle50.domain.sync_coverage import InvalidCoverageRangeError, coverage_range_dates
+from muscle50.domain.training_goal import (
+    GOAL_FLAGS,
+    GoalMode,
+    GoalSettingsError,
+    TrainingGoal,
+    TrainingGoalError,
+    WeeklyRateRange,
+)
 from muscle50.infrastructure.decimal_text import decimal_from_text
 from muscle50.infrastructure.garmin.client import (
     GarminAuthenticationError,
@@ -156,6 +172,16 @@ from muscle50.infrastructure.telegram.llm_state_store import JsonLlmStateStore
 from muscle50.infrastructure.telegram.photo_store import PhotoStore
 from muscle50.infrastructure.telegram.run_log import RunLog, install_console_event_hook
 from muscle50.infrastructure.telegram.state_store import JsonHandledUpdateStore
+from muscle50.infrastructure.training_goal_store import JsonSleepThresholdRepository, JsonTrainingGoalRepository
+from muscle50.presentation.goal_terminal import (
+    render_goal,
+    render_goal_json,
+    render_goal_removed,
+    render_goal_removed_json,
+    render_sleep_reset,
+    render_sleep_thresholds,
+    render_sleep_thresholds_json,
+)
 from muscle50.presentation.inbody_terminal import render_body_composition_trend, render_body_composition_trend_json
 from muscle50.presentation.nutrition_terminal import (
     render_daily_intake,
@@ -349,6 +375,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     daily.add_argument("--json", action="store_true", help="print stage results and the recommendation as JSON")
     _add_nutrition_parser(commands)
+    _add_goal_parsers(commands)
     inbody = commands.add_parser("inbody", help="InBody body-composition commands")
     inbody_commands = inbody.add_subparsers(dest="inbody_command", required=True)
     inbody_sync = inbody_commands.add_parser("sync", help="Import a Samsung Health companion export")
@@ -776,6 +803,62 @@ def _add_fact_arguments(parser: argparse.ArgumentParser, command: str) -> None:
     )
 
 
+def _add_goal_parsers(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """`goal set|show|unset` and `settings sleep show|set|reset`: user settings files, no database."""
+    goal = commands.add_parser(
+        "goal", help="Training goal mode (cut, maintain or gain) used by recommend, daily and nutrition status"
+    )
+    goal_commands = goal.add_subparsers(dest="goal_command", required=True)
+    goal_set = goal_commands.add_parser(
+        "set", help="Set the training goal; replaces the whole stored goal (flags not given are not kept)"
+    )
+    goal_set.add_argument("--mode", required=True, choices=[mode.value for mode in GoalMode], help="goal mode")
+    goal_set.add_argument("--target-body-fat", metavar="PCT", help="target body fat percent, 3-60 (optional)")
+    goal_set.add_argument(
+        "--target-weight", metavar="KG", help="target body weight in kg, instead of --target-body-fat (optional)"
+    )
+    goal_set.add_argument(
+        "--by", dest="target_date", metavar="YYYY-MM-DD", help="deadline for the target, after today (optional)"
+    )
+    goal_set.add_argument("--min-smm", metavar="KG", help="skeletal muscle mass floor in kg (optional)")
+    goal_set.add_argument(
+        "--weekly-loss",
+        nargs=2,
+        metavar=("MIN", "MAX"),
+        help="cut only: your target weekly loss in percent of body weight, e.g. --weekly-loss 0.3 0.5 (optional)",
+    )
+    goal_set.add_argument("--json", action="store_true", help="print the stored goal as JSON")
+    goal_show = goal_commands.add_parser("show", help="Show the stored training goal (reads the settings file only)")
+    goal_show.add_argument("--json", action="store_true", help="print as JSON")
+    goal_unset = goal_commands.add_parser("unset", help="Remove the training goal (back to the default gain rules)")
+    goal_unset.add_argument("--json", action="store_true", help="print as JSON")
+    settings = commands.add_parser("settings", help="User settings")
+    settings_commands = settings.add_subparsers(dest="settings_command", required=True)
+    sleep_settings = settings_commands.add_parser(
+        "sleep", help="Sleep thresholds of the training recovery rules (a design choice, not evidence)"
+    )
+    sleep_commands = sleep_settings.add_subparsers(dest="sleep_command", required=True)
+    sleep_show = sleep_commands.add_parser("show", help="Show the sleep thresholds in use")
+    sleep_show.add_argument("--json", action="store_true", help="print as JSON")
+    sleep_set = sleep_commands.add_parser(
+        "set", help="Change one or more sleep thresholds (the others keep their current values)"
+    )
+    sleep_set.add_argument(
+        "--hold-below-hours", metavar="H", help="sleep below this many hours holds progression (default 5)"
+    )
+    sleep_set.add_argument(
+        "--reduce-below-hours",
+        metavar="H",
+        help="sleep below this many hours reduces the session (default 4; below the hold threshold)",
+    )
+    sleep_set.add_argument(
+        "--hold-below-score", metavar="N", help="a sleep score below this holds progression (1-100, default 50)"
+    )
+    sleep_set.add_argument("--json", action="store_true", help="print the thresholds in use as JSON")
+    sleep_set.set_defaults(sleep_usage_error=sleep_set.error)
+    sleep_commands.add_parser("reset", help="Go back to the default sleep thresholds (deletes the settings file)")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     _check_meal_entry_arguments(args)
@@ -825,6 +908,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _inbody_trend(args.from_date, args.to_date, as_json=args.json)
     if args.command == "nutrition":
         return _nutrition(args)
+    if args.command == "goal":
+        return _goal(args)
+    if args.command == "settings" and args.settings_command == "sleep":
+        return _settings_sleep(args)
     if args.command == "telegram":
         return _telegram(args)
     return 2
@@ -1508,6 +1595,120 @@ def _nutrition_meal_correction(args: argparse.Namespace, meals: SqliteMealReposi
     # --json is the meal show document of the corrected meal (for merge, the target).
     print(render_logged_meal_json(correction.intake) if args.json else render_meal_correction(correction))
     return 0
+
+
+def _goal(args: argparse.Namespace) -> int:
+    # One settings file only: no ensure_directories(), no database, no Garmin.
+    try:
+        paths = AppPaths.from_environment()
+        repository = JsonTrainingGoalRepository(paths.training_goal_path)
+        if args.goal_command == "set":
+            stored = SetTrainingGoal(repository).execute(_goal_from_arguments(args), today=_today())
+            print(render_goal_json(stored) if args.json else f"Training goal set.\n{render_goal(stored)}")
+            return 0
+        if args.goal_command == "show":
+            goal = ShowTrainingGoal(repository).execute()
+            print(render_goal_json(goal) if args.json else render_goal(goal))
+            return 0
+        if args.goal_command == "unset":
+            removed = UnsetTrainingGoal(repository).execute()
+            print(render_goal_removed_json(removed) if args.json else render_goal_removed(removed))
+            return 0
+        return 2
+    except TrainingGoalError as exc:
+        print(f"오류: {exc} 아무것도 바꾸지 않았습니다.", file=sys.stderr)
+        return 1
+    except (ConfigurationError, GoalSettingsError) as exc:
+        print(f"오류: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\n취소되었습니다.", file=sys.stderr)
+        return 130
+
+
+def _goal_from_arguments(args: argparse.Namespace) -> TrainingGoal:
+    """The goal exactly as given; values are checked here and by validate_goal without being echoed."""
+    target_date: date | None = None
+    if args.target_date is not None:
+        try:
+            target_date = date.fromisoformat(validate_calendar_date(args.target_date))
+        except RecoveryNormalizationError:
+            raise TrainingGoalError("--by는 YYYY-MM-DD 형식이어야 합니다.", "target_date") from None
+    weekly = args.weekly_loss
+    return TrainingGoal(
+        mode=GoalMode(args.mode),
+        target_body_fat_percent=_optional_setting(args.target_body_fat, "target_body_fat_percent"),
+        target_weight_kg=_optional_setting(args.target_weight, "target_weight_kg"),
+        target_date=target_date,
+        min_skeletal_muscle_mass_kg=_optional_setting(args.min_smm, "min_skeletal_muscle_mass_kg"),
+        weekly_loss_percent=None
+        if weekly is None
+        else WeeklyRateRange(
+            _setting_decimal(weekly[0], GOAL_FLAGS["weekly_loss_percent"], "weekly_loss_percent"),
+            _setting_decimal(weekly[1], GOAL_FLAGS["weekly_loss_percent"], "weekly_loss_percent"),
+        ),
+    )
+
+
+def _optional_setting(text: str | None, key: str, flag: str | None = None) -> Decimal | None:
+    return None if text is None else _setting_decimal(text, flag or GOAL_FLAGS[key], key)
+
+
+def _setting_decimal(text: str, flag: str, key: str) -> Decimal:
+    # Never echoes the text: the message names the flag only.
+    try:
+        return decimal_from_text(text)
+    except ValueError:
+        raise TrainingGoalError(f"{flag}는 0 이상의 숫자여야 합니다(예: 18, 0.5).", key) from None
+
+
+def _settings_sleep(args: argparse.Namespace) -> int:
+    # One settings file only: no ensure_directories(), no database, no Garmin.
+    if args.sleep_command == "set" and all(
+        value is None for value in (args.hold_below_hours, args.reduce_below_hours, args.hold_below_score)
+    ):
+        args.sleep_usage_error(
+            "one of the arguments --hold-below-hours --reduce-below-hours --hold-below-score is required"
+        )
+    try:
+        paths = AppPaths.from_environment()
+        repository = JsonSleepThresholdRepository(paths.sleep_thresholds_path)
+        if args.sleep_command == "show":
+            setting = ShowSleepThresholds(repository).execute()
+            print(render_sleep_thresholds_json(setting) if args.json else render_sleep_thresholds(setting))
+            return 0
+        if args.sleep_command == "set":
+            score: int | None = None
+            if args.hold_below_score is not None:
+                if re.fullmatch(r"[0-9]{1,3}", args.hold_below_score) is None:
+                    raise TrainingGoalError("--hold-below-score는 1~100 사이의 정수여야 합니다.", "hold_below_score")
+                score = int(args.hold_below_score)
+            setting = SetSleepThresholds(repository).execute(
+                hold_below_hours=_optional_setting(args.hold_below_hours, "hold_below_seconds", "--hold-below-hours"),
+                reduce_below_hours=_optional_setting(
+                    args.reduce_below_hours, "reduce_below_seconds", "--reduce-below-hours"
+                ),
+                hold_below_score=score,
+            )
+            print(
+                render_sleep_thresholds_json(setting)
+                if args.json
+                else f"Sleep thresholds set.\n{render_sleep_thresholds(setting)}"
+            )
+            return 0
+        if args.sleep_command == "reset":
+            print(render_sleep_reset(ResetSleepThresholds(repository).execute()))
+            return 0
+        return 2
+    except TrainingGoalError as exc:
+        print(f"오류: {exc} 아무것도 바꾸지 않았습니다.", file=sys.stderr)
+        return 1
+    except (ConfigurationError, GoalSettingsError) as exc:
+        print(f"오류: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\n취소되었습니다.", file=sys.stderr)
+        return 130
 
 
 def _now() -> datetime:

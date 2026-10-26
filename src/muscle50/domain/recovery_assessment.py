@@ -35,6 +35,8 @@ from enum import StrEnum
 from muscle50.domain.recovery import DailyRecovery
 
 # Thresholds (account-calibrated against 2026-09 data; see docs/training-recommendation.md).
+# The three sleep thresholds are a design choice, not evidence (SLEEP-05: the evidence gives no
+# training-adjustment cut-off); they are the defaults of a user setting (`settings sleep`).
 SHORT_SLEEP_SECONDS = 5 * 3600
 VERY_SHORT_SLEEP_SECONDS = 4 * 3600
 LOW_SLEEP_SCORE = 50
@@ -62,6 +64,24 @@ _LEVEL_ORDER = {AdjustmentLevel.NORMAL: 0, AdjustmentLevel.HOLD: 1, AdjustmentLe
 
 def stronger(first: AdjustmentLevel, second: AdjustmentLevel) -> AdjustmentLevel:
     return first if _LEVEL_ORDER[first] >= _LEVEL_ORDER[second] else second
+
+
+@dataclass(frozen=True)
+class SleepThresholds:
+    """The sleep rules' thresholds: design choice, not evidence (SLEEP-05); a user setting.
+
+    Whole seconds and an integer score, so a fired rule still reads ``sleep_seconds < 18000s``.
+    """
+
+    short_sleep_seconds: int = SHORT_SLEEP_SECONDS
+    """Below this, ``hold``."""
+    very_short_sleep_seconds: int = VERY_SHORT_SLEEP_SECONDS
+    """Below this, ``reduce``."""
+    low_sleep_score: int = LOW_SLEEP_SCORE
+    """Below this sleep score, ``hold``."""
+
+
+DEFAULT_SLEEP_THRESHOLDS = SleepThresholds()
 
 
 @dataclass(frozen=True)
@@ -110,14 +130,18 @@ class RecoveryAssessment:
         return self.lookback is not None and self.lookback.carried_level is not None
 
 
-def assess_recovery(as_of: date, recoveries: Sequence[DailyRecovery]) -> RecoveryAssessment:
+def assess_recovery(
+    as_of: date,
+    recoveries: Sequence[DailyRecovery],
+    thresholds: SleepThresholds = DEFAULT_SLEEP_THRESHOLDS,
+) -> RecoveryAssessment:
     by_date = {item.calendar_date: item for item in recoveries}
     today = by_date.get(as_of.isoformat())
     previous_day = as_of - timedelta(days=1)
     previous = by_date.get(previous_day.isoformat())
 
     observations = [
-        *_morning_observations(as_of, today, include_hrv=True),
+        *_morning_observations(as_of, today, thresholds, include_hrv=True),
         _categorical(
             "training_status_key",
             previous_day,
@@ -129,7 +153,7 @@ def assess_recovery(as_of: date, recoveries: Sequence[DailyRecovery]) -> Recover
     for item in observations:
         if item.fired_level is not None:
             level = stronger(level, item.fired_level)
-    lookback = _lookback(as_of, today, by_date)
+    lookback = _lookback(as_of, today, by_date, thresholds)
     if lookback is not None and lookback.carried_level is not None:
         level = stronger(level, lookback.carried_level)
     return RecoveryAssessment(
@@ -142,13 +166,18 @@ def assess_recovery(as_of: date, recoveries: Sequence[DailyRecovery]) -> Recover
     )
 
 
-def _morning_observations(day: date, row: DailyRecovery | None, *, include_hrv: bool) -> list[RecoveryObservation]:
+def _morning_observations(
+    day: date, row: DailyRecovery | None, thresholds: SleepThresholds, *, include_hrv: bool
+) -> list[RecoveryObservation]:
     observations = [
         _numeric(
             "sleep_seconds",
             day,
             row.sleep_seconds if row else None,
-            ((VERY_SHORT_SLEEP_SECONDS, AdjustmentLevel.REDUCE), (SHORT_SLEEP_SECONDS, AdjustmentLevel.HOLD)),
+            (
+                (thresholds.very_short_sleep_seconds, AdjustmentLevel.REDUCE),
+                (thresholds.short_sleep_seconds, AdjustmentLevel.HOLD),
+            ),
             below=True,
             unit="s",
         ),
@@ -156,7 +185,7 @@ def _morning_observations(day: date, row: DailyRecovery | None, *, include_hrv: 
             "sleep_score",
             day,
             row.sleep_score if row else None,
-            ((LOW_SLEEP_SCORE, AdjustmentLevel.HOLD),),
+            ((thresholds.low_sleep_score, AdjustmentLevel.HOLD),),
             below=True,
             unit="",
         ),
@@ -197,7 +226,9 @@ def _morning_observations(day: date, row: DailyRecovery | None, *, include_hrv: 
     return observations
 
 
-def _lookback(as_of: date, today: DailyRecovery | None, by_date: dict[str, DailyRecovery]) -> RecoveryLookback | None:
+def _lookback(
+    as_of: date, today: DailyRecovery | None, by_date: dict[str, DailyRecovery], thresholds: SleepThresholds
+) -> RecoveryLookback | None:
     if today is not None and today.sleep_seconds is not None:
         return None
     reason = (
@@ -210,7 +241,7 @@ def _lookback(as_of: date, today: DailyRecovery | None, by_date: dict[str, Daily
     for offset in range(1, LOOKBACK_DAYS + 1):
         day = as_of - timedelta(days=offset)
         # HRV status is a rolling weekly status, not one morning's signal; it is not carried.
-        day_observations = _morning_observations(day, by_date.get(day.isoformat()), include_hrv=False)
+        day_observations = _morning_observations(day, by_date.get(day.isoformat()), thresholds, include_hrv=False)
         observations.extend(day_observations)
         fired = [item for item in day_observations if item.fired_level is not None]
         if fired:
