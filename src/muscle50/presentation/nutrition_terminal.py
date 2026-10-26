@@ -23,6 +23,7 @@ from muscle50.application.nutrition_logging import (
 )
 from muscle50.application.nutrition_recommendation import NutritionContext
 from muscle50.application.nutrition_targets import DailyNutritionStatus, NutrientDayStatus
+from muscle50.domain.goal_mode import CutNutritionReference
 from muscle50.domain.meal_history import MealHistory, MealMerge, recorded_time, timestamp_text
 from muscle50.domain.nutrition import (
     FoodNutritionProfile,
@@ -42,6 +43,7 @@ from muscle50.domain.nutrition_targets import (
 )
 from muscle50.infrastructure.decimal_text import decimal_to_text
 from muscle50.infrastructure.nutrition_target_store import target_payload
+from muscle50.presentation.goal_terminal import goal_reference_lines, goal_reference_payload
 
 _LABELS = {
     NutrientField.CALORIES_KCAL: "kcal",
@@ -428,7 +430,8 @@ def render_targets_json(targets: NutritionTargets) -> str:
     return _dumps({"targets": _targets_payload(targets)})
 
 
-def render_nutrition_status(status: DailyNutritionStatus) -> str:
+def render_nutrition_status(status: DailyNutritionStatus, goal_reference: CutNutritionReference | None = None) -> str:
+    """``goal_reference`` (cut goal only) appends its lines; without one the output is unchanged."""
     intake = status.intake
     nutrition = intake.summary.nutrition
     lines = [
@@ -458,24 +461,31 @@ def render_nutrition_status(status: DailyNutritionStatus) -> str:
         lines.append(f"Estimated: {names} include values from facts marked estimated.")
     if all(status.targets.get(nutrient) is None for nutrient in NutrientField):
         lines.append("No targets set. See: muscle50 nutrition target set --help")
+    if goal_reference is not None:
+        lines.append("")
+        lines.extend(goal_reference_lines(goal_reference))
     return "\n".join(lines)
 
 
-def render_nutrition_status_json(status: DailyNutritionStatus) -> str:
+def render_nutrition_status_json(
+    status: DailyNutritionStatus, goal_reference: CutNutritionReference | None = None
+) -> str:
     intake = status.intake
-    return _dumps(
-        {
-            "date": intake.day.isoformat(),
-            "timezone": intake.timezone_name,
-            "scope": "intake_vs_current_targets",
-            "meal_count": len(intake.meals),
-            "item_count": intake.summary.nutrition.item_count,
-            "nutrients": {
-                day_status.status.nutrient.value: nutrient_status_payload(day_status)
-                for day_status in status.nutrients
-            },
-        }
-    )
+    payload: dict[str, Any] = {
+        "date": intake.day.isoformat(),
+        "timezone": intake.timezone_name,
+        "scope": "intake_vs_current_targets",
+        "meal_count": len(intake.meals),
+        "item_count": intake.summary.nutrition.item_count,
+        "nutrients": {
+            day_status.status.nutrient.value: nutrient_status_payload(day_status)
+            for day_status in status.nutrients
+        },
+    }
+    if goal_reference is not None:
+        # Training Goal Mode v1 (additive): a trailing key, only with a cut goal set.
+        payload["goal_reference"] = goal_reference_payload(goal_reference)
+    return _dumps(payload)
 
 
 def nutrient_status_line(nutrition: NutritionAggregate, status: NutrientTargetStatus) -> str:

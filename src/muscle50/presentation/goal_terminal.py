@@ -13,7 +13,10 @@ from decimal import Decimal
 from typing import Any
 
 from muscle50.domain.goal_mode import (
+    DEFICIT_LIMIT_KCAL,
     GOAL_MODE_VERSION,
+    PROTEIN_G_PER_KG_FAT_FREE_MASS,
+    CutNutritionReference,
     CutProgressionChange,
     GoalModeReport,
     RunLegsPair,
@@ -452,3 +455,58 @@ def _gap_text(minutes: int) -> str:
 
 def _iso(value: date | None) -> str | None:
     return value.isoformat() if value is not None else None
+
+
+# --- the cut reference of `nutrition status` -------------------------------------------------
+
+GOAL_REFERENCE_VERSION = 1
+
+
+def goal_reference_lines(reference: CutNutritionReference) -> list[str]:
+    """Appended to `nutrition status` in cut mode only. The protein grams are the one derived amount
+    shown (D1): they are what the user needs to act on; fat-free mass itself is not printed."""
+    if reference.status == "unavailable":
+        return [f"Goal reference: unavailable ({reference.reason}); nutrition targets are not changed."]
+    low, high = PROTEIN_G_PER_KG_FAT_FREE_MASS
+    ratio = f"{decimal_to_text(low)}-{decimal_to_text(high)} g/kg fat-free mass"
+    lines = ["Cut goal reference (nutrition targets are not changed):"]
+    if reference.protein_min_g is not None and reference.protein_max_g is not None and reference.measurement_date:
+        lines.extend(
+            (
+                f"  Protein [PRO-05]: {ratio} = {decimal_to_text(reference.protein_min_g)}-"
+                f"{decimal_to_text(reference.protein_max_g)} g/day",
+                "    (fat-free mass = weight - body fat mass, InBody "
+                f"{reference.measurement_date.isoformat()} [design])",
+            )
+        )
+    else:
+        lines.append(f"  Protein [PRO-05]: {ratio} = unknown ({reference.reason})")
+    lines.append(
+        f"  Energy deficit [PRO-04]: keep it at or under about {DEFICIT_LIMIT_KCAL} kcal/day; muscle50 cannot "
+        "measure it (maintenance kcal unknown)"
+    )
+    return lines
+
+
+def goal_reference_payload(reference: CutNutritionReference) -> dict[str, Any]:
+    low, high = PROTEIN_G_PER_KG_FAT_FREE_MASS
+    unavailable = reference.status == "unavailable"
+    return {
+        "goal_reference_version": GOAL_REFERENCE_VERSION,
+        "status": reference.status,
+        "mode": None if unavailable else GoalMode.CUT.value,
+        "protein": None
+        if unavailable
+        else {
+            "g_per_kg_fat_free_mass": {"minimum": decimal_to_text(low), "maximum": decimal_to_text(high)},
+            "min_g": decimal_to_text(reference.protein_min_g) if reference.protein_min_g is not None else None,
+            "max_g": decimal_to_text(reference.protein_max_g) if reference.protein_max_g is not None else None,
+            "measurement_date": _iso(reference.measurement_date),
+            "evidence": ["PRO-05", "design"],
+        },
+        "energy_deficit": None
+        if unavailable
+        else {"limit_kcal_per_day": DEFICIT_LIMIT_KCAL, "measurable": False, "evidence": ["PRO-04"]},
+        "targets_changed": False,
+        "reason": reference.reason,
+    }

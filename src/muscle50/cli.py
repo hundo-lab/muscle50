@@ -97,6 +97,7 @@ from muscle50.application.telegram_bot import (
 )
 from muscle50.application.telegram_llm import TelegramFileApi, TelegramLlmHandler
 from muscle50.application.training_goal import (
+    BuildGoalNutritionReference,
     ResetSleepThresholds,
     SetSleepThresholds,
     SetTrainingGoal,
@@ -1556,7 +1557,15 @@ def _nutrition(args: argparse.Namespace) -> int:
             day = _nutrition_date(args.as_of)
             zone = _local_timezone(day)
             status = ShowDailyNutritionStatus(meals, targets).execute(day, zone, timezone_name=offset_name(zone, day))
-            print(render_nutrition_status_json(status) if args.json else render_nutrition_status(status))
+            # Cut goal only: reference lines (PRO-05, PRO-04); an unreadable goal file or InBody degrades them.
+            reference = BuildGoalNutritionReference(
+                JsonTrainingGoalRepository(paths.training_goal_path), SqliteBodyCompositionReader(paths.database_path)
+            ).execute(day)
+            print(
+                render_nutrition_status_json(status, reference)
+                if args.json
+                else render_nutrition_status(status, reference)
+            )
             return 0
         return 2
     except (ConfigurationError, NutritionLoggingError, NutritionTargetError) as exc:

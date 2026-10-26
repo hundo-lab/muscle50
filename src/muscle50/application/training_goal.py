@@ -7,14 +7,19 @@ from datetime import date
 from decimal import Decimal
 from typing import Protocol
 
+from muscle50.application.inbody_trend import BodyCompositionReader
+from muscle50.domain.goal_mode import CutNutritionReference, cut_nutrition_reference
 from muscle50.domain.recovery_assessment import SleepThresholds
 from muscle50.domain.training_goal import (
+    GoalMode,
+    GoalSettingsError,
     SleepThresholdSetting,
     TrainingGoal,
     TrainingGoalError,
     validate_goal,
     validate_sleep_thresholds,
 )
+from muscle50.infrastructure.sqlite.body_composition_reader import BodyCompositionReadError
 
 SECONDS_PER_HOUR = 3600
 
@@ -104,6 +109,32 @@ class ResetSleepThresholds:
 
     def execute(self) -> bool:
         return self._repository.delete()
+
+
+class BuildGoalNutritionReference:
+    """The cut-mode reference lines of `nutrition status` (PRO-05, PRO-04); targets are never touched.
+
+    An extra signal like nutrition next to the plan: an unreadable goal file degrades to one
+    "unavailable" reference and unreadable InBody data to "unknown"; neither fails the status.
+    """
+
+    def __init__(self, goals: TrainingGoalRepository, body_composition: BodyCompositionReader) -> None:
+        self._goals = goals
+        self._body_composition = body_composition
+
+    def execute(self, day: date) -> CutNutritionReference | None:
+        """None unless a cut goal is set (then the status output is unchanged)."""
+        try:
+            goal = self._goals.load()
+        except GoalSettingsError as exc:
+            return CutNutritionReference("unavailable", None, None, None, str(exc))
+        if goal is None or goal.mode is not GoalMode.CUT:
+            return None
+        try:
+            rows = self._body_composition.load_measurements()
+        except BodyCompositionReadError as exc:
+            return cut_nutrition_reference(None, day, f"InBody data unavailable: {exc}")
+        return cut_nutrition_reference(rows, day)
 
 
 def _seconds(hours: Decimal | None, key: str, current: int) -> int:
