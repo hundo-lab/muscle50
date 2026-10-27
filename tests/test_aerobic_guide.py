@@ -117,7 +117,9 @@ def test_a_non_numeric_metric_is_unknown_not_zero() -> None:
         ),
     )
     result = weekly_aerobic_minutes(D, (item,))
-    assert (result.status, result.moderate_minutes, result.vigorous_minutes) == ("lower_bound", 0.0, 5.0)
+    # No activity stored a usable moderate value: that bucket is unknown, not 0; the total is a lower bound.
+    assert (result.status, result.moderate_minutes, result.vigorous_minutes) == ("lower_bound", None, 5.0)
+    assert (result.total_minutes, result.partial_intensity_count) == (5.0, 1)
     assert result.activities[0].moderate_minutes is None
 
 

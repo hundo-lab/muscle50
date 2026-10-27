@@ -89,7 +89,8 @@ schema 2의 값이 null/bool/문자열/소수/범위 밖이거나 cut + `weekly_
 다른 상태:
 
 - 하한 줄은 필요할 때만 나온다. 두 metric 중 하나만 있는 활동은
-  `lower bound: 1 activity has only one of moderate and vigorous stored [design]`(저장된 쪽은 더한다).
+  `lower bound: 1 activity has only one of moderate and vigorous stored [design]`(저장된 쪽은 더한다). 어느 활동도 한 쪽 metric을
+  저장하지 않았으면 그 칸은 0이 아니라 unknown이다(예: `moderate unknown + vigorous 5 = 5 min`, JSON은 null).
 - 센 활동이 없으면 `...: none stored (may be unsynced, not a confirmed rest week) [EXL-03; design]`(0분이 아니다). 모든 활동에
   intensity minutes가 없으면 `...: unknown (no counted activity has intensity minutes) [EXL-03; design]`과 시간 줄.
 - 러닝 알림이 없으면 `    none more than 10 % longer (2 runs compared; 1 skipped: no earlier run with a distance in its 30 days; 1 without a distance, not judged)`
@@ -131,7 +132,7 @@ schema 2의 값이 null/bool/문자열/소수/범위 밖이거나 cut + `weekly_
 | 세는 종류: running, swimming(walking, cycling, strength, other 제외) | — | design, EXL-03/FATEX-01 적용 메모("달리기+수영") | 표시 |
 | 합계 = 저장된 Garmin moderate + vigorous intensity minutes, vigorous는 두 배로 세지 않음 | — | design(D6); 기준선 문구에 EXL-03의 "75 vigorous" | 표시 |
 | 기준선 150분/주 = 지침 최소 | 150 | EXL-03 | 기준선(목표 아님) |
-| 기준선 300분/주 = 연구된 범위의 끝 | 300 | FATEX-02 | 기준선(상한 아님) |
+| 기준선 300분/주 = 연구된 범위의 끝 | 300 | FATEX-02 | 기준선(연구된 범위의 끝) |
 | intensity minutes 없는 활동: 합계에 넣지 않고 시간(moving, 없으면 elapsed)을 따로 표시, 합계는 하한 | — | design(D5) | 표시 |
 | 러닝 알림: 한 번의 거리 > 그 날짜 전 30일 최장 거리 × 1.1 | 30일, 10% | RUNPROG-03 | 알림만(관찰 연관) |
 | 알림 대상 창: D-7..D 날짜의 러닝 | 7일 | design | 표시 |

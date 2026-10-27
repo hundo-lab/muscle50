@@ -17,7 +17,7 @@ docs/evidence/training-nutrition-evidence.md; ``design`` marks a number the evid
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
@@ -36,7 +36,7 @@ AEROBIC_WINDOW_DAYS = 7
 AEROBIC_TYPES = (ActivityType.RUNNING, ActivityType.SWIMMING)
 # EXL-03: the guideline minimum, >= 150 min/week moderate (or 75 vigorous).
 GUIDELINE_MINIMUM_MINUTES = 150
-# FATEX-02: the end of the studied dose range (55-300 min/week); not a ceiling of the benefit.
+# FATEX-02: the end of the studied dose range (55-300 min/week), shown as a reference mark.
 STUDIED_RANGE_END_MINUTES = 300
 # Design: runs dated D-7..D are checked (a run from the last days is "recent").
 RUN_CHECK_WINDOW_DAYS = 7
@@ -85,8 +85,10 @@ class AerobicMinutes:
     to_date: date
     activity_types: tuple[str, ...]
     moderate_minutes: float | None
+    """Sum of the stored moderate minutes; None when no counted activity stored any."""
     vigorous_minutes: float | None
     total_minutes: float | None
+    """Sum of the stored values of both metrics (a lower bound when ``status`` says so)."""
     status: str
     """``known``, ``lower_bound`` (some metric missing), ``unknown`` (none stored) or ``none_stored``."""
     activities: tuple[ActivityAerobicMinutes, ...]
@@ -202,8 +204,8 @@ def weekly_aerobic_minutes(as_of: date, activities: Sequence[NormalizedActivity]
         return AerobicMinutes(
             start, end, types, None, None, None, "unknown", listed, len(without), without_minutes, without_duration, 0
         )
-    moderate = math.fsum(item.moderate_minutes for item in listed if item.moderate_minutes is not None)
-    vigorous = math.fsum(item.vigorous_minutes for item in listed if item.vigorous_minutes is not None)
+    moderate = _stored_sum(item.moderate_minutes for item in listed)
+    vigorous = _stored_sum(item.vigorous_minutes for item in listed)
     status = "lower_bound" if without or partial else "known"
     return AerobicMinutes(
         start,
@@ -211,7 +213,7 @@ def weekly_aerobic_minutes(as_of: date, activities: Sequence[NormalizedActivity]
         types,
         moderate,
         vigorous,
-        math.fsum((moderate, vigorous)),
+        math.fsum(value for value in (moderate, vigorous) if value is not None),
         status,
         listed,
         len(without),
@@ -219,6 +221,12 @@ def weekly_aerobic_minutes(as_of: date, activities: Sequence[NormalizedActivity]
         without_duration,
         partial,
     )
+
+
+def _stored_sum(values: Iterable[float | None]) -> float | None:
+    """The sum of the stored values; None when no activity stored this metric (unknown, never 0)."""
+    stored = [value for value in values if value is not None]
+    return math.fsum(stored) if stored else None
 
 
 def _metric(activity: NormalizedActivity, key: str) -> float | None:
