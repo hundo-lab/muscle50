@@ -24,6 +24,9 @@ TARGET_BODY_FAT_PERCENT_RANGE = (Decimal("3"), Decimal("60"))
 TARGET_WEIGHT_KG_RANGE = (Decimal("30"), Decimal("250"))
 MIN_SKELETAL_MUSCLE_MASS_KG_RANGE = (Decimal("10"), Decimal("100"))
 WEEKLY_LOSS_PERCENT_RANGE = (Decimal("0.05"), Decimal("2.0"))
+# Plateau check weeks (design): PLAT-01 found no evidence-based plateau definition, so this is a user
+# setting; 2-26 weeks is a plausibility range, not evidence (Aerobic Guide v1).
+PLATEAU_WEEKS_RANGE = (2, 26)
 # Sleep threshold bounds (design): 0 < reduce < hold <= 12 h, score 1-100.
 MAX_SLEEP_THRESHOLD_SECONDS = 12 * 3600
 SLEEP_SCORE_RANGE = (1, 100)
@@ -36,6 +39,7 @@ GOAL_FLAGS = {
     "target_date": "--by",
     "min_skeletal_muscle_mass_kg": "--min-smm",
     "weekly_loss_percent": "--weekly-loss",
+    "plateau_weeks": "--plateau-weeks",
 }
 SLEEP_FLAGS = {
     "hold_below_seconds": "--hold-below-hours",
@@ -80,6 +84,9 @@ class TrainingGoal:
     min_skeletal_muscle_mass_kg: Decimal | None = None
     weekly_loss_percent: WeeklyRateRange | None = None
     """Cut only: the user's own target loss range (MAINT-05 gives 0.5-1.0 as the evidence range)."""
+    plateau_weeks: int | None = None
+    """Cut with ``weekly_loss_percent`` only: weeks of InBody intervals below the MIN that count as a
+    plateau (user setting; PLAT-01: no evidence-based definition). None means the check is not set."""
 
 
 @dataclass(frozen=True)
@@ -120,6 +127,14 @@ def validate_goal(goal: TrainingGoal, *, today: date | None = None) -> TrainingG
         _check_range(rate.maximum, WEEKLY_LOSS_PERCENT_RANGE, "weekly_loss_percent")
         if rate.minimum > rate.maximum:
             raise TrainingGoalError("--weekly-loss는 MIN <= MAX여야 합니다.", "weekly_loss_percent")
+    weeks = goal.plateau_weeks
+    if weeks is not None:
+        if goal.mode is not GoalMode.CUT or rate is None:
+            raise TrainingGoalError("--plateau-weeks는 --mode cut과 --weekly-loss가 있어야 합니다.", "plateau_weeks")
+        low, high = PLATEAU_WEEKS_RANGE
+        # A bool is not a number of weeks.
+        if type(weeks) is not int or not low <= weeks <= high:
+            raise TrainingGoalError(f"--plateau-weeks는 {low}~{high} 사이의 정수여야 합니다.", "plateau_weeks")
     return goal
 
 
