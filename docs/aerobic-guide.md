@@ -78,7 +78,7 @@ schema 2의 값이 null/bool/문자열/소수/범위 밖이거나 cut + `weekly_
     2026-11-19 30001: 12.5 km, 25.0 % longer than 10 km (2026-11-02)
   Plateau check [design: user setting, 3 weeks below 0.3 %/week loss, >= 2 InBody intervals]: met
     InBody 2026-10-23 -> 2026-11-06 -> 2026-11-20 (28 d): -0.11, -0.05 %/week [PLAT-01, PLAT-02]
-    note: weight moves about 0.35 % within a week, close to your 0.3-0.5 %/week target; compare same-device, same-condition InBody only [PLAT-02]
+    note: weight moves about 0.35 % within a week [PLAT-02]; your target is 0.3-0.5 %/week (user setting); compare same-device, same-condition InBody only [PLAT-02]
     options, no ranking (fixed display order) [PLAT-06]; your preference and what you can keep up are valid reasons to choose [FATEX-07]:
       a) check that meals are logged completely (missed meals, general-meal estimates, weekends) [PLAT-04]
       b) eat 100-150 kcal/day less; keep the deficit at or under about 500 kcal/day (muscle50 cannot measure it) [design: goals.md step; PRO-04]
@@ -140,7 +140,7 @@ schema 2의 값이 null/bool/문자열/소수/범위 밖이거나 cut + `weekly_
 | 정체 기준 주 수 | 사용자 값 2-26 | design: user setting(PLAT-01: 근거 기반 정의 없음) | 사용자 설정 |
 | 정체 = N주를 덮는 InBody 구간 ≥ 2개가 모두 MIN보다 적게 감량 | 2개 | PLAT-02(한 번 측정·한 구간으로 판단하지 않음) + design | 표시 |
 | 구간 짝짓기: 최근 체중 vs 7일 이상 앞선 마지막 체중(목표 모드 체중 변화와 같음) | 7일 | design | 표시 |
-| 측정 잡음 문구 | 0.35% | PLAT-02 | 문구 |
+| 측정 잡음 문구: 주중 체중 변동 0.35%와 사용자 목표 속도를 나란히 적기만 하고 둘을 비교하지 않음 | 0.35% | PLAT-02 | 문구 |
 | (가) 기록 확인 | — | PLAT-04 | 선택지 |
 | (나) 하루 100-150 kcal 덜 먹기, 결손 약 500 kcal 이하 | 100-150, 500 | design(goals.md 조정 폭) + PRO-04 | 선택지 |
 | (다) 섭취 유지 + 활동 추가(같은 결손이면 같은 지방 감소, 보상 섭취 가능), 러닝 길이·러닝/하체 3 h 간격 | 10%, 3 h | FATEX-05, FATEX-04, RUNPROG-03, CONC-04 | 선택지 |

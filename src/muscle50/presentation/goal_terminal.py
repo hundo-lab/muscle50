@@ -622,8 +622,10 @@ def _plateau_lines(plateau: PlateauCheck, goal: TrainingGoal) -> list[str]:
     ]
     if plateau.status == "met":
         lines.append(
-            f"    note: weight moves about {decimal_to_text(WITHIN_WEEK_WEIGHT_NOISE_PERCENT)} % within a week, close "
-            f"to your {weekly_loss_text(goal)} target; compare same-device, same-condition InBody only [PLAT-02]"
+            # Both values side by side; muscle50 makes no comparison between them.
+            f"    note: weight moves about {decimal_to_text(WITHIN_WEEK_WEIGHT_NOISE_PERCENT)} % within a week "
+            f"[PLAT-02]; your target is {weekly_loss_text(goal)} (user setting); compare same-device, "
+            "same-condition InBody only [PLAT-02]"
         )
         lines.append(
             "    options, no ranking (fixed display order) [PLAT-06]; your preference and what you can keep up are "

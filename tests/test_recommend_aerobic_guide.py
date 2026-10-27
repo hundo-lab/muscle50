@@ -42,8 +42,8 @@ TAIL_LINES = [
     "    2026-11-19 30001: 12.5 km, 25.0 % longer than 10 km (2026-11-02)",
     "  Plateau check [design: user setting, 3 weeks below 0.3 %/week loss, >= 2 InBody intervals]: met",
     "    InBody 2026-10-23 -> 2026-11-06 -> 2026-11-20 (28 d): -0.11, -0.05 %/week [PLAT-01, PLAT-02]",
-    "    note: weight moves about 0.35 % within a week, close to your 0.3-0.5 %/week target; compare same-device, "
-    "same-condition InBody only [PLAT-02]",
+    "    note: weight moves about 0.35 % within a week [PLAT-02]; your target is 0.3-0.5 %/week (user setting); "
+    "compare same-device, same-condition InBody only [PLAT-02]",
     "    options, no ranking (fixed display order) [PLAT-06]; your preference and what you can keep up are valid "
     "reasons to choose [FATEX-07]:",
     "      a) check that meals are logged completely (missed meals, general-meal estimates, weekends) [PLAT-04]",
@@ -343,6 +343,28 @@ def test_one_inbody_interval_is_insufficient(home: Path, capsys: pytest.CaptureF
         "  Plateau check [design: user setting, 3 weeks below 0.3 %/week loss, >= 2 InBody intervals]: insufficient "
         "InBody data (2 weights cover 1 interval; the check needs 3 weeks and at least 2 intervals [PLAT-02])"
     )
+
+
+CLOSENESS_WORDS = ("close", "similar", "near", "about the size", "comparable", "same as", "like your")
+
+
+def test_the_noise_note_makes_no_claim_about_a_far_target(home: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    # A valid but far target (1.5-2.0 %/week): the note shows both values and compares nothing.
+    aerobic.build_database(home)
+    far = list(aerobic.CUT_PLATEAU_GOAL)
+    far[far.index("--weekly-loss") + 1 : far.index("--weekly-loss") + 3] = ["1.5", "2.0"]
+    _out(capsys, *far)
+    tail = _tail(_out(capsys, *RECOMMEND))
+    note = next(line for line in tail if line.startswith("    note: "))
+    assert note == (
+        "    note: weight moves about 0.35 % within a week [PLAT-02]; your target is 1.5-2.0 %/week (user setting); "
+        "compare same-device, same-condition InBody only [PLAT-02]"
+    )
+    for word in CLOSENESS_WORDS:
+        assert word not in note.lower(), word
+    pinned = next(line for line in TAIL_LINES if line.startswith("    note: "))
+    for word in CLOSENESS_WORDS:
+        assert word not in pinned.lower(), word
 
 
 @pytest.mark.parametrize("argv", [goal.GAIN_GOAL, ("goal", "set", "--mode", "maintain")])
