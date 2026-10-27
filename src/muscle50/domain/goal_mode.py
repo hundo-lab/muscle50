@@ -22,6 +22,14 @@ from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
 
 from muscle50.domain.activity import ActivityType, NormalizedActivity
+from muscle50.domain.aerobic_guide import (
+    AerobicMinutes,
+    PlateauCheck,
+    RunLengthReport,
+    plateau_check,
+    run_length_checks,
+    weekly_aerobic_minutes,
+)
 from muscle50.domain.analytics import activity_local_date
 from muscle50.domain.body_composition_trend import (
     InvalidStoredMeasurementError,
@@ -218,6 +226,11 @@ class GoalModeReport:
     goal_progress: GoalProgressRate
     run_legs: RunLegsReport
     sleep: ShortSleepReport
+    aerobic_minutes: AerobicMinutes
+    """Aerobic Guide v1 (display only), like everything after ``progression``."""
+    run_length: RunLengthReport
+    plateau: PlateauCheck | None
+    """Cut only; None for gain and maintain."""
 
 
 @dataclass(frozen=True)
@@ -587,8 +600,13 @@ def build_goal_mode_report(
     body_composition: Sequence[StoredBodyComposition] | None,
     body_composition_error: str | None,
     sleep: SleepThresholdSetting,
+    *,
+    aerobic_activities: Sequence[NormalizedActivity] | None = None,
 ) -> GoalModeReport:
-    """``body_composition`` None means the InBody rows could not be read (``body_composition_error`` says why)."""
+    """``body_composition`` None means the InBody rows could not be read (``body_composition_error`` says why).
+
+    ``aerobic_activities`` is the longer history the aerobic guide reads (D-37..D); None uses ``activities``.
+    """
     points: Points | None = None
     unavailable = f"InBody data unavailable: {body_composition_error}" if body_composition_error else None
     if body_composition is not None:
@@ -597,6 +615,7 @@ def build_goal_mode_report(
         except InvalidStoredMeasurementError:
             unavailable = "InBody data unavailable: a stored InBody measurement cannot be read"
     change = weight_change(goal, points, as_of, unavailable)
+    aerobic = activities if aerobic_activities is None else aerobic_activities
     return GoalModeReport(
         goal=goal,
         progression=progression,
@@ -606,6 +625,9 @@ def build_goal_mode_report(
         goal_progress=goal_progress(goal, points, as_of, change.percent_per_week),
         run_legs=run_legs_pairs(as_of, activities),
         sleep=short_sleep_nights(as_of, recoveries, sleep),
+        aerobic_minutes=weekly_aerobic_minutes(as_of, aerobic),
+        run_length=run_length_checks(as_of, aerobic),
+        plateau=plateau_check(goal, points, as_of, unavailable),
     )
 
 

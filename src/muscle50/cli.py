@@ -830,6 +830,15 @@ def _add_goal_parsers(commands: argparse._SubParsersAction[argparse.ArgumentPars
         metavar=("MIN", "MAX"),
         help="cut only: your target weekly loss in percent of body weight, e.g. --weekly-loss 0.3 0.5 (optional)",
     )
+    goal_set.add_argument(
+        "--plateau-weeks",
+        type=int,
+        metavar="N",
+        help=(
+            "cut only, needs --weekly-loss: weeks of InBody intervals below your MIN that count as a plateau, "
+            "2-26 (optional; design, no evidence-based definition)"
+        ),
+    )
     goal_set.add_argument("--json", action="store_true", help="print the stored goal as JSON")
     goal_show = goal_commands.add_parser("show", help="Show the stored training goal (reads the settings file only)")
     goal_show.add_argument("--json", action="store_true", help="print as JSON")
@@ -1690,6 +1699,7 @@ def _goal_from_arguments(args: argparse.Namespace) -> TrainingGoal:
             _setting_decimal(weekly[0], GOAL_FLAGS["weekly_loss_percent"], "weekly_loss_percent"),
             _setting_decimal(weekly[1], GOAL_FLAGS["weekly_loss_percent"], "weekly_loss_percent"),
         ),
+        plateau_weeks=args.plateau_weeks,
     )
 
 

@@ -5,6 +5,10 @@ versioned, written atomically, read strictly (exact keys, decimal strings for de
 for the sleep thresholds) and validated with the same rules as the command that writes it. An
 invalid file is an error that names the key but never the value; a missing file means "not set"
 (no goal; default sleep thresholds). Reading never creates a file or a directory.
+
+The goal file is schema 1 unless the goal has a plateau setting (Aerobic Guide v1): then it is
+schema 2, the same keys plus a trailing ``plateau_weeks``. A goal without that setting is written
+as schema 1, byte for byte as before. The sleep thresholds file is schema 1 only.
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ from muscle50.domain.training_goal import (
 from muscle50.infrastructure.decimal_text import decimal_from_text, decimal_to_text
 
 SCHEMA_VERSION = 1
+PLATEAU_SCHEMA_VERSION = 2
 GOAL_KEYS = (
     "mode",
     "target_body_fat_percent",
@@ -42,6 +47,7 @@ GOAL_KEYS = (
     "min_skeletal_muscle_mass_kg",
     "weekly_loss_percent",
 )
+PLATEAU_GOAL_KEYS = (*GOAL_KEYS, "plateau_weeks")
 SLEEP_KEYS = ("hold_below_seconds", "reduce_below_seconds", "hold_below_score")
 
 
@@ -63,7 +69,8 @@ class JsonTrainingGoalRepository:
             raise GoalSettingsError(f"training goal file {self._path} is not valid ({exc})") from None
 
     def save(self, goal: TrainingGoal) -> None:
-        _write(self._path, {"schema_version": SCHEMA_VERSION, "goal": goal_payload(goal)})
+        version = SCHEMA_VERSION if goal.plateau_weeks is None else PLATEAU_SCHEMA_VERSION
+        _write(self._path, {"schema_version": version, "goal": goal_payload(goal)})
 
     def delete(self) -> bool:
         return _delete(self._path)
@@ -90,9 +97,13 @@ class JsonSleepThresholdRepository:
 
 
 def goal_payload(goal: TrainingGoal) -> dict[str, Any]:
-    """The goal in the file's (and every JSON output's) exact key order, decimals as strings."""
+    """The goal in the file's (and every JSON output's) exact key order, decimals as strings.
+
+    ``plateau_weeks`` is a trailing key present only when it is set, so a goal without it keeps
+    exactly the schema 1 payload.
+    """
     rate = goal.weekly_loss_percent
-    return {
+    payload: dict[str, Any] = {
         "mode": goal.mode.value,
         "target_body_fat_percent": _text(goal.target_body_fat_percent),
         "target_weight_kg": _text(goal.target_weight_kg),
@@ -102,6 +113,9 @@ def goal_payload(goal: TrainingGoal) -> dict[str, Any]:
         if rate is None
         else {"minimum": decimal_to_text(rate.minimum), "maximum": decimal_to_text(rate.maximum)},
     }
+    if goal.plateau_weeks is not None:
+        payload["plateau_weeks"] = goal.plateau_weeks
+    return payload
 
 
 def sleep_payload(thresholds: SleepThresholds) -> dict[str, int]:
@@ -148,25 +162,30 @@ def _delete(path: Path) -> bool:
     return True
 
 
-def _envelope(document: Any, body_key: str) -> Any:
+def _envelope(document: Any, body_key: str, versions: frozenset[int] = frozenset({SCHEMA_VERSION})) -> tuple[int, Any]:
     if not isinstance(document, dict) or set(document) != {"schema_version", body_key}:
         raise _InvalidKey(f"expected exactly the keys schema_version and {body_key}")
     version = document["schema_version"]
-    if type(version) is not int or version != SCHEMA_VERSION:
+    if type(version) is not int or version not in versions:
         raise _InvalidKey("schema_version")
-    return document[body_key]
+    return version, document[body_key]
 
 
 def _goal_from_document(document: Any) -> TrainingGoal:
-    body = _envelope(document, "goal")
-    if not isinstance(body, dict) or set(body) != set(GOAL_KEYS):
-        raise _InvalidKey(f"goal must list exactly {', '.join(GOAL_KEYS)}")
+    version, body = _envelope(document, "goal", frozenset({SCHEMA_VERSION, PLATEAU_SCHEMA_VERSION}))
+    keys = GOAL_KEYS if version == SCHEMA_VERSION else PLATEAU_GOAL_KEYS
+    if not isinstance(body, dict) or set(body) != set(keys):
+        raise _InvalidKey(f"goal must list exactly {', '.join(keys)}")
     mode_text = body["mode"]
     if not isinstance(mode_text, str) or mode_text not in {mode.value for mode in GoalMode}:
         raise _InvalidKey("mode")
     rate = body["weekly_loss_percent"]
     if rate is not None and (not isinstance(rate, dict) or set(rate) != {"minimum", "maximum"}):
         raise _InvalidKey("weekly_loss_percent")
+    plateau_weeks = body.get("plateau_weeks")
+    # Schema 2 always sets it: a whole number (a bool, a string or null is not).
+    if version == PLATEAU_SCHEMA_VERSION and type(plateau_weeks) is not int:
+        raise _InvalidKey("plateau_weeks")
     goal = TrainingGoal(
         mode=GoalMode(mode_text),
         target_body_fat_percent=_optional_decimal(body, "target_body_fat_percent"),
@@ -178,6 +197,7 @@ def _goal_from_document(document: Any) -> TrainingGoal:
         else WeeklyRateRange(
             _decimal(rate["minimum"], "weekly_loss_percent"), _decimal(rate["maximum"], "weekly_loss_percent")
         ),
+        plateau_weeks=plateau_weeks,
     )
     try:
         # No ``today``: a deadline that has passed still loads (it is reported as passed).
@@ -187,7 +207,7 @@ def _goal_from_document(document: Any) -> TrainingGoal:
 
 
 def _sleep_from_document(document: Any) -> SleepThresholds:
-    body = _envelope(document, "sleep_thresholds")
+    _version, body = _envelope(document, "sleep_thresholds")
     if not isinstance(body, dict) or set(body) != set(SLEEP_KEYS):
         raise _InvalidKey(f"sleep_thresholds must list exactly {', '.join(SLEEP_KEYS)}")
     for key in SLEEP_KEYS:

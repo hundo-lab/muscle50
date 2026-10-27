@@ -226,6 +226,16 @@ CUT_SECTION = [
     "    2026-03-12: run 07:00, legs 08:00 (1 h apart): lift first next time [CONC-05]",
     "  Nights under 7 h, 2026-03-10..2026-03-16: 0 of 1 with sleep data, 6 without [SLEEP-05, display only]",
     "    training sleep rules [design]: hold < 5 h, reduce < 4 h, score < 50 (default; not evidence-based, SLEEP-05)",
+    # Aerobic Guide v1 (additive): run 9001 on 03-12 has 1 + 1 intensity minutes; swim 8100 is on D.
+    "  Aerobic minutes 2026-03-09..2026-03-15 (running, swimming): moderate 1 + vigorous 1 = 2 min "
+    "[EXL-03; design: Garmin intensity minutes, vigorous not doubled]",
+    "    reference marks: 150 min/week, the guideline minimum (or 75 vigorous) [EXL-03]; 300 min/week, the end of "
+    "the studied range [FATEX-02]",
+    "  Run length vs the longest run in the 30 days before it, 2026-03-09..2026-03-16 "
+    "[RUNPROG-03: observational link with overuse injury; notice only]:",
+    "    none more than 10 % longer (1 skipped: no earlier run with a distance in its 30 days)",
+    "  Plateau check: not set (goal set ... --plateau-weeks N; there is no evidence-based plateau definition) "
+    "[design; PLAT-01]",
 ]
 
 
@@ -252,6 +262,9 @@ def test_cut_section_with_inbody_and_a_run_before_legs(
         "goal_progress",
         "run_legs",
         "sleep",
+        "aerobic_minutes",
+        "run_length",
+        "plateau",
     ]
     assert report["weight_change"]["percent_per_week"] == "-0.62"
     assert report["weight_change"]["flags"] == ["outside_user_target"]

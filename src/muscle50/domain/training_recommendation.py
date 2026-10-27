@@ -125,11 +125,13 @@ def build_training_recommendation(
     body_composition: Sequence[StoredBodyComposition] | None = (),
     body_composition_error: str | None = None,
     sleep: SleepThresholdSetting = DEFAULT_SLEEP_SETTING,
+    aerobic_activities: Sequence[NormalizedActivity] | None = None,
 ) -> TrainingRecommendation:
     """Without ``goal`` and with the default ``sleep`` setting the result is exactly as before.
 
     ``body_composition`` None means the InBody rows could not be read (``body_composition_error``);
-    they are used for goal-mode display lines only.
+    they are used for goal-mode display lines only. ``aerobic_activities`` (goal mode only) is the
+    longer history of the aerobic guide; None uses the recommendation window.
     """
     start = history_start(as_of)
     previous_day = as_of - timedelta(days=1)
@@ -232,6 +234,7 @@ def build_training_recommendation(
             body_composition,
             body_composition_error,
             sleep,
+            aerobic_activities=aerobic_activities,
         ),
     )
 

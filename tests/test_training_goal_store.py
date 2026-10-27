@@ -105,7 +105,7 @@ def _goal_with(**changes: Any) -> dict[str, Any]:
         (_goal_with(weekly_loss_percent={"minimum": SECRET, "maximum": "0.5"}), "(weekly_loss_percent)"),
         (_goal_with(weekly_loss_percent={"minimum": "0.5", "maximum": "0.3"}), "(weekly_loss_percent)"),
         (_goal_with(mode="gain"), "(weekly_loss_percent)"),  # weekly loss outside cut
-        ({"schema_version": 2, "goal": GOAL_DOCUMENT["goal"]}, "(schema_version)"),
+        ({"schema_version": 3, "goal": GOAL_DOCUMENT["goal"]}, "(schema_version)"),
         ({"schema_version": 1}, "expected exactly the keys"),
         ([SECRET], "expected exactly the keys"),
     ],

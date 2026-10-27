@@ -7,6 +7,8 @@ from datetime import date
 
 from muscle50.application.inbody_trend import BodyCompositionReader
 from muscle50.application.training_snapshot import TrainingDataReader
+from muscle50.domain.activity import NormalizedActivity
+from muscle50.domain.aerobic_guide import aerobic_history_start
 from muscle50.domain.body_composition_trend import StoredBodyComposition
 from muscle50.domain.exercise_taxonomy import MuscleGroup
 from muscle50.domain.strength_recommendation import StrengthFocus
@@ -46,8 +48,12 @@ class BuildTrainingRecommendation:
         data = self._reader.load(history_start(as_of), as_of)
         rows: tuple[StoredBodyComposition, ...] | None = ()
         error: str | None = None
+        aerobic: tuple[NormalizedActivity, ...] | None = None
         if self._goal is not None:
             rows, error = self._measurements()
+            # The aerobic guide needs 37 days (a run's 30-day baseline); a separate read keeps the
+            # plan inputs above exactly as they were.
+            aerobic = self._reader.load(aerobic_history_start(as_of), as_of).activities
         return build_training_recommendation(
             as_of,
             data.activities,
@@ -61,6 +67,7 @@ class BuildTrainingRecommendation:
             body_composition=rows,
             body_composition_error=error,
             sleep=self._sleep,
+            aerobic_activities=aerobic,
         )
 
     def _measurements(self) -> tuple[tuple[StoredBodyComposition, ...] | None, str | None]:

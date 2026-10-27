@@ -9,13 +9,30 @@ from __future__ import annotations
 
 import json
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any
 
+from muscle50.domain.aerobic_guide import (
+    CHOICE_EVIDENCE,
+    EAT_LESS_STEP_KCAL,
+    GUIDELINE_MINIMUM_MINUTES,
+    MAINTENANCE_WEEKS,
+    NOISE_EVIDENCE,
+    PLATEAU_MIN_INTERVALS,
+    RUN_LONGER_THRESHOLD_PERCENT,
+    STUDIED_RANGE_END_MINUTES,
+    WITHIN_WEEK_WEIGHT_NOISE_PERCENT,
+    AerobicMinutes,
+    PlateauCheck,
+    PlateauOption,
+    RunLengthCheck,
+    RunLengthReport,
+)
 from muscle50.domain.goal_mode import (
     DEFICIT_LIMIT_KCAL,
     GOAL_MODE_VERSION,
     PROTEIN_G_PER_KG_FAT_FREE_MASS,
+    RUN_LEGS_GAP_HOURS,
     CutNutritionReference,
     CutProgressionChange,
     GoalModeReport,
@@ -63,6 +80,11 @@ def render_goal(goal: TrainingGoal | None) -> str:
     ]
     if goal.mode is GoalMode.CUT:
         lines.append(f"  weekly loss target: {weekly_loss_text(goal)} (evidence range {EVIDENCE_LOSS_TEXT} [MAINT-05])")
+        if goal.plateau_weeks is not None:
+            lines.append(
+                f"  plateau check: {plateau_setting_text(goal)} (user setting [design]; no evidence-based "
+                "definition [PLAT-01])"
+            )
         lines.append(
             "  effects: progression keeps load and reps (maintain_load [MAINT-02]); goal lines in recommend/daily;"
         )
@@ -95,6 +117,13 @@ def goal_target_text(goal: TrainingGoal) -> str:
     else:
         return "target: not set"
     return f"{target} by {goal.target_date.isoformat()}" if goal.target_date is not None else target
+
+
+def plateau_setting_text(goal: TrainingGoal) -> str:
+    """``3 weeks below 0.3 %/week loss, at least 2 InBody intervals`` (the threshold is the --weekly-loss MIN)."""
+    rate = goal.weekly_loss_percent
+    below = decimal_to_text(rate.minimum) if rate is not None else "unknown"
+    return f"{goal.plateau_weeks} weeks below {below} %/week loss, at least {PLATEAU_MIN_INTERVALS} InBody intervals"
 
 
 def weekly_loss_text(goal: TrainingGoal) -> str:
@@ -230,6 +259,10 @@ def goal_mode_lines(report: GoalModeReport) -> list[str]:
         "[SLEEP-05, display only]"
     )
     lines.append(f"    training sleep rules [design]: {sleep_rules_text(sleep.rules)}")
+    lines.extend(_aerobic_lines(report.aerobic_minutes))
+    lines.extend(_run_length_lines(report.run_length))
+    if report.plateau is not None:
+        lines.extend(_plateau_lines(report.plateau, goal))
     return lines
 
 
@@ -348,6 +381,9 @@ def goal_mode_payload(report: GoalModeReport) -> dict[str, Any]:
             "evidence": list(sleep.evidence),
             "training_rules": sleep_rules_payload(sleep.rules),
         },
+        "aerobic_minutes": _aerobic_payload(report.aerobic_minutes),
+        "run_length": _run_length_payload(report.run_length),
+        "plateau": _plateau_payload(report.plateau) if report.plateau is not None else None,
     }
 
 
@@ -451,6 +487,274 @@ def _gap_text(minutes: int) -> str:
         return f"{minutes} min"
     hours, rest = divmod(minutes, 60)
     return f"{hours} h" if rest == 0 else f"{hours} h {rest} min"
+
+
+# --- aerobic guide (Aerobic Guide v1, display only) --------------------------------------------
+
+# FATEX-02: 300 is the end of the studied range; the wording never presents it as a point past which
+# the benefit is gone.
+_REFERENCE_TEXT = (
+    f"    reference marks: {GUIDELINE_MINIMUM_MINUTES} min/week, the guideline minimum (or 75 vigorous) [EXL-03]; "
+    f"{STUDIED_RANGE_END_MINUTES} min/week, the end of the studied range [FATEX-02]"
+)
+_NO_PREVIOUS_TEXT = "no earlier run with a distance in its 30 days"
+# A fixed display order, not a ranking (PLAT-06).
+_OPTION_TEXT = {
+    "check_meal_logging": (
+        "a) check that meals are logged completely (missed meals, general-meal estimates, weekends) [PLAT-04]"
+    ),
+    "eat_less": (
+        f"b) eat {EAT_LESS_STEP_KCAL[0]}-{EAT_LESS_STEP_KCAL[1]} kcal/day less; keep the deficit at or under about "
+        f"{DEFICIT_LIMIT_KCAL} kcal/day (muscle50 cannot measure it) [design: goals.md step; PRO-04]"
+    ),
+    "keep_intake_add_activity": (
+        "c) keep intake, add activity: the same deficit gave the same fat loss, but extra eating can offset part of "
+        f"it [FATEX-05, FATEX-04]; watch run length and the {RUN_LEGS_GAP_HOURS} h run/legs gap [RUNPROG-03, CONC-04]"
+    ),
+    "maintenance_week": (
+        "d) one maintenance week: weight may rise from glycogen and water, and the deadline moves by a week [PLAT-05]"
+    ),
+}
+
+
+def _aerobic_lines(aerobic: AerobicMinutes) -> list[str]:
+    head = (
+        f"  Aerobic minutes {aerobic.from_date.isoformat()}..{aerobic.to_date.isoformat()} "
+        f"({', '.join(aerobic.activity_types)}): "
+    )
+    if aerobic.status == "none_stored":
+        return [f"{head}none stored (may be unsynced, not a confirmed rest week) [EXL-03; design]", _REFERENCE_TEXT]
+    if aerobic.status == "unknown":
+        return [
+            f"{head}unknown (no counted activity has intensity minutes) [EXL-03; design]",
+            _REFERENCE_TEXT,
+            f"    {_without_intensity_text(aerobic)} [design]",
+        ]
+    lines = [
+        f"{head}moderate {_minutes(aerobic.moderate_minutes)} + vigorous {_minutes(aerobic.vigorous_minutes)} = "
+        f"{_minutes(aerobic.total_minutes)} min [EXL-03; design: Garmin intensity minutes, vigorous not doubled]",
+        _REFERENCE_TEXT,
+    ]
+    if aerobic.status == "lower_bound":
+        parts = []
+        if aerobic.without_intensity_count:
+            parts.append(_without_intensity_text(aerobic, " not counted"))
+        if aerobic.partial_intensity_count:
+            count = aerobic.partial_intensity_count
+            parts.append(
+                f"{count} {_plural(count, 'activity has', 'activities have')} only one of moderate and vigorous stored"
+            )
+        lines.append(f"    lower bound: {'; '.join(parts)} [design]")
+    return lines
+
+
+def _without_intensity_text(aerobic: AerobicMinutes, suffix: str = "") -> str:
+    count = aerobic.without_intensity_count
+    text = f"{count} {_plural(count, 'activity', 'activities')} without intensity minutes{suffix}"
+    details = []
+    if aerobic.without_intensity_duration_minutes is not None:
+        details.append(f"duration {aerobic.without_intensity_duration_minutes} min, intensity unknown")
+    if aerobic.without_duration_count:
+        details.append(f"{aerobic.without_duration_count} without a duration either")
+    return f"{text} ({'; '.join(details)})" if details else text
+
+
+def _run_length_lines(report: RunLengthReport) -> list[str]:
+    lines = [
+        f"  Run length vs the longest run in the {report.previous_days} days before it, "
+        f"{report.from_date.isoformat()}..{report.to_date.isoformat()} "
+        "[RUNPROG-03: observational link with overuse injury; notice only]:"
+    ]
+    flagged = [run for run in report.runs if run.status == "longer_than_threshold"]
+    lines.extend(f"    {_run_text(run)}" for run in flagged)
+    if not report.runs:
+        lines.append("    no run stored in this window")
+    elif not flagged:
+        compared = sum(1 for run in report.runs if run.status == "within")
+        skipped = sum(1 for run in report.runs if run.status == "no_previous_run")
+        no_distance = sum(1 for run in report.runs if run.status == "no_distance")
+        parts = []
+        if compared:
+            parts.append(f"{compared} {_plural(compared, 'run', 'runs')} compared")
+        if skipped:
+            parts.append(f"{skipped} skipped: {_NO_PREVIOUS_TEXT}")
+        if no_distance:
+            parts.append(f"{no_distance} without a distance, not judged")
+        lines.append(f"    none more than {report.threshold_percent} % longer ({'; '.join(parts)})")
+    return lines
+
+
+def _run_text(run: RunLengthCheck) -> str:
+    assert run.distance_meters is not None and run.longest_previous_meters is not None
+    assert run.longest_previous_date is not None and run.increase_percent is not None
+    where = run.longest_previous_date.isoformat()
+    if run.baseline_lower_bound:
+        count = run.previous_without_distance
+        where += f"; {count} earlier {_plural(count, 'run', 'runs')} had no distance, so the longest may be longer"
+    return (
+        f"{run.local_date.isoformat()} {run.source_activity_id}: {_km(run.distance_meters)} km, "
+        f"{format(run.increase_percent, 'f')} % longer than {_km(run.longest_previous_meters)} km ({where})"
+    )
+
+
+def _plateau_lines(plateau: PlateauCheck, goal: TrainingGoal) -> list[str]:
+    if plateau.status == "not_set" or plateau.below_loss_percent is None:
+        return [
+            "  Plateau check: not set (goal set ... --plateau-weeks N; there is no evidence-based plateau "
+            "definition) [design; PLAT-01]"
+        ]
+    head = (
+        f"  Plateau check [design: user setting, {plateau.weeks} weeks below "
+        f"{decimal_to_text(plateau.below_loss_percent)} %/week loss, >= {PLATEAU_MIN_INTERVALS} InBody intervals]: "
+    )
+    if plateau.status == "unknown":
+        return [f"{head}unknown ({plateau.reason})"]
+    if plateau.status == "insufficient_measurements":
+        return [f"{head}insufficient InBody data ({plateau.reason} [PLAT-02])"]
+    oldest_first = tuple(reversed(plateau.intervals))
+    dates = " -> ".join(
+        [oldest_first[0].from_date.isoformat(), *(interval.to_date.isoformat() for interval in oldest_first)]
+    )
+    rates = ", ".join(percent_text(interval.percent_per_week) or "" for interval in oldest_first)
+    lines = [
+        f"{head}{'met' if plateau.status == 'met' else 'not met'}",
+        f"    InBody {dates} ({plateau.span_days} d): {rates} %/week [PLAT-01, PLAT-02]",
+    ]
+    if plateau.status == "met":
+        lines.append(
+            f"    note: weight moves about {decimal_to_text(WITHIN_WEEK_WEIGHT_NOISE_PERCENT)} % within a week, close "
+            f"to your {weekly_loss_text(goal)} target; compare same-device, same-condition InBody only [PLAT-02]"
+        )
+        lines.append(
+            "    options, no ranking (fixed display order) [PLAT-06]; your preference and what you can keep up are "
+            "valid reasons to choose [FATEX-07]:"
+        )
+        lines.extend(f"      {_OPTION_TEXT[option.code]}" for option in plateau.options)
+    return lines
+
+
+def _aerobic_payload(aerobic: AerobicMinutes) -> dict[str, Any]:
+    return {
+        "from": aerobic.from_date.isoformat(),
+        "to": aerobic.to_date.isoformat(),
+        "activity_types": list(aerobic.activity_types),
+        "status": aerobic.status,
+        "moderate_minutes": aerobic.moderate_minutes,
+        "vigorous_minutes": aerobic.vigorous_minutes,
+        "total_minutes": aerobic.total_minutes,
+        "vigorous_counted_as": "minutes",
+        "activities": [
+            {
+                "source_activity_id": item.source_activity_id,
+                "date": item.local_date.isoformat(),
+                "type": item.activity_type,
+                "moderate_minutes": item.moderate_minutes,
+                "vigorous_minutes": item.vigorous_minutes,
+                "duration_minutes": item.duration_minutes,
+            }
+            for item in aerobic.activities
+        ],
+        "without_intensity_minutes": {
+            "activity_count": aerobic.without_intensity_count,
+            "duration_minutes": aerobic.without_intensity_duration_minutes,
+            "without_duration": aerobic.without_duration_count,
+            "one_metric_only_count": aerobic.partial_intensity_count,
+        },
+        "reference_minutes_per_week": [
+            {"minutes": GUIDELINE_MINIMUM_MINUTES, "meaning": "guideline_minimum", "evidence": ["EXL-03"]},
+            {"minutes": STUDIED_RANGE_END_MINUTES, "meaning": "end_of_studied_range", "evidence": ["FATEX-02"]},
+        ],
+        "evidence": list(aerobic.evidence),
+    }
+
+
+def _run_length_payload(report: RunLengthReport) -> dict[str, Any]:
+    return {
+        "from": report.from_date.isoformat(),
+        "to": report.to_date.isoformat(),
+        "previous_days": report.previous_days,
+        "threshold_percent": report.threshold_percent,
+        "basis": "distance",
+        "notice_only": True,
+        "evidence": list(report.evidence),
+        "runs": [
+            {
+                "source_activity_id": run.source_activity_id,
+                "date": run.local_date.isoformat(),
+                "distance_meters": run.distance_meters,
+                "longest_previous_meters": run.longest_previous_meters,
+                "longest_previous_activity_id": run.longest_previous_activity_id,
+                "longest_previous_date": _iso(run.longest_previous_date),
+                "previous_without_distance": run.previous_without_distance,
+                "baseline_lower_bound": run.baseline_lower_bound,
+                "increase_percent": format(run.increase_percent, "f") if run.increase_percent is not None else None,
+                "status": run.status,
+            }
+            for run in report.runs
+        ],
+    }
+
+
+def _plateau_payload(plateau: PlateauCheck) -> dict[str, Any]:
+    below = plateau.below_loss_percent
+    return {
+        "status": plateau.status,
+        "weeks": plateau.weeks,
+        "below_loss_percent_per_week": decimal_to_text(below) if below is not None else None,
+        "source": "user_setting" if plateau.weeks is not None else None,
+        "min_intervals": PLATEAU_MIN_INTERVALS,
+        "intervals": [
+            {
+                "from_date": interval.from_date.isoformat(),
+                "to_date": interval.to_date.isoformat(),
+                "days": interval.days,
+                "percent_per_week": percent_text(interval.percent_per_week),
+            }
+            for interval in plateau.intervals
+        ],
+        "span_days": plateau.span_days,
+        "latest_measurement_date": _iso(plateau.latest_measurement_date),
+        "days_since_latest_measurement": plateau.days_since_latest_measurement,
+        "reason": plateau.reason,
+        "evidence": list(plateau.evidence),
+        "noise": {
+            "within_week_weight_percent": decimal_to_text(WITHIN_WEEK_WEIGHT_NOISE_PERCENT),
+            "evidence": list(NOISE_EVIDENCE),
+        },
+        "options_ranked": False,
+        "choice_evidence": list(CHOICE_EVIDENCE),
+        "options": [_option_payload(option) for option in plateau.options],
+    }
+
+
+def _option_payload(option: PlateauOption) -> dict[str, Any]:
+    payload: dict[str, Any] = {"code": option.code}
+    if option.code == "eat_less":
+        payload["step_kcal_per_day"] = {"minimum": EAT_LESS_STEP_KCAL[0], "maximum": EAT_LESS_STEP_KCAL[1]}
+        payload["step_source"] = "docs/goals.md"
+        payload["deficit_limit_kcal_per_day"] = DEFICIT_LIMIT_KCAL
+        payload["deficit_measurable"] = False
+    elif option.code == "keep_intake_add_activity":
+        payload["run_length_threshold_percent"] = RUN_LONGER_THRESHOLD_PERCENT
+        payload["run_legs_gap_hours"] = RUN_LEGS_GAP_HOURS
+    elif option.code == "maintenance_week":
+        payload["weeks"] = MAINTENANCE_WEEKS
+    payload["evidence"] = list(option.evidence)
+    return payload
+
+
+def _minutes(value: float | None) -> str:
+    return f"{value:g}" if value is not None else "unknown"
+
+
+def _km(meters: float) -> str:
+    """Meters as km at 0.01 (HALF_EVEN), without trailing zeros (``12.5``, ``10``)."""
+    kilometers = (Decimal(repr(meters)) / Decimal(1000)).quantize(Decimal("0.01"), rounding=ROUND_HALF_EVEN)
+    return format(kilometers.normalize(), "f")
+
+
+def _plural(count: int, one: str, many: str) -> str:
+    return one if count == 1 else many
 
 
 def _iso(value: date | None) -> str | None:
