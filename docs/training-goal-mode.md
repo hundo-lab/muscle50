@@ -18,7 +18,7 @@
 ## 명령
 
 ```powershell
-muscle50 goal set --mode cut --target-body-fat 18 --by 2027-02-28 --min-smm 41 --weekly-loss 0.3 0.5
+muscle50 goal set --mode cut --target-body-fat 18 --by 2027-02-28 --min-smm 41 --weekly-loss 0.3 0.5 [--plateau-weeks N]
 muscle50 goal show [--json]
 muscle50 goal unset [--json]
 muscle50 settings sleep show [--json]
@@ -27,7 +27,8 @@ muscle50 settings sleep reset
 ```
 
 - `goal set`: `--mode`(필수), `--target-body-fat PCT` 또는 `--target-weight KG`(하나만), `--by YYYY-MM-DD`(목표가 있어야 하고
-  오늘 이후), `--min-smm KG`, `--weekly-loss MIN MAX`(cut만, MIN ≤ MAX). **문서 전체를 바꾼다**(주지 않은 값은 지워진다;
+  오늘 이후), `--min-smm KG`, `--weekly-loss MIN MAX`(cut만, MIN ≤ MAX), `--plateau-weeks N`(cut이고 `--weekly-loss`가 있을
+  때만, 2-26 `[design]`; Aerobic Guide v1의 정체 확인, `docs/aerobic-guide.md`). **문서 전체를 바꾼다**(주지 않은 값은 지워진다;
   `nutrition target set`의 영양소별 병합과 다르다, D7).
 - 범위: 체지방률 3-60 %(스펙), 체중 30-250 kg, SMM 하한 10-100 kg, 주당 감량 0.05-2.0 %(셋은 `[design]` 타당성 한계).
 - 잘못된 값은 exit 1과 `오류: --target-body-fat은 3~60 사이여야 합니다. 아무것도 바꾸지 않았습니다.`처럼 flag와 범위만
@@ -79,6 +80,9 @@ Training goal (config\training_goal.json, user setting):
 틀린 파일은 `오류: training goal file <path> is not valid (<key>)`로 key만 말한다. 단 저장된 기한이 지난 것은 유효하다
 (`deadline_passed`로 표시). 원자적 쓰기(임시 파일 + `os.replace`), LF.
 
+`goal set --plateau-weeks N`을 줬을 때만 목표 파일은 `schema_version` 2이고 `goal` 끝에 `"plateau_weeks": N`이 붙는다(Aerobic
+Guide v1). 설정이 없는 목표는 위의 schema 1 그대로다. 각 schema는 자기 key 집합으로만 읽는다. 자세한 것은 `docs/aerobic-guide.md`.
+
 ### `recommend` / `daily`의 goal 절(합성 값, cut)
 
 `== Data freshness ==` 앞(영양 절 뒤)에 추가된다. cut에서는 진행 목표 header가 `SQUAT/- [maintain_load, load confidence normal]`이
@@ -100,10 +104,16 @@ Training goal (config\training_goal.json, user setting):
     2026-03-12: run 07:00, legs 08:00 (1 h apart): lift first next time [CONC-05]
   Nights under 7 h, 2026-03-10..2026-03-16: 0 of 1 with sleep data, 6 without [SLEEP-05, display only]
     training sleep rules [design]: hold < 5 h, reduce < 4 h, score < 50 (default; not evidence-based, SLEEP-05)
+  Aerobic minutes 2026-03-09..2026-03-15 (running, swimming): moderate 1 + vigorous 1 = 2 min [EXL-03; design: Garmin intensity minutes, vigorous not doubled]
+    reference marks: 150 min/week, the guideline minimum (or 75 vigorous) [EXL-03]; 300 min/week, the end of the studied range [FATEX-02]
+  Run length vs the longest run in the 30 days before it, 2026-03-09..2026-03-16 [RUNPROG-03: observational link with overuse injury; notice only]:
+    none more than 10 % longer (1 skipped: no earlier run with a distance in its 30 days)
+  Plateau check: not set (goal set ... --plateau-weeks N; there is no evidence-based plateau definition) [design; PLAT-01]
 ```
 
 들여쓴 이어지는 줄은 바로 위 태그 줄의 근거를 따른다. maintain/gain은 `Progression [design]: unchanged (the default gain rules)`
-이고 감량 경고와 근거 범위 줄이 없다.
+이고 감량 경고와 근거 범위 줄이 없다. 수면 줄 뒤의 유산소 분, 러닝 길이, 정체 확인(cut만) 줄은 Aerobic Guide v1이 더한 것이다
+(`docs/aerobic-guide.md`).
 
 `--json`: `nutrition` 뒤 마지막 key `goal_mode`(`goal_mode_version` 1). `recommendation_version`은 1 그대로다(영양 통합과
 같은 선례). 순서: `goal`(+`source`, `evidence`), `progression[]`(`label`, `action: maintain_load`, `load_kg`, `target_reps`,
@@ -116,8 +126,9 @@ fractional_sets, below_threshold, countable}`), `weight_change`(`status`, `from_
 `to`, `gap_threshold_hours`, `evidence`, `pairs[]{date, run_activity_id, strength_activity_id, run_start_local_time,
 strength_start_local_time, gap_minutes, under_threshold, order, advice, advice_evidence}`), `sleep`(`from`, `to`,
 `threshold_hours`, `nights_under`, `nights_with_data`, `nights_without_data`, `display_only`, `evidence`,
-`training_rules{hold_below_seconds, reduce_below_seconds, hold_below_score, source, evidence}`).
-`daily --json`의 `recommendation`은 이 문서 그대로다.
+`training_rules{hold_below_seconds, reduce_below_seconds, hold_below_score, source, evidence}`), 그 뒤 Aerobic Guide v1의
+`aerobic_minutes`, `run_length`, `plateau`(gain/maintain이면 null; 내용은 `docs/aerobic-guide.md`). `--plateau-weeks`가 있으면
+`goal`에 `plateau_weeks`가 붙는다(`source` 앞). `daily --json`의 `recommendation`은 이 문서 그대로다.
 
 ### `nutrition status`(cut만)
 
