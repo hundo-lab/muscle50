@@ -1,7 +1,7 @@
 ---
 id: aerobic-guide
 title: Aerobic Guide v1
-status: draft
+status: integrated
 migration: none
 output_change: additive
 user_gates: [design, integration]
@@ -78,18 +78,49 @@ muscle50 recommend --date 2026-11-20
 
 ## 인수 조건
 
-- [ ] AC1: 최근 7일 유산소 분 합계가 중강도·고강도별로 맞게 나오고, 값이 없는 활동은 unknown·하한으로 표시된다.
-- [ ] AC2: 150/300 기준선 문구에 "멈춘다/상한" 같은 표현이 없다(FATEX-02).
-- [ ] AC3: cut 모드에서 사용자 정체 조건을 만족할 때만 정체 알림과 네 선택지가 순위 없이 근거 ID와 함께 나온다.
-- [ ] AC4: 러닝 급증 알림이 지난 30일 최장 러닝보다 10% 초과일 때만 나오고, 30일 러닝이 없으면 나오지 않는다.
-- [ ] AC5: 운동 칼로리가 섭취 목표에 더해지지 않는다.
-- [ ] AC6: 아무 운동·식단 목표도 자동으로 바뀌지 않는다. 측정 kg은 recommend/daily에 나오지 않는다(D1).
-- [ ] AC7: 기존 출력은 설계에서 정한 조건에서 byte-identical이다.
-- [ ] AC8: 새 줄과 JSON 항목마다 근거 ID 또는 `[design]`이 붙는다.
-- [ ] AC9: 품질 게이트 4개가 통과한다.
+- [x] AC1: 최근 7일 유산소 분 합계가 중강도·고강도별로 맞게 나오고, 값이 없는 활동은 unknown·하한으로 표시된다.
+- [x] AC2: 150/300 기준선 문구에 "멈춘다/상한" 같은 표현이 없다(FATEX-02).
+- [x] AC3: cut 모드에서 사용자 정체 조건을 만족할 때만 정체 알림과 네 선택지가 순위 없이 근거 ID와 함께 나온다.
+- [x] AC4: 러닝 급증 알림이 지난 30일 최장 러닝보다 10% 초과일 때만 나오고, 30일 러닝이 없으면 나오지 않는다.
+- [x] AC5: 운동 칼로리가 섭취 목표에 더해지지 않는다.
+- [x] AC6: 아무 운동·식단 목표도 자동으로 바뀌지 않는다. 측정 kg은 recommend/daily에 나오지 않는다(D1).
+- [x] AC7: 기존 출력은 설계에서 정한 조건에서 byte-identical이다.
+- [x] AC8: 새 줄과 JSON 항목마다 근거 ID 또는 `[design]`이 붙는다.
+- [x] AC9: 품질 게이트 4개가 통과한다.
+
+AC8은 계획의 정의대로 확인했다: 항목별 줄과 이어지는 줄은 근거가 붙은 윗줄을 따른다.
+
+## 설계 승인 결정 (2026-10-27)
+
+사용자 답: 모두 추천안(D1-D9). 상세: `docs/aerobic-guide.md`.
+
+- **D1**: 새 줄은 기존 goal 절 끝(수면 줄 뒤)에, JSON은 `goal_mode` 안 마지막 key `aerobic_minutes`, `run_length`, `plateau`로
+  붙는다. 목표 파일이 있을 때만 보이고(정체는 cut만), 목표가 없으면 출력은 byte-identical이다. `goal_mode_version`과
+  `recommendation_version`은 1 그대로다.
+- **D2**: 정체 설정은 `goal set ... --plateau-weeks N`(cut + `--weekly-loss`만, 2-26 `[design]`). 기준 속도는 `--weekly-loss`의 MIN.
+  설정했을 때만 목표 파일이 schema 2이고, 없으면 schema 1 그대로(byte 단위로 같다).
+- **D3**: 최신 InBody부터 7일 이상 간격으로 짝지은 구간이 N주 이상이고 2개 이상이며 모든 구간의 감량이 MIN 미만이면 `met`.
+  구간이 모자라면 "정체 아님"이 아니라 `insufficient_measurements`다(PLAT-02).
+- **D4**: 유산소 분은 running과 swimming만 센다. **D5**: intensity minutes만 더하고, 없는 활동의 시간은 따로 보여 줄 뿐 더하지 않는다(하한).
+- **D6**: vigorous는 두 배로 세지 않는다. 150은 `[EXL-03]`, 300은 `[FATEX-02]`. **D7**: 러닝 급증은 거리만, D-7..D의 러닝을 그 전
+  30일 최장과 비교, 정확히 110 %는 알림 없음.
+- **D8**: 150/300 줄에 stop/ceiling/limit/upper/max를 쓰지 않는다. **D9**: 100-150 kcal 단계는 `[design: goals.md step; PRO-04]`.
 
 ## 한계 / 후속 후보
 
 - 지방 감소 운동 근거는 대부분 운동하지 않던 과체중 성인에서 나왔다. 이미 많이 뛰는 사람에게 효과 크기는 알 수 없다(FATEX-02, FATEX-04).
 - 정체 판단은 인바디 측정 빈도에 기대므로 늦을 수 있다.
 - 후속 후보: 주간 러닝 증가 상한을 사용자 설정으로(RUNPROG-01), v3 에이전트 도구로 열기.
+- 구현자·검증자가 보고한 한계:
+  - 목표가 있으면 `recommend`는 DB를 두 번 읽는다(계획용 창과 D-37..D). 두 읽기는 한 snapshot이 아니다.
+  - 트레드밀 거리는 시계 추정값이라 러닝 길이 알림이 흔들릴 수 있다.
+  - InBody를 한 달에 한 번 재면 2구간 규칙(PLAT-02) 때문에 정체는 약 6-8주 데이터가 쌓여야 판단된다. 유지 휴식 주(PLAT-05)는
+    정체나 증가처럼 보일 수 있고 구분하지 못한다.
+  - intensity minutes backfill 전에 저장된 활동이 있으면 합계는 하한이다. Garmin vigorous 분은 그대로 더하고 75분 환산은 이름만 적는다(D6).
+  - 거리가 0 이하이거나 유한하지 않은 러닝은 "거리 없음"으로 보고 판단하지 않는다 `[design]`.
+  - 정체 `note:` 줄은 주중 체중 변동(0.35 %, PLAT-02)과 사용자 목표 범위를 나란히 적을 뿐 둘을 비교하지 않는다(검증 1차 지적 후 수정).
+  - `goal set`은 문서 전체를 바꾸므로 `--plateau-weeks` 없이 다시 설정하면 정체 설정이 지워진다. schema 2 목표 파일은 이전 빌드가 거부한다.
+  - Telegram 코치 LLM은 `goal_mode`의 새 key(분, 거리, 속도, 선택지 코드; 측정 kg 없음)를 받는다.
+- 후속 후보(추가): Telegram 요약에 목표·유산소 줄 넣기, 중강도 환산 분(moderate + 2 x vigorous), 목표 없이도 유산소 분 보여 주기(D1-C),
+  코치가 정체 선택지 읽기.
+- migration은 없고 Garmin 동기화를 바꾸지 않으므로 production migration(gate 3)과 live Garmin 확인(gate 4)은 없다.

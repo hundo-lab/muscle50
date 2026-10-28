@@ -214,7 +214,8 @@ Training goal mode의 goal 절과 진행 목표가 더해집니다.
 
 ```powershell
 # <...>에는 본인 목표를 넣으세요(예시 값 없음). 값은 모두 선택이고, 목표 체지방률과 목표 체중은 하나만.
-muscle50 goal set --mode cut --target-body-fat <PCT> --by <YYYY-MM-DD> --min-smm <KG> --weekly-loss <MIN> <MAX>
+# 감량 정체 확인은 선택: --plateau-weeks <N>(2~26주, cut + --weekly-loss일 때만)
+muscle50 goal set --mode cut --target-body-fat <PCT> --by <YYYY-MM-DD> --min-smm <KG> --weekly-loss <MIN> <MAX> [--plateau-weeks <N>]
 muscle50 goal set --mode maintain                         # 또는 --mode gain
 muscle50 goal show                                        # --json 가능. 목표가 없으면 기본 규칙(gain)
 muscle50 goal unset                                       # 목표 지우기(기존 출력으로 돌아감)
@@ -235,14 +236,21 @@ flag와 범위만 말하고 값은 출력하지 않으며 exit 1로 거부합니
   위/아래, 목표까지 필요한 주당 속도, 같은 날 3시간 안에 붙은 러닝과 하체 근력(러닝이 먼저면 "근력 먼저"), 7시간 미만 수면 밤 수. 모두 표시만
   하고 줄마다 근거 ID(`docs/evidence/training-nutrition-evidence.md`) 또는 `[design]`이 붙습니다. 측정 kg은 보여 주지 않고 속도와
   flag만 보여 줍니다(측정값은 `inbody trend`). 값이 없으면 0이 아니라 `unknown`입니다.
+- **유산소 가이드**(Aerobic Guide v1, goal 절 끝, 모든 모드): 지난 7일 러닝·수영의 중강도/고강도 분(Garmin intensity minutes)과
+  지침 기준선 150/300분, 그 전 30일 최장 러닝보다 10 % 넘게 긴 러닝 알림(관찰 연구의 연관, 알림만). intensity minutes가 없는
+  활동은 더하지 않고 합계를 하한으로 표시합니다. cut에서 `--plateau-weeks`를 정했으면 InBody 구간(2개 이상, N주 이상)이 모두
+  `--weekly-loss` MIN보다 느릴 때 정체로 보고, 순위 없는 네 선택지(식사 기록 확인, 섭취 100~150 kcal 줄이기, 섭취는 두고 활동
+  늘리기, 1주 유지)를 근거 ID와 함께 보여 줍니다. 처방하거나 계획·목표를 바꾸지 않습니다.
 - `recommend --json`과 `daily --json`의 추천에는 마지막 key `goal_mode`가 붙고 `recommendation_version`은 1 그대로입니다.
+  `goal_mode` 끝에는 `aerobic_minutes`, `run_length`, `plateau`(gain/maintain이면 null)가 붙습니다(`goal_mode_version` 1 그대로).
+- 목표 파일은 `--plateau-weeks`를 줬을 때만 schema 2로 쓰이고(이전 빌드는 읽지 못함), 없으면 schema 1 그대로입니다.
 - 목표 파일이나 수면 설정 파일이 깨졌으면 `recommend`/`daily`는 Garmin 접속 전에 `오류:`로 끝납니다(exit 1). `goal unset`
   또는 `settings sleep reset`으로 지웁니다.
 - 수면 기준은 근거가 없는 설계 값(SLEEP-05)이라 사용자 설정으로 두었습니다. 설정 파일이 없으면 동작은 이전과 같습니다.
 - 목표가 없으면 `recommend`, `daily`, `analytics snapshot`, `nutrition status` 출력은 이전과 byte-identical입니다. Telegram
   코치는 `recommend --json`/`nutrition status --json`을 읽으므로 `goal_mode`/`goal_reference`(상대값과 단백질 g 범위)를 받습니다.
 
-상세와 한계: `docs/training-goal-mode.md`.
+상세와 한계: `docs/training-goal-mode.md`, 유산소 가이드는 `docs/aerobic-guide.md`.
 
 ## Nutrition logging (MVP)
 
