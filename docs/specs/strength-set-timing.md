@@ -1,7 +1,7 @@
 ---
 id: strength-set-timing
 title: Strength Set Timing Correction v1
-status: draft
+status: integrated
 migration: none
 output_change: additive
 user_gates: [design, integration]
@@ -67,16 +67,58 @@ muscle50 analytics snapshot --date 2026-10-23 --json
 
 ## 인수 조건
 
-- [ ] AC1: 1회당 1초 미만인 ACTIVE 세트가 의심 세트로 잡히고, 정상 세트(예: 60초에 20회)는 잡히지 않는다.
-- [ ] AC2: 앞 REST에서 심박이 분명히 오른 합성 데이터는 그 시점(지연 보정 포함)으로 추정 운동·휴식 시간이 나온다.
-- [ ] AC3: 심박이 없거나 공백이 길거나 상승이 불분명하면 "not estimated"이고 값을 만들지 않는다.
-- [ ] AC4: RAW, 정규화된 세트, 기존 추천 출력은 바뀌지 않는다(byte-identical).
-- [ ] AC5: 저장된 RAW만으로 소급 계산되고 Garmin 호출이 없다.
-- [ ] AC6: text와 `--json`이 결정적이고 JSON은 끝에 key만 더한다.
+- [x] AC1: 1회당 1초 미만인 ACTIVE 세트가 의심 세트로 잡히고, 정상 세트(예: 60초에 20회)는 잡히지 않는다.
+- [x] AC2: 앞 REST에서 심박이 분명히 오른 합성 데이터는 그 시점(지연 보정 포함)으로 추정 운동·휴식 시간이 나온다.
+- [x] AC3: 심박이 없거나 공백이 길거나 상승이 불분명하면 "not estimated"이고 값을 만들지 않는다.
+- [x] AC4: RAW, 정규화된 세트, 기존 추천 출력은 바뀌지 않는다(byte-identical).
+- [x] AC5: 저장된 RAW만으로 소급 계산되고 Garmin 호출이 없다.
+- [x] AC6: text와 `--json`이 결정적이고 JSON은 끝에 key만 더한다.
 - [ ] AC7: 실제 RAW(읽기 전용, 임시 복사본)에서 2026-10-21 활동 24797858737의 풀업 세트 1·2가 의심 세트로 잡힌다.
-- [ ] AC8: 품질 게이트 4개가 통과한다.
+  pending: post-integration read-only check from main (user decision 2026-10-29). 검증 단계에서는 hook이 운영 DB 복사를
+  막아 실행하지 못했다. 같은 모양의 합성 테스트(`test_ac7_shape_marks_both_short_pull_up_sets_and_not_the_normal_one`)는
+  통과한다. 기대: `seq 1 #1` 의심 + `no_preceding_rest`, `seq 3 #2` 의심, `seq 5` 의심 아님.
+- [x] AC8: 품질 게이트 4개가 통과한다.
+
+## 설계 승인 결정 (2026-10-29)
+
+구현·검증된 선택은 D1-D12 모두 계획의 추천안(A)이다. 상세: `docs/strength-set-timing.md`.
+
+- **D1**: 의심 기준은 1회당 1.0 s 미만 `[design]`, 표시 전용. 반복 시간 1차 문헌 조사 뒤 다시 본다.
+- **D2**: 숨은 운동은 바로 앞 REST에서만 찾는다. 시작에서 두 번 누른 경우(운동이 뒤 REST에 있음)는 다루지 않는다.
+- **D3**: 손목 심박 지연은 활동마다 정상 세트로 보정한다(HR-04). 범위 (0, 43 s](HR-03), 최소 3세트 `[design]`, 최소-최대 지연이 범위다.
+- **D4**: 상승 판단은 검색 구간의 마지막 저점 뒤 10 bpm 이상 상승(형태 HR-01, 숫자 `[design]`). 저점이 첫 sample이면 불분명.
+- **D5**: 심박 sample 사이 최대 공백 10 s `[design]`. 넘으면 `heart_rate_gap`으로 추정하지 않는다.
+- **D6**: 신뢰도는 medium/low 두 단계, high 없음(HR-02). medium은 보정 세트 5개 이상 + 지연 폭 10 s 이하 `[design]`.
+- **D7**: window에 의심 세트가 없으면 text 줄도 JSON key도 없다(완전 byte-identical). 규칙의 "byte-identical"과 "요약 한 줄"이
+  서로 맞지 않아 byte-identical 쪽으로 정했다.
+- **D8**: 세트 사이 휴식은 같은 Garmin label 두 세트 사이 REST만, taxonomy로 compound/isolation/unclassified(REST-07).
+  UNKNOWN과 label 변경은 빼고 따로 센다.
+- **D9**: 심박은 accepted capture의 sha 확인된 `details.json`(refresh 상태), 없으면 처음 저장된 것. FIT 파싱 없음.
+- **D10**: `analytics snapshot` Strength 절 끝(taxonomy 줄 다음)과 `--json` 끝의 top-level key `strength_set_timing`. 새 명령·flag 없음.
+- **D11**: AC7은 임시 복사본 smoke + 같은 모양의 합성 테스트. 검증 때 hook이 복사를 막아, 사용자 결정(2026-10-29)으로
+  통합 직후 main checkout에서 읽기 전용 `analytics snapshot --date 2026-10-21 --days 1`로 확인한다.
+- **D12**: 추정 운동 = REST 끝 - 추정 시작, 기록된 ACTIVE 시간은 따로 보여 준다. 점 추정은 자르지 않고 범위 끝만 REST 안으로 자른다.
 
 ## 한계 / 후속 후보
 
 - 손목 심박은 근력 운동에서 부정확하고 늦다. 추정은 범위와 신뢰도로만 보여 준다.
 - 후속 후보: 근거 규칙집 기반 휴식 시간 조언(운동별 권장 휴식과 실제 비교), 세트 시간·TUT(긴장 시간) 지표, v3 에이전트 도구로 열기.
+- 구현자·검증자가 보고한 한계:
+  - 보정은 일부 순환적이다. "정상" 세트를 `[design]` 기준으로 정하므로, 정상처럼 보이지만 늦게 누른 세트가 섞이면 지연이 커진다.
+  - 세트보다 긴 지연은 잴 수 없다(보정 검색 구간이 세트 끝까지). 평평하고 흔들리는 REST에서는 보정 지연이 실제보다 짧게
+    잡힐 수 있다(검증 smoke에서 추정 자체는 실제와 약 1 s 안이었다).
+  - 활동의 첫 세트는 추정할 수 없다(`no_preceding_rest`). `startTime`이 1초 단위라 범위 위에 ±1 s가 더해진다.
+  - Garmin smart recording 공백(5-7 s)과 긴 세션의 down-sampling으로 `heart_rate_gap`이 많을 수 있다.
+  - 휴식 중 걷기·기구 준비 같은 다른 심박 상승은 운동으로 보여 추정 운동이 길어질 수 있다.
+  - 세트 시각이 UTC라는 것은 실제 활동 하나에서만 확인했다. 나머지는 시계 확인 규칙이 지킨다.
+  - DB는 snapshot 한 번과 활동마다 `details_artifact` 한 번을 읽는다(각각 read-only). 하나의 DB snapshot은 아니다.
+  - `details_artifact`는 현재 refresh capture에 `details` row가 없으면 refresh가 있어도 처음 저장된 details로 돌아간다.
+  - `--days 90`이면 의심 세트가 있는 활동의 `details.json`을 수십 개 읽을 수 있다.
+  - Telegram은 `analytics snapshot`을 부르지 않으므로 Telegram·LLM 응답은 바뀌지 않는다.
+- 후속 후보(추가):
+  - 휴식 시간 조언은 근거 조사 뒤 별도 기능으로. 그 전에는 어떤 규칙도 이 추정값을 쓰지 않는다(쓰려면 기록된 휴식만 쓰거나
+    세트별 `method`/`confidence`로 거른다).
+  - 어떤 규칙이 1.0 s/rep를 쓰기 전에 반복 시간에 관한 1차 문헌 조사.
+  - 시작에서 두 번 누른 패턴(운동이 뒤 REST에 있음) 처리.
+  - 파생 table(저장)은 기준값이 검증된 뒤에만. v1은 읽을 때 계산하고 저장하지 않는다.
+- migration은 없고 Garmin 동기화를 바꾸지 않으므로 production migration(gate 3)과 live Garmin 확인(gate 4)은 없다.

@@ -150,6 +150,11 @@ muscle50 analytics snapshot --date 2026-09-28 --days 28 --json
 집계 규칙과 수영 lap/length 이상치 처리는 `docs/analytics-engine.md`를, 종목 → movement pattern/
 muscle group 매핑(Exercise Taxonomy v1)은 `docs/exercise-taxonomy.md`를 참고하세요.
 
+근력 세트 중 1회당 1.0초 미만인 ACTIVE 세트(버튼을 늦게 눌러 운동이 앞 REST로 기록된 경우)가 기간 안에 있으면
+Strength 절 끝에 `Set timing`과 `Rest between sets` 줄이, `--json` 끝에 `strength_set_timing` key가 붙습니다. 저장된
+세트와 심박 RAW(`details.json`)만 읽어 추정하고(방법과 신뢰도 표시, 심박 값은 출력하지 않음), 아무것도 저장하지 않으며
+추천 규칙은 이 값을 쓰지 않습니다. 의심 세트가 없으면 출력은 전과 같습니다. 규칙과 한계는 `docs/strength-set-timing.md`.
+
 ## 하루 workflow (`muscle50 daily`)
 
 평소 하루에 필요한 activity 동기화, load metric 채우기, recovery 동기화, 오늘 추천을 명령 하나로 실행합니다. 각 단계는
