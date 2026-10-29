@@ -73,10 +73,12 @@ muscle50 analytics snapshot --date 2026-10-23 --json
 - [x] AC4: RAW, 정규화된 세트, 기존 추천 출력은 바뀌지 않는다(byte-identical).
 - [x] AC5: 저장된 RAW만으로 소급 계산되고 Garmin 호출이 없다.
 - [x] AC6: text와 `--json`이 결정적이고 JSON은 끝에 key만 더한다.
-- [ ] AC7: 실제 RAW(읽기 전용, 임시 복사본)에서 2026-10-21 활동 24797858737의 풀업 세트 1·2가 의심 세트로 잡힌다.
-  pending: post-integration read-only check from main (user decision 2026-10-29). 검증 단계에서는 hook이 운영 DB 복사를
-  막아 실행하지 못했다. 같은 모양의 합성 테스트(`test_ac7_shape_marks_both_short_pull_up_sets_and_not_the_normal_one`)는
-  통과한다. 기대: `seq 1 #1` 의심 + `no_preceding_rest`, `seq 3 #2` 의심, `seq 5` 의심 아님.
+- [x] AC7: 실제 RAW(읽기 전용, 임시 복사본)에서 2026-10-21 활동 24797858737의 풀업 세트 1·2가 의심 세트로 잡힌다.
+  확인(2026-10-29, 통합 직후 main checkout 9db3ea6에서 운영 DB 읽기 전용 `analytics snapshot --date 2026-10-21 --days 1
+  --json`, 상태만 기록): heart rate `available`, lag `calibrated`. `seq 1 PULL_UP #1` 의심 + `no_preceding_rest`, `seq 3
+  PULL_UP #2` 의심 + `heart_rate`(low), `seq 5`는 의심 아님. 같은 활동의 `seq 19 ROW #1`(13회 1.57 s)도 의심이고
+  `heart_rate_gap`으로 추정하지 않았다. 검증 단계에서는 hook이 운영 DB 복사를 막아 실행하지 못했고(사용자 결정 2026-10-29로
+  통합 후 확인), 같은 모양의 합성 테스트(`test_ac7_shape_marks_both_short_pull_up_sets_and_not_the_normal_one`)도 통과한다.
 - [x] AC8: 품질 게이트 4개가 통과한다.
 
 ## 설계 승인 결정 (2026-10-29)
