@@ -65,6 +65,7 @@ from muscle50.application.refresh_garmin_activity import (
     RefreshGarminActivity,
 )
 from muscle50.application.renormalize_garmin_recovery import RenormalizeGarminRecovery
+from muscle50.application.strength_set_timing import BuildSnapshotWithSetTiming
 from muscle50.application.sync_coverage import (
     COMMAND_DAILY,
     COMMAND_GARMIN_ACTIVITIES,
@@ -105,7 +106,6 @@ from muscle50.application.training_goal import (
     ShowTrainingGoal,
     UnsetTrainingGoal,
 )
-from muscle50.application.training_snapshot import BuildTrainingSnapshot
 from muscle50.config import AppPaths, ConfigurationError
 from muscle50.domain.analytics import DEFAULT_LOOKBACK_DAYS, MAX_LOOKBACK_DAYS, InvalidSnapshotWindowError
 from muscle50.domain.body_composition_trend import (
@@ -148,6 +148,7 @@ from muscle50.infrastructure.garmin.client import (
     GarminConnectorError,
     PythonGarminConnector,
 )
+from muscle50.infrastructure.heart_rate_raw import RawHeartRateSource
 from muscle50.infrastructure.inbody.raw_store import InBodyRawStore
 from muscle50.infrastructure.inbody.samsung_health import SamsungHealthInBodySource
 from muscle50.infrastructure.llm.executables import ResolvedExecutable, resolve_executable
@@ -1290,8 +1291,15 @@ def _analytics_snapshot(as_of_text: str, lookback_days: int, *, as_json: bool) -
         return 1
     try:
         paths = AppPaths.from_environment()
-        snapshot = BuildTrainingSnapshot(SqliteAnalyticsReader(paths.database_path)).execute(as_of, lookback_days)
-        print(render_training_snapshot_json(snapshot) if as_json else render_training_snapshot(snapshot))
+        reader = SqliteAnalyticsReader(paths.database_path)
+        # Set timing is computed on read from stored sets and details RAW; nothing is written.
+        heart_rate = RawHeartRateSource(reader, paths.root, paths.raw_dir)
+        result = BuildSnapshotWithSetTiming(reader, heart_rate).execute(as_of, lookback_days)
+        print(
+            render_training_snapshot_json(result.snapshot, result.set_timing)
+            if as_json
+            else render_training_snapshot(result.snapshot, result.set_timing)
+        )
         return 0
     except (AnalyticsDatabaseError, ConfigurationError, InvalidSnapshotWindowError) as exc:
         print(f"오류: {exc}", file=sys.stderr)

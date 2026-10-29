@@ -53,7 +53,8 @@ SUSPECT_EVIDENCE = ("design",)
 RISE_EVIDENCE = ("HR-01", "design")
 GAP_EVIDENCE = ("design",)
 LAG_BOUNDS_EVIDENCE = ("HR-03", "design")
-LAG_EVIDENCE = ("HR-04", "HR-03", "design")
+# The method of calibrating from normal sets (HR-04); its bounds carry LAG_BOUNDS_EVIDENCE.
+LAG_EVIDENCE = ("HR-04", "design")
 CONFIDENCE_EVIDENCE = ("HR-02", "design")
 # REST-07 separates compound from accessory rest; [design] for using movement patterns for it.
 REST_GROUP_EVIDENCE = ("REST-07", "design")

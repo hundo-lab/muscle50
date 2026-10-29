@@ -39,6 +39,7 @@ from muscle50.domain.strength_recommendation import (
     ProgressionAction,
     kg_text,
 )
+from muscle50.domain.strength_set_timing import StrengthSetTimingSummary
 from muscle50.domain.swim_recommendation import SwimSegment, pace_text
 from muscle50.domain.swimming import NormalizedSwimActivity, derive_lap_metrics
 from muscle50.domain.sync_catch_up import (
@@ -50,6 +51,7 @@ from muscle50.domain.sync_catch_up import (
 from muscle50.domain.training_recommendation import TrainingRecommendation
 from muscle50.presentation.goal_terminal import goal_mode_lines, goal_mode_payload
 from muscle50.presentation.nutrition_terminal import nutrition_context_lines, nutrition_context_payload
+from muscle50.presentation.set_timing_terminal import set_timing_lines, set_timing_payload
 from muscle50.presentation.sync_coverage_terminal import sync_coverage_freshness_lines, sync_coverage_payload
 
 _TYPE_LABELS = {
@@ -354,12 +356,21 @@ def _strength_set_value(strength_set: StrengthSet) -> str:
     return f"{weight} × {reps}"
 
 
-def render_training_snapshot_json(snapshot: TrainingSnapshot) -> str:
-    """Full snapshot including provenance; ASCII-only and stable for identical input."""
-    return json.dumps(dataclasses.asdict(snapshot), indent=2, ensure_ascii=True, default=_json_default)
+def render_training_snapshot_json(
+    snapshot: TrainingSnapshot, set_timing: StrengthSetTimingSummary | None = None
+) -> str:
+    """Full snapshot including provenance; ASCII-only and stable for identical input.
+
+    ``strength_set_timing`` is appended as the last key only when the window has a suspect set.
+    """
+    if set_timing is None:
+        return json.dumps(dataclasses.asdict(snapshot), indent=2, ensure_ascii=True, default=_json_default)
+    payload = dataclasses.asdict(snapshot)
+    payload["strength_set_timing"] = set_timing_payload(set_timing)
+    return json.dumps(payload, indent=2, ensure_ascii=True, default=_json_default)
 
 
-def render_training_snapshot(snapshot: TrainingSnapshot) -> str:
+def render_training_snapshot(snapshot: TrainingSnapshot, set_timing: StrengthSetTimingSummary | None = None) -> str:
     # ASCII only: Windows cp949 consoles cannot encode some punctuation (see recovery output).
     window = snapshot.window
     lines = [
@@ -402,6 +413,8 @@ def render_training_snapshot(snapshot: TrainingSnapshot) -> str:
                 f"max {_optional(exercise.max_weight_kg, ' kg')}"
             )
         _taxonomy_lines(lines, strength.taxonomy)
+        if set_timing is not None:
+            lines.extend(set_timing_lines(set_timing))
 
     swimming = snapshot.swimming
     lines.extend(("", f"Swimming: {swimming.session_count} sessions"))
