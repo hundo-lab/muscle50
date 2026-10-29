@@ -26,10 +26,15 @@ class BuildTrainingSnapshot:
         # Validate the window before touching the database.
         window = snapshot_window(as_of, lookback_days)
         data = self._reader.load(window.start, window.as_of)
-        return build_training_snapshot(
-            as_of,
-            lookback_days,
-            data.activities,
-            data.recoveries,
-            undated_source_activity_ids=data.undated_source_activity_ids,
-        )
+        return snapshot_from_data(as_of, lookback_days, data)
+
+
+def snapshot_from_data(as_of: date, lookback_days: int, data: TrainingData) -> TrainingSnapshot:
+    """The snapshot of already-loaded data, shared by every use case that reads the window once."""
+    return build_training_snapshot(
+        as_of,
+        lookback_days,
+        data.activities,
+        data.recoveries,
+        undated_source_activity_ids=data.undated_source_activity_ids,
+    )

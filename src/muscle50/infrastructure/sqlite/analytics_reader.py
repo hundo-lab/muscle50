@@ -26,6 +26,7 @@ from muscle50.domain.sync_coverage import (
     SyncCoverageData,
     SyncCoverageEntry,
 )
+from muscle50.infrastructure.raw_store import RawArtifact
 from muscle50.infrastructure.sqlite.database import (
     _activity_from_rows,
     _recovery_from_row,
@@ -116,6 +117,41 @@ class SqliteAnalyticsReader:
                 ).fetchall()
             }
         return SyncCoverageData(records or (), stored, table_present=records is not None)
+
+    def details_artifact(self, source_activity_id: str) -> RawArtifact | None:
+        """The ``details`` RAW of the accepted capture: the current refresh capture, else the initial one.
+
+        Uses only tables from migrations 001 and 006. None when the activity has no stored details.
+        """
+        with self._read_transaction() as connection:
+            row = connection.execute(
+                """
+                SELECT artifact.* FROM activities AS activity
+                JOIN activity_refresh_state AS state ON state.activity_id = activity.id
+                JOIN activity_raw_capture_artifacts AS artifact ON artifact.capture_id = state.current_capture_id
+                WHERE activity.provider = 'garmin' AND activity.source_activity_id = ?
+                  AND artifact.artifact_kind = 'details'
+                """,
+                (source_activity_id,),
+            ).fetchone()
+            if row is None:
+                row = connection.execute(
+                    """
+                    SELECT * FROM raw_artifacts
+                    WHERE provider = 'garmin' AND source_activity_id = ? AND artifact_kind = 'details'
+                    ORDER BY id LIMIT 1
+                    """,
+                    (source_activity_id,),
+                ).fetchone()
+        if row is None:
+            return None
+        return RawArtifact(
+            kind=row["artifact_kind"],
+            relative_path=row["relative_path"],
+            content_type=row["content_type"],
+            sha256=row["sha256"],
+            byte_size=int(row["byte_size"]),
+        )
 
     @contextmanager
     def _read_transaction(self) -> Iterator[sqlite3.Connection]:
