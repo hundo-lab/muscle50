@@ -68,6 +68,13 @@ uv run muscle50 analytics snapshot --date 2026-09-28 --json     # provenance 포
   `strength_unmapped_exercise` issue를 낸다. 모든 group은 Garmin label origin(confirmed/auto-detected/
   unspecified) 개수와 activity/set provenance를 가진다. 가중치·fractional set 없음.
 
+### Strength set timing (display only)
+
+1회당 1.0 s 미만인 ACTIVE 세트(버튼을 늦게 눌러 운동이 앞 REST로 기록된 경우)가 window에 있으면 Strength 절 끝에
+"Set timing" 줄과 "Rest between sets" 줄이, `--json` 끝에 `strength_set_timing` key가 붙는다. 저장된 세트와
+`details.json` 심박으로 읽을 때 계산하고 저장하지 않으며 어떤 규칙도 쓰지 않는다. 의심 세트가 없으면 출력은 byte 단위로
+같다. 규칙, 상수와 근거, 한계는 `docs/strength-set-timing.md`.
+
 ## Swimming — summary vs detail, malformed detail 처리
 
 Summary-level(Garmin `activities` row, `swim_activities.pool_length_meters`, load metric)과
