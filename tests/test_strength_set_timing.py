@@ -590,7 +590,7 @@ def _change_set(session: Session, sequence: int, **changes: object) -> Session:
 
 
 def _suspect_rest_sequence(session: Session) -> int:
-    """The REST right before the last (suspect) set of ``_ac2_rows``."""
+    """The REST right before the last set (the suspect set in these sessions)."""
     return max(session.press_ms) - 1
 
 
@@ -641,10 +641,11 @@ def test_derived_rest_start_must_agree_within_one_second(rest_seconds: float, us
 
 
 def _first_row_rest() -> Session:
-    return build_session([Rest(50.0), Active(4, 1.629, hidden_s=20.0), Rest(40.0), _normal()])
+    return build_session([Rest(50.0), Active(4, 1.629, hidden_s=20.0)])
 
 
 def _rest_after_rest() -> Session:
+    # The first REST keeps its recorded start, and start + duration agrees: only the ACTIVE check refuses it.
     return build_session([_normal(), Rest(10.0), Rest(50.0), Active(4, 1.629, hidden_s=20.0)])
 
 
@@ -663,7 +664,8 @@ def _previous_duration_missing() -> Session:
 )
 def test_derived_rest_start_without_a_usable_previous_set_is_unverified(make: Callable[[], Session]) -> None:
     session = make()
-    nulled = without_rest_starts(session)
+    # Only the suspect set's REST loses its start.
+    nulled = _change_set(session, _suspect_rest_sequence(session), started_at=None)
 
     _timing, suspects = estimate_session(
         DAY, strength_activity("9101", nulled), _available(heart_rate_samples(session))
