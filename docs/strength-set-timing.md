@@ -11,6 +11,8 @@
   그대로, 파생 값은 따로, 추측하지 않음).
 - **소급**: 이미 저장된 활동도 RAW만 읽어 계산한다. Garmin을 부르지 않는다.
 - 근거 ID는 `docs/evidence/training-nutrition-evidence.md`의 것이다. `[design]`은 근거가 숫자를 주지 않는 설계 값이다.
+- **v1.1(derived REST start)**: REST `startTime`이 null인 활동(REST `duration`은 있음)에서도 REST 시작을 계산해 추정한다
+  (규칙 3, spec `docs/specs/strength-set-timing-rest-start.md`). 출력 변경은 추가뿐이고 `set_timing_version`은 1 그대로다.
 
 Non-goals: 횟수·무게·운동 종류 수정(사용자가 정확히 기록한다), 추천 규칙 변경, 휴식 시간 조언(근거 규칙집 뒤의 별도
 기능), Garmin 동기화 변경, LLM. 심박 값(bpm)은 건강 값이라 text와 JSON 어디에도 출력하지 않는다(규칙 기준값 10 bpm만
@@ -38,6 +40,9 @@ window에 의심 세트가 하나라도 있을 때만 Strength 절 끝, taxonomy
 
 - `seq N`은 canonical `sequence`(REST row도 센다). `#k`는 그 활동에서 같은 Garmin label `(category, name)`의 k번째 ACTIVE
   세트다. 예: 2026-10-21 활동의 "풀업 세트 1·2"는 `seq 1 #1`, `seq 3 #2`.
+- REST 시작이 derived(규칙 3)인 추정 세트는 괄호 끝에 `; rest start derived [design]`이 붙는다. 같은 세트의 REST
+  `startTime`이 null이면 위 seq 11 줄은 `... from 4 sets [HR-04]; rest start derived [design])`로 끝난다. 기록된 REST 시작을
+  쓴 줄과 추정하지 않은 줄은 그대로다.
 - 기록 시간은 `{:.1f} s`, 추정과 중앙값은 `{:.0f} s`. 괄호 안은 범위(낮음-높음). 값이 없는 그룹은 `unavailable`이고 0이 아니다.
 - ASCII만 쓴다.
 
@@ -53,11 +58,12 @@ sample이 새어 나가지 않는다).
     "display_only": true,
     "rules": {"min_seconds_per_rep": 1.0, "min_heart_rate_rise_bpm": 10, "max_heart_rate_gap_seconds": 10.0,
               "wrist_lag_bounds_seconds": [0.0, 43.0], "min_lag_calibration_sets": 3,
-              "medium_confidence_min_calibration_sets": 5, "medium_confidence_max_lag_spread_seconds": 10.0},
+              "medium_confidence_min_calibration_sets": 5, "medium_confidence_max_lag_spread_seconds": 10.0,
+              "max_rest_start_disagreement_seconds": 1.0},
     "evidence": {"min_seconds_per_rep": ["design"], "min_heart_rate_rise_bpm": ["HR-01", "design"],
                  "max_heart_rate_gap_seconds": ["design"], "wrist_lag_bounds_seconds": ["HR-03", "design"],
                  "lag_calibration": ["HR-04", "design"], "confidence": ["HR-02", "design"],
-                 "rest_groups": ["REST-07", "design"]},
+                 "rest_groups": ["REST-07", "design"], "max_rest_start_disagreement_seconds": ["design"]},
     "active_set_count": 7, "checked_set_count": 6, "unchecked_set_count": 1,
     "suspect_set_count": 2, "estimated_set_count": 1, "not_estimated_set_count": 1,
     "sessions": [{"source_activity_id": "9101", "local_date": "2026-03-12", "suspect_set_sequences": [1, 11],
@@ -71,7 +77,8 @@ sample이 새어 나가지 않는다).
                       "heart_rate_onset_at_utc": "2026-03-12T01:04:40.000+00:00",
                       "estimated_start_at_utc": "2026-03-12T01:04:32.000+00:00",
                       "estimated_work_seconds": 20.0, "estimated_work_range_seconds": [20.0, 20.0],
-                      "estimated_rest_seconds": 30.0, "estimated_rest_range_seconds": [30.0, 30.0], "confidence": "low"}],
+                      "estimated_rest_seconds": 30.0, "estimated_rest_range_seconds": [30.0, 30.0], "confidence": "low",
+                      "rest_start_source": "recorded"}],
     "rest_between_sets": {"overall": {"median_seconds": 40.0, "rest_count": 5, "estimated_rest_count": 1},
                           "compound": {"median_seconds": null, "rest_count": 0, "estimated_rest_count": 0}, "...": "...",
                           "excluded_not_estimated": 0, "excluded_missing_duration": 0,
@@ -80,7 +87,10 @@ sample이 새어 나가지 않는다).
 ```
 
 - 추정하지 않은 세트: `method: "none"`, `not_estimated_reason`에 이유, 모든 `estimated_*`,
-  `heart_rate_onset_at_utc`, `confidence`가 `null`.
+  `heart_rate_onset_at_utc`, `confidence`, `rest_start_source`가 `null`.
+- `rest_start_source`(v1.1, 각 행의 마지막 key): 추정에 쓴 REST 시작이 Garmin 기록값이면 `"recorded"`, 규칙 3으로 계산한
+  값이면 `"derived"`. 추정하지 않은 세트는 REST 시작을 쓰지 않았으므로 `null`.
+- `rules`/`evidence`의 마지막 항목 `max_rest_start_disagreement_seconds`(v1.1)는 규칙 3의 교차 확인 허용 오차다.
 - `sessions`에는 의심 세트가 있는 활동만 들어간다. `heart_rate`가 `null`이면 그 활동의 의심 세트 중 앞이 REST인 것이 없어
   심박을 읽지 않은 것이다. `lag`가 `null`이면 심박이 없거나(상태 참고) 세트 시계가 심박과 맞지 않는 것이다.
 - 시각은 UTC, millisecond 고정 형식(`YYYY-MM-DDTHH:MM:SS.mmm+00:00`).
@@ -105,7 +115,18 @@ sample이 새어 나가지 않는다).
 2. **의심 세트**: `duration_ms < reps × 1000`(정수 비교). 정확히 1.0 s/rep는 의심이 아니다.
 3. **시간축**: 세트 `started_at`(Garmin `startTime`, 1초 해상도)은 naive면 UTC로 읽는다(zoneinfo 없음). 의심 세트 A와 바로
    앞 REST R에 대해 `r0 = R 시작`, `r1 = A 시작`(늦게 누른 시점), `a_end = A 시작 + A 기록 시간`. 바로 앞 row가 REST가
-   아니면(활동 첫 row 포함) `no_preceding_rest`.
+   아니면(활동 첫 row 포함) `no_preceding_rest`. A의 시작이나 기록 시간을 읽을 수 없으면 `set_time_missing`.
+   **REST 시작 `r0`(v1.1)**:
+   - 원본 우선: R의 `startTime`이 기록돼 있으면 늘 그 값이다(`rest_start_source: "recorded"`). 기록돼 있지만 읽을 수
+     없는 값은 계산값으로 바꾸지 않고 `set_time_missing`(v1과 같음).
+   - `startTime`이 비어 있으면(null 또는 빈 문자열) **derived** `r0 = r1 − R 길이`(`R 길이 = round(duration_seconds × 1000)`).
+     R 길이가 없으면 `set_time_missing`.
+   - 교차 확인: R 바로 앞 row P가 ACTIVE이고 P의 시작과 길이가 있으며 `|derived r0 − (P 시작 + P 길이)| ≤ 1000 ms`(경계 포함)일
+     때만 derived를 쓴다(`rest_start_source: "derived"`). P가 없거나(활동 첫 row가 R), ACTIVE가 아니거나(REST 뒤 REST),
+     P의 시작·길이가 없거나, 차이가 1000 ms를 넘으면 `rest_start_unverified`로 추정하지 않는다. P는 확인 대상(규칙 1)일
+     필요가 없다. 시작과 길이만 본다.
+   - derived `r0`는 아래 규칙 8에 그대로 들어간다. 추정 운동 + 추정 휴식은 R 길이와 정확히 같다. 보정(규칙 7), 시계 확인
+     (규칙 5), 신뢰도, 세트 사이 휴식(규칙 10)은 바뀌지 않는다. derived로 추정된 세트도 규칙 10의 "추정 휴식"으로 쓰인다.
 4. **심박 series**: `metricDescriptors`에서 `directTimestamp`와 `directHeartRate`의 `metricsIndex`를 **key로** 찾는다(Garmin이
    호출마다 열 순서를 바꾼다). null·bool·숫자 아닌 칸은 건너뛴다(0으로 채우지 않음). 같은 timestamp에 다른 값이 있으면
    series 전체를 `raw_unreadable`로 둔다. 의심 세트 중 앞이 REST인 것이 있는 활동만 읽는다.
@@ -138,7 +159,8 @@ sample이 새어 나가지 않는다).
 | 이유 | 뜻 |
 | --- | --- |
 | `no_preceding_rest` | 바로 앞 row가 REST가 아니다(활동 첫 row 포함). 첫 세트의 운동은 기록 시작 전에 일어났다 |
-| `set_time_missing` | 의심 세트나 앞 REST의 시작 시각을 읽을 수 없다 |
+| `set_time_missing` | 의심 세트의 시작·기록 시간을 읽을 수 없다. 또는 앞 REST의 기록된 시작을 읽을 수 없거나, 시작이 비어 있는데 REST 길이도 없다 |
+| `rest_start_unverified` | (v1.1) 앞 REST의 시작이 비어 있고, 계산한 시작을 REST 앞 ACTIVE 세트(시작 + 길이)로 1000 ms 안에서 확인하지 못했다(앞 row 없음, ACTIVE 아님, 값 없음, 차이 > 1000 ms) |
 | `heart_rate_raw_missing` | `details` artifact 또는 파일이 없다 |
 | `heart_rate_raw_unreadable` | 경로가 활동 디렉터리 밖, 크기·sha256 불일치, JSON 오류, 구조 오류, 충돌하는 중복 timestamp |
 | `heart_rate_not_in_raw` | `directTimestamp`/`directHeartRate` descriptor가 없거나 쓸 수 있는 sample이 없다 |
@@ -160,12 +182,13 @@ sample이 새어 나가지 않는다).
 | `MIN_LAG_CALIBRATION_SETS` | 3 | 방법은 HR-04(근거 문서의 설계 제안), 숫자는 `[design]` | 미만이면 `lag_uncalibrated` |
 | `MEDIUM_CONFIDENCE_MIN_CALIBRATION_SETS` | 5 | `[design]`, 근거 없음 | 신뢰도 |
 | `MEDIUM_CONFIDENCE_MAX_LAG_SPREAD_MILLISECONDS` | 10 000 | `[design]`, 근거 없음 | 신뢰도 |
+| `MAX_REST_START_DISAGREEMENT_MILLISECONDS` | 1000 | `[design]`, 근거 없음. Garmin 세트 시작은 1초 단위. 운영 RAW(읽기만, 2026-10-30)에서 REST 앞뒤가 ACTIVE인 1317곳 중 1292곳(98.1 %)이 1초 안에서 맞았다 | derived REST 시작 교차 확인(경계 포함) |
 | `high` 없음 | — | HR-02: Garmin 손목 심박의 근력 운동 MAPE 약 28-82 %. 신뢰도 단계와 "추정 안 함" 경로 필요 | 최고 `medium` |
 | compound/isolation | `COMPOUND_PATTERNS` | REST-07(다관절 vs 보조 종목 휴식), movement pattern으로 나누는 것은 `[design]` | 휴식 그룹 |
 
 JSON `evidence`: `min_seconds_per_rep ["design"]`, `min_heart_rate_rise_bpm ["HR-01", "design"]`,
 `max_heart_rate_gap_seconds ["design"]`, `wrist_lag_bounds_seconds ["HR-03", "design"]`, `lag_calibration ["HR-04", "design"]`,
-`confidence ["HR-02", "design"]`, `rest_groups ["REST-07", "design"]`.
+`confidence ["HR-02", "design"]`, `rest_groups ["REST-07", "design"]`, `max_rest_start_disagreement_seconds ["design"]`.
 
 ## RAW 선택(D9)
 
@@ -213,6 +236,14 @@ JSON `evidence`: `min_seconds_per_rep ["design"]`, `min_heart_rate_rise_bpm ["HR
   길이로 짧게 잡힌다.
 - **다른 버튼 패턴은 다루지 않는다(D2).** 시작에서 두 번 누르면 운동은 **뒤** REST에 있다. v1은 앞 REST만 본다.
 - **활동 첫 세트는 추정할 수 없다**(`no_preceding_rest`). 그 운동은 기록 시작 전에 일어났다.
+- **derived REST 시작과 시계 일시정지(v1.1)**: REST 안에서 시계를 일시정지하면 `다음 세트 시작 − REST 길이`가 실제 REST
+  시작과 다를 수 있다. 교차 확인이 대부분을 걸러 내지만(`rest_start_unverified`), 일시정지가 앞 세트 쪽에 있으면 잡지 못할 수
+  있다(spec 한계 그대로, 실데이터로 확인 안 함). 1000 ms 허용 오차는 `[design]`이다.
+- **REST 시작이 null인 활동의 첫 REST와 REST 뒤 REST는 추정하지 않는다**(`rest_start_unverified`). 교차 확인할 앞 ACTIVE가 없다.
+- **기록값과 derived 값이 어긋나는 곳**: REST 시작이 기록된 활동에서 둘이 크게 다른 곳(최대 약 266 s)이 있다. 원인은 확인하지
+  않았다. 기록값이 있으면 늘 기록값을 쓰므로 v1 결과는 그대로다.
+- **표시 범위**: `rest_start_source`는 추정된 세트에만 값이 있다. 추정하지 않은 세트(예: `heart_rate_gap`)는 REST 시작이
+  derived였어도 `null`이다.
 - **시간 해상도**: `startTime`이 1초 단위라 지연 범위 위에 ±1 s가 더해진다.
 - **sampling**: Garmin smart recording은 5-7 s 공백을 남기고, 긴 세션은 `get_activity_details`의 `maxChartSize=2000` 때문에
   down-sampling될 수 있다. `heart_rate_gap`이 많을 수 있다.

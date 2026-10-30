@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -14,9 +16,11 @@ from strength_set_timing_builders import (
     Session,
     build_session,
     details_payload,
+    garmin_time,
     heart_rate_samples,
     strength_activity,
     timed_set,
+    without_rest_starts,
 )
 
 from muscle50.domain.strength_set_timing import (
@@ -27,6 +31,7 @@ from muscle50.domain.strength_set_timing import (
     LagStatus,
     NotEstimatedReason,
     RestBetweenSets,
+    RestStartSource,
     SuspectSet,
     TimingMethod,
     estimate_session,
@@ -574,3 +579,146 @@ def test_rest_between_sets_groups_compound_isolation_and_unclassified() -> None:
     # BENCH_PRESS -> CURL and CURL -> PULL_UP are label changes.
     assert rest.excluded_label_change_or_unknown == 2
     assert rest.excluded_not_estimated == 0
+
+
+# v1.1: a REST without a recorded start gets a derived, cross-checked start
+
+
+def _change_set(session: Session, sequence: int, **changes: object) -> Session:
+    sets = tuple(replace(item, **changes) if item.sequence == sequence else item for item in session.sets)  # type: ignore[arg-type]
+    return Session(sets, list(session.works), dict(session.press_ms))
+
+
+def _suspect_rest_sequence(session: Session) -> int:
+    """The REST right before the last (suspect) set of ``_ac2_rows``."""
+    return max(session.press_ms) - 1
+
+
+def _rest_start_used(item: SuspectSet) -> int:
+    assert item.estimated_start_at_ms is not None and item.estimated_rest_ms is not None
+    return item.estimated_start_at_ms - item.estimated_rest_ms
+
+
+def test_derived_rest_start_gives_the_recorded_start_estimate() -> None:
+    session = build_session(_ac2_rows())
+    load = _available(heart_rate_samples(session))
+
+    recorded = _estimate(session, load)
+    derived = _estimate(without_rest_starts(session), load)
+
+    assert recorded.method is TimingMethod.HEART_RATE
+    assert recorded.rest_start_source is RestStartSource.RECORDED
+    assert derived.method is TimingMethod.HEART_RATE
+    assert derived.rest_start_source is RestStartSource.DERIVED
+    assert replace(derived, rest_start_source=RestStartSource.RECORDED) == recorded
+    # Derived REST start = next set start - REST duration.
+    assert _rest_start_used(derived) == session.press_ms[derived.sequence] - 50_000
+
+
+@pytest.mark.parametrize(
+    ("rest_seconds", "used"),
+    [
+        (49.0, True),  # derived start 1000 ms after the previous set's end
+        (48.999, False),  # 1001 ms
+        (51.0, True),  # 1000 ms before
+        (51.001, False),  # 1001 ms before
+    ],
+)
+def test_derived_rest_start_must_agree_within_one_second(rest_seconds: float, used: bool) -> None:
+    session = build_session(_ac2_rows())
+    load = _available(heart_rate_samples(session))
+    changed = _change_set(without_rest_starts(session), _suspect_rest_sequence(session), duration_seconds=rest_seconds)
+
+    item = _estimate(changed, load)
+
+    if used:
+        assert item.method is TimingMethod.HEART_RATE
+        assert item.rest_start_source is RestStartSource.DERIVED
+        assert _rest_start_used(item) == session.press_ms[item.sequence] - round(rest_seconds * 1000)
+    else:
+        _assert_not_estimated(item, NotEstimatedReason.REST_START_UNVERIFIED)
+        assert item.rest_start_source is None
+
+
+def _first_row_rest() -> Session:
+    return build_session([Rest(50.0), Active(4, 1.629, hidden_s=20.0), Rest(40.0), _normal()])
+
+
+def _rest_after_rest() -> Session:
+    return build_session([_normal(), Rest(10.0), Rest(50.0), Active(4, 1.629, hidden_s=20.0)])
+
+
+def _previous_start_missing() -> Session:
+    session = build_session(_ac2_rows())
+    return _change_set(session, _suspect_rest_sequence(session) - 1, started_at=None)
+
+
+def _previous_duration_missing() -> Session:
+    session = build_session(_ac2_rows())
+    return _change_set(session, _suspect_rest_sequence(session) - 1, duration_seconds=None)
+
+
+@pytest.mark.parametrize(
+    "make", [_first_row_rest, _rest_after_rest, _previous_start_missing, _previous_duration_missing]
+)
+def test_derived_rest_start_without_a_usable_previous_set_is_unverified(make: Callable[[], Session]) -> None:
+    session = make()
+    nulled = without_rest_starts(session)
+
+    _timing, suspects = estimate_session(
+        DAY, strength_activity("9101", nulled), _available(heart_rate_samples(session))
+    )
+
+    _assert_not_estimated(suspects[-1], NotEstimatedReason.REST_START_UNVERIFIED)
+    assert suspects[-1].rest_start_source is None
+
+
+def test_recorded_rest_start_needs_no_previous_set() -> None:
+    _timing, suspects = estimate_session(DAY, strength_activity("9101", _first_row_rest()), None)
+
+    # v1 behaviour: the recorded start is used, so the next check (heart rate) is the reason.
+    _assert_not_estimated(suspects[0], NotEstimatedReason.HEART_RATE_RAW_MISSING)
+
+
+def test_null_rest_start_and_missing_rest_duration_is_set_time_missing() -> None:
+    session = build_session(_ac2_rows())
+    changed = _change_set(without_rest_starts(session), _suspect_rest_sequence(session), duration_seconds=None)
+
+    item = _estimate(changed, _available(heart_rate_samples(session)))
+
+    _assert_not_estimated(item, NotEstimatedReason.SET_TIME_MISSING)
+
+
+def test_unparseable_recorded_rest_start_is_not_replaced_by_a_derived_one() -> None:
+    session = build_session(_ac2_rows())
+    changed = _change_set(session, _suspect_rest_sequence(session), started_at="not a time")
+
+    item = _estimate(changed, _available(heart_rate_samples(session)))
+
+    _assert_not_estimated(item, NotEstimatedReason.SET_TIME_MISSING)
+
+
+def test_recorded_rest_start_wins_over_an_agreeing_derived_one() -> None:
+    session = build_session(_ac2_rows())
+    pressed = session.press_ms[max(session.press_ms)]
+    # Derived (pressed - 50 s) agrees with the previous set exactly; the recorded start says 45 s.
+    changed = _change_set(session, _suspect_rest_sequence(session), started_at=garmin_time(pressed - 45_000))
+
+    item = _estimate(changed, _available(heart_rate_samples(session)))
+
+    assert item.method is TimingMethod.HEART_RATE
+    assert item.rest_start_source is RestStartSource.RECORDED
+    assert _rest_start_used(item) == pressed - 45_000
+
+
+def test_recorded_rest_start_disagreeing_with_the_derived_one_keeps_the_v1_result() -> None:
+    session = build_session(_ac2_rows())
+    load = _available(heart_rate_samples(session))
+    original = _estimate(session, load)
+    # A derived start would be 5 s off the previous set's end; the recorded start is used regardless.
+    changed = _change_set(session, _suspect_rest_sequence(session), duration_seconds=55.0)
+
+    item = _estimate(changed, load)
+
+    assert item.rest_start_source is RestStartSource.RECORDED
+    assert replace(item, recorded_rest_seconds=50.0) == original

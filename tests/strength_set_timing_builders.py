@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -141,6 +141,12 @@ def build_session(rows: Sequence[Active | Rest], start_ms: int = START_MS) -> Se
         at += round(duration) * 1000
     session.sets = tuple(sets)
     return session
+
+
+def without_rest_starts(session: Session) -> Session:
+    """The same session with every REST ``startTime`` null, as in some Garmin activities (durations kept)."""
+    sets = tuple(replace(item, started_at=None) if item.set_type == "REST" else item for item in session.sets)
+    return Session(sets, list(session.works), dict(session.press_ms))
 
 
 def heart_rate_samples(

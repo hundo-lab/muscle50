@@ -21,6 +21,7 @@ from strength_set_timing_builders import (
     heart_rate_samples,
     save_with_details,
     strength_activity,
+    without_rest_starts,
 )
 
 from muscle50 import cli
@@ -184,11 +185,13 @@ def test_json_appends_one_trailing_key(home: Path, capsys: pytest.CaptureFixture
         "estimated_rest_seconds": 30.0,
         "estimated_rest_range_seconds": [30.0, 30.0],
         "confidence": "low",
+        "rest_start_source": "recorded",
     }
     not_estimated = timing["suspect_sets"][0]
     assert (not_estimated["method"], not_estimated["not_estimated_reason"]) == ("none", "no_preceding_rest")
     assert all(not_estimated[key] is None for key in not_estimated if key.startswith("estimated_"))
     assert not_estimated["heart_rate_onset_at_utc"] is None and not_estimated["confidence"] is None
+    assert not_estimated["rest_start_source"] is None
     assert timing["rest_between_sets"]["unclassified"] == {
         "median_seconds": 40.0,
         "rest_count": 5,
@@ -235,6 +238,73 @@ def test_missing_details_still_exits_zero_with_a_reason(home: Path, capsys: pyte
     session = json.loads(document)["strength_set_timing"]["sessions"][0]
     assert session["heart_rate"] == {"status": "raw_missing", "artifact_relative_path": None, "sample_count": 0}
     assert session["lag"] is None
+
+
+EXPECTED_DERIVED_LINE = (
+    "    2026-03-12 9101 seq 11 PULL_UP/WIDE_GRIP_PULL_UP #6: 4 reps in 1.6 s after REST 50.0 s -> estimated work "
+    "20 s (20-20) / rest 30 s (30-30) (heart_rate, low; wrist lag 8 s from 4 sets [HR-04]; rest start derived "
+    "[design])"
+)
+
+
+def _store_without_rest_starts(home: Path) -> Session:
+    session = without_rest_starts(_session())
+    save_with_details(home, strength_activity("9101", session), details_payload(heart_rate_samples(session)))
+    return session
+
+
+def test_derived_rest_start_is_marked_in_text(home: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _store_without_rest_starts(home)
+
+    code, out, err = _run(capsys, "analytics", "snapshot", "--date", AS_OF)
+
+    assert (code, err) == (0, "")
+    lines = out.splitlines()
+    start = lines.index(EXPECTED_SET_TIMING_LINES[0])
+    assert lines[start : start + 4] == [
+        *EXPECTED_SET_TIMING_LINES[:2],
+        EXPECTED_DERIVED_LINE,
+        EXPECTED_SET_TIMING_LINES[3],
+    ]
+    assert out.isascii()
+
+
+def test_derived_rest_start_json_equals_the_recorded_one_apart_from_the_source(
+    home: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _store_suspect(home)
+    _code, recorded_document, _err = _run(capsys, "analytics", "snapshot", "--date", AS_OF, "--json")
+    other = tmp_path / "other-home"
+    monkeypatch.setenv("MUSCLE50_HOME", str(other))
+    _store_without_rest_starts(other)
+
+    code, document, _err = _run(capsys, "analytics", "snapshot", "--date", AS_OF, "--json")
+
+    assert code == 0
+    timing = json.loads(document)["strength_set_timing"]
+    recorded = json.loads(recorded_document)["strength_set_timing"]
+    assert list(timing["rules"])[-1] == "max_rest_start_disagreement_seconds"
+    assert timing["rules"]["max_rest_start_disagreement_seconds"] == 1.0
+    assert list(timing["evidence"])[-1] == "max_rest_start_disagreement_seconds"
+    assert timing["evidence"]["max_rest_start_disagreement_seconds"] == ["design"]
+    row = timing["suspect_sets"][1]
+    assert list(row)[-1] == "rest_start_source"
+    assert row["rest_start_source"] == "derived"
+    assert timing["suspect_sets"][0]["rest_start_source"] is None
+    timing["suspect_sets"][1] = {**row, "rest_start_source": "recorded"}
+    assert timing == recorded
+
+
+def test_recommend_is_identical_with_recorded_and_null_rest_starts(
+    home: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _store_suspect(home)
+    recorded = _recommend_outputs(capsys)
+    other = tmp_path / "other-home"
+    monkeypatch.setenv("MUSCLE50_HOME", str(other))
+    _store_without_rest_starts(other)
+
+    assert _recommend_outputs(capsys) == recorded
 
 
 def test_no_suspect_set_keeps_text_and_json_byte_identical(home: Path, capsys: pytest.CaptureFixture[str]) -> None:

@@ -9,6 +9,10 @@ Stored sets and RAW are never changed; every derived value lives only in the out
 not zero: a set without reps or duration is "unchecked", a missing heart-rate sample is skipped,
 and a set that cannot be estimated keeps a reason instead of a number.
 
+v1.1: a REST whose recorded start is empty gets a derived start (next ACTIVE start - REST duration),
+used only when the previous ACTIVE set's start + duration confirms it (``_rest_start``). A recorded
+start always wins.
+
 Evidence IDs refer to docs/evidence/training-nutrition-evidence.md; ``design`` marks a number the
 evidence does not give. All arithmetic is in integer milliseconds so equal input gives equal output.
 """
@@ -48,6 +52,10 @@ MIN_LAG_CALIBRATION_SETS = 3
 MEDIUM_CONFIDENCE_MIN_CALIBRATION_SETS = 5
 MEDIUM_CONFIDENCE_MAX_LAG_SPREAD_MILLISECONDS = 10_000
 # HR-02: Garmin wrist HR in strength work has MAPE of roughly 28-82 %, so there is no "high" level.
+# [design], no evidence; Garmin set starts have 1 s resolution. A REST without a recorded start gets
+# the derived start "next ACTIVE start - REST duration" only when it agrees with "previous ACTIVE
+# start + its duration" within this many milliseconds (inclusive).
+MAX_REST_START_DISAGREEMENT_MILLISECONDS = 1000
 
 SUSPECT_EVIDENCE = ("design",)
 RISE_EVIDENCE = ("HR-01", "design")
@@ -58,6 +66,7 @@ LAG_EVIDENCE = ("HR-04", "design")
 CONFIDENCE_EVIDENCE = ("HR-02", "design")
 # REST-07 separates compound from accessory rest; [design] for using movement patterns for it.
 REST_GROUP_EVIDENCE = ("REST-07", "design")
+REST_START_DISAGREEMENT_EVIDENCE = ("design",)
 
 HEART_RATE_TIMESTAMP_KEY = "directTimestamp"
 HEART_RATE_VALUE_KEY = "directHeartRate"
@@ -72,6 +81,7 @@ class NotEstimatedReason(StrEnum):
 
     NO_PRECEDING_REST = "no_preceding_rest"
     SET_TIME_MISSING = "set_time_missing"
+    REST_START_UNVERIFIED = "rest_start_unverified"
     HEART_RATE_RAW_MISSING = "heart_rate_raw_missing"
     HEART_RATE_RAW_UNREADABLE = "heart_rate_raw_unreadable"
     HEART_RATE_NOT_IN_RAW = "heart_rate_not_in_raw"
@@ -89,6 +99,13 @@ class TimingMethod(StrEnum):
 class Confidence(StrEnum):
     MEDIUM = "medium"
     LOW = "low"
+
+
+class RestStartSource(StrEnum):
+    """Where the REST start of an estimated set came from: Garmin's ``startTime``, or derived."""
+
+    RECORDED = "recorded"
+    DERIVED = "derived"
 
 
 class HeartRateStatus(StrEnum):
@@ -158,6 +175,8 @@ class SuspectSet:
     estimated_rest_ms: int | None
     estimated_rest_range_ms: tuple[int, int] | None
     confidence: Confidence | None
+    rest_start_source: RestStartSource | None
+    """None when the set was not estimated (no REST start was used)."""
 
 
 @dataclass(frozen=True)
@@ -397,7 +416,9 @@ def estimate_session(
             continue
         previous = ordered[index - 1] if index > 0 else None
         rest = previous if previous is not None and previous.set_type == _REST else None
-        reason, estimate = _estimate(current, rest, heart_rate, clock_ok, lag)
+        # The row before the REST, for cross-checking a derived REST start (never wraps around).
+        before_rest = ordered[index - 2] if rest is not None and index >= 2 else None
+        reason, estimate = _estimate(current, rest, before_rest, heart_rate, clock_ok, lag)
         duration = current.duration_seconds
         assert current.reps is not None and duration is not None
         suspects.append(
@@ -421,6 +442,7 @@ def estimate_session(
                 estimated_rest_ms=estimate.rest_ms if estimate else None,
                 estimated_rest_range_ms=estimate.rest_range_ms if estimate else None,
                 confidence=estimate.confidence if estimate else None,
+                rest_start_source=estimate.rest_start_source if estimate else None,
             )
         )
     session = SessionSetTiming(
@@ -548,22 +570,58 @@ class _Estimate:
     rest_ms: int
     rest_range_ms: tuple[int, int]
     confidence: Confidence
+    rest_start_source: RestStartSource
+
+
+def _rest_start(
+    rest: StrengthSet,
+    before_rest: StrengthSet | None,
+    pressed: int,
+) -> tuple[int, RestStartSource] | NotEstimatedReason:
+    """The REST start: Garmin's recorded ``startTime`` always wins; only an empty one is derived.
+
+    Derived = next ACTIVE start (``pressed``) - REST duration, used only when the row before the
+    REST is an ACTIVE set whose start + duration agrees within MAX_REST_START_DISAGREEMENT_MILLISECONDS.
+    A recorded but unparseable start is not replaced (``set_time_missing``, as in v1).
+    """
+    if rest.started_at:
+        recorded = parse_set_start_ms(rest.started_at)
+        if recorded is None:
+            return NotEstimatedReason.SET_TIME_MISSING
+        return recorded, RestStartSource.RECORDED
+    rest_duration = set_duration_ms(rest)
+    if rest_duration is None:
+        return NotEstimatedReason.SET_TIME_MISSING
+    derived = pressed - rest_duration
+    if before_rest is None or before_rest.set_type != _ACTIVE:
+        return NotEstimatedReason.REST_START_UNVERIFIED
+    before_start = parse_set_start_ms(before_rest.started_at)
+    before_duration = set_duration_ms(before_rest)
+    if before_start is None or before_duration is None:
+        return NotEstimatedReason.REST_START_UNVERIFIED
+    if abs(derived - (before_start + before_duration)) > MAX_REST_START_DISAGREEMENT_MILLISECONDS:
+        return NotEstimatedReason.REST_START_UNVERIFIED
+    return derived, RestStartSource.DERIVED
 
 
 def _estimate(
     current: StrengthSet,
     rest: StrengthSet | None,
+    before_rest: StrengthSet | None,
     heart_rate: HeartRateLoad | None,
     clock_ok: bool,
     lag: LagCalibration | None,
 ) -> tuple[NotEstimatedReason | None, _Estimate | None]:
     if rest is None:
         return NotEstimatedReason.NO_PRECEDING_REST, None
-    rest_start = parse_set_start_ms(rest.started_at)
     pressed = parse_set_start_ms(current.started_at)
     duration = set_duration_ms(current)
-    if rest_start is None or pressed is None or duration is None:
+    if pressed is None or duration is None:
         return NotEstimatedReason.SET_TIME_MISSING, None
+    resolved = _rest_start(rest, before_rest, pressed)
+    if isinstance(resolved, NotEstimatedReason):
+        return resolved, None
+    rest_start, rest_start_source = resolved
     if heart_rate is None:
         return NotEstimatedReason.HEART_RATE_RAW_MISSING, None
     status_reason = _STATUS_REASONS.get(heart_rate.status)
@@ -596,6 +654,7 @@ def _estimate(
         rest_ms=start - rest_start,
         rest_range_ms=(start_low - rest_start, start_high - rest_start),
         confidence=Confidence.MEDIUM if medium else Confidence.LOW,
+        rest_start_source=rest_start_source,
     )
 
 

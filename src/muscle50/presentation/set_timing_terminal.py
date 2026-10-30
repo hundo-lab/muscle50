@@ -15,6 +15,7 @@ from muscle50.domain.strength_set_timing import (
     LAG_BOUNDS_EVIDENCE,
     LAG_EVIDENCE,
     MAX_HEART_RATE_GAP_MILLISECONDS,
+    MAX_REST_START_DISAGREEMENT_MILLISECONDS,
     MAX_WRIST_LAG_MILLISECONDS,
     MEDIUM_CONFIDENCE_MAX_LAG_SPREAD_MILLISECONDS,
     MEDIUM_CONFIDENCE_MIN_CALIBRATION_SETS,
@@ -22,11 +23,13 @@ from muscle50.domain.strength_set_timing import (
     MIN_LAG_CALIBRATION_SETS,
     MIN_MILLISECONDS_PER_REP,
     REST_GROUP_EVIDENCE,
+    REST_START_DISAGREEMENT_EVIDENCE,
     RISE_EVIDENCE,
     SUSPECT_EVIDENCE,
     LagCalibration,
     RestBetweenSets,
     RestGroup,
+    RestStartSource,
     SessionSetTiming,
     StrengthSetTimingSummary,
     SuspectSet,
@@ -59,6 +62,7 @@ def set_timing_payload(summary: StrengthSetTimingSummary) -> dict[str, Any]:
             "min_lag_calibration_sets": MIN_LAG_CALIBRATION_SETS,
             "medium_confidence_min_calibration_sets": MEDIUM_CONFIDENCE_MIN_CALIBRATION_SETS,
             "medium_confidence_max_lag_spread_seconds": MEDIUM_CONFIDENCE_MAX_LAG_SPREAD_MILLISECONDS / 1000,
+            "max_rest_start_disagreement_seconds": MAX_REST_START_DISAGREEMENT_MILLISECONDS / 1000,
         },
         "evidence": {
             "min_seconds_per_rep": list(SUSPECT_EVIDENCE),
@@ -68,6 +72,7 @@ def set_timing_payload(summary: StrengthSetTimingSummary) -> dict[str, Any]:
             "lag_calibration": list(LAG_EVIDENCE),
             "confidence": list(CONFIDENCE_EVIDENCE),
             "rest_groups": list(REST_GROUP_EVIDENCE),
+            "max_rest_start_disagreement_seconds": list(REST_START_DISAGREEMENT_EVIDENCE),
         },
         "active_set_count": summary.active_set_count,
         "checked_set_count": summary.checked_set_count,
@@ -102,11 +107,12 @@ def _suspect_line(item: SuspectSet, lag: LagCalibration | None) -> str:
         return f"{text} -> not estimated ({item.not_estimated_reason})"
     work_low, work_high = item.estimated_work_range_ms
     rest_low, rest_high = item.estimated_rest_range_ms
+    derived = "; rest start derived [design]" if item.rest_start_source is RestStartSource.DERIVED else ""
     return (
         f"{text} -> estimated work {_seconds(item.estimated_work_ms)} ({_bare(work_low)}-{_bare(work_high)}) / "
         f"rest {_seconds(item.estimated_rest_ms)} ({_bare(rest_low)}-{_bare(rest_high)}) "
         f"({item.method}, {item.confidence}; wrist lag {_seconds(lag.median_ms)} from {len(lag.set_sequences)} sets "
-        "[HR-04])"
+        f"[HR-04]{derived})"
     )
 
 
@@ -184,6 +190,7 @@ def _suspect_payload(item: SuspectSet) -> dict[str, Any]:
         "estimated_rest_seconds": _optional_seconds(item.estimated_rest_ms),
         "estimated_rest_range_seconds": _range(item.estimated_rest_range_ms),
         "confidence": None if item.confidence is None else item.confidence.value,
+        "rest_start_source": None if item.rest_start_source is None else item.rest_start_source.value,
     }
 
 
