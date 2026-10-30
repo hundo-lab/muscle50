@@ -89,7 +89,7 @@ sample이 새어 나가지 않는다).
 - 추정하지 않은 세트: `method: "none"`, `not_estimated_reason`에 이유, 모든 `estimated_*`,
   `heart_rate_onset_at_utc`, `confidence`, `rest_start_source`가 `null`.
 - `rest_start_source`(v1.1, 각 행의 마지막 key): 추정에 쓴 REST 시작이 Garmin 기록값이면 `"recorded"`, 규칙 3으로 계산한
-  값이면 `"derived"`. 추정하지 않은 세트는 REST 시작을 쓰지 않았으므로 `null`.
+  값이면 `"derived"`. 추정하지 않은 세트는 다른 추정 값처럼 늘 `null`이다.
 - `rules`/`evidence`의 마지막 항목 `max_rest_start_disagreement_seconds`(v1.1)는 규칙 3의 교차 확인 허용 오차다.
 - `sessions`에는 의심 세트가 있는 활동만 들어간다. `heart_rate`가 `null`이면 그 활동의 의심 세트 중 앞이 REST인 것이 없어
   심박을 읽지 않은 것이다. `lag`가 `null`이면 심박이 없거나(상태 참고) 세트 시계가 심박과 맞지 않는 것이다.

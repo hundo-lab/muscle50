@@ -176,7 +176,7 @@ class SuspectSet:
     estimated_rest_range_ms: tuple[int, int] | None
     confidence: Confidence | None
     rest_start_source: RestStartSource | None
-    """None when the set was not estimated (no REST start was used)."""
+    """None whenever the set was not estimated, like the other estimate fields."""
 
 
 @dataclass(frozen=True)
