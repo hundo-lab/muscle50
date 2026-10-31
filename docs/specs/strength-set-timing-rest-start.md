@@ -1,7 +1,7 @@
 ---
 id: strength-set-timing-rest-start
 title: Strength Set Timing - derived REST start v1.1
-status: draft
+status: integrated
 migration: none
 output_change: additive
 user_gates: [design, integration]
@@ -45,17 +45,40 @@ user_gates: [design, integration]
 
 ## 인수 조건
 
-- [ ] AC1: REST `startTime`이 null이고 교차 확인이 1000 ms 안에서 맞는 합성 데이터에서, 의심 세트가 v1과 같은 방식으로 추정되고
+- [x] AC1: REST `startTime`이 null이고 교차 확인이 1000 ms 안에서 맞는 합성 데이터에서, 의심 세트가 v1과 같은 방식으로 추정되고
   `rest_start_source: "derived"`와 text 표시가 붙는다. derived REST 시작 = 다음 세트 시작 - REST 길이다.
-- [ ] AC2: 차이가 1000 ms를 넘거나(1001 ms), REST 앞 행이 없거나 ACTIVE가 아니거나, 앞 세트 시작·길이가 없으면 `rest_start_unverified`로
+- [x] AC2: 차이가 1000 ms를 넘거나(1001 ms), REST 앞 행이 없거나 ACTIVE가 아니거나, 앞 세트 시작·길이가 없으면 `rest_start_unverified`로
   추정하지 않는다. 경계 1000 ms는 쓴다.
-- [ ] AC3: REST `startTime`이 기록된 경우의 결과는 v1과 같고 `rest_start_source: "recorded"`다(기록값이 derived와 달라도 기록값을 쓴다).
-- [ ] AC4: RAW, 정규화된 세트, `recommend`/`daily` 출력은 바뀌지 않는다. 의심 세트가 없는 창의 `analytics snapshot`은 byte-identical.
+- [x] AC3: REST `startTime`이 기록된 경우의 결과는 v1과 같고 `rest_start_source: "recorded"`다(기록값이 derived와 달라도 기록값을 쓴다).
+- [x] AC4: RAW, 정규화된 세트, `recommend`/`daily` 출력은 바뀌지 않는다. 의심 세트가 없는 창의 `analytics snapshot`은 byte-identical.
 - [ ] AC5: 실제 RAW 확인(읽기 전용): 통합 후 main checkout에서 `analytics snapshot --date 2026-10-28 --days 1 --json`을 실행해
   활동 24876655521의 `seq 11`, `seq 61`이 더 이상 `set_time_missing`이 아니다(`heart_rate` 또는 다른 이유). 상태만 기록한다.
-- [ ] AC6: 품질 게이트 4개가 통과한다.
+  pending: post-integration read-only check from main.
+- [x] AC6: 품질 게이트 4개가 통과한다.
 
 ## 한계 / 후속 후보
 
 - 시계 일시정지가 REST 안에 있으면 derived 시작이 틀릴 수 있다. 교차 확인이 대부분을 걸러 내지만, 일시정지가 앞 세트 쪽이면 못 잡을 수 있다.
 - REST 시작이 기록된 활동에서 기록값과 derived 값이 어긋나는 곳(최대 약 266 s)의 원인은 확인하지 않았다.
+- 구현자·검증자가 보고한 한계:
+  - `rest_start_source`는 추정하지 않은 세트에서는 늘 null이다. 그래서 REST 시작을 derived로 얻었지만 `heart_rate_gap` 등으로
+    빠진 세트는 그 사실이 출력에 보이지 않는다.
+  - REST 시작이 null인 활동에서 이제 추정되는 세트가 `rest_between_sets`에 추정 휴식으로 들어간다. 그런 기간은
+    `excluded_not_estimated`가 줄고 중앙값·개수가 바뀔 수 있다(규칙 10은 그대로).
+  - REST 시작이 null인 활동에서 활동의 첫 REST와 REST 바로 뒤 REST는 교차 확인을 못 해 `rest_start_unverified`다.
+  - 앞 행을 끝에서 되돌아 읽지 않게 하는 `index >= 2` 조건은 코드로만 확인했고 이를 고정하는 테스트는 없다.
+  - 허용 오차 1000 ms는 `[design]` 값이다(근거 없음).
+- migration은 없고 Garmin 동기화를 바꾸지 않으므로 production migration(gate 3)과 live Garmin 확인(gate 4)은 없다.
+
+## 구현 결정 (검증자 승인, 2026-11-01)
+
+설계는 이 spec 자체다(별도 계획 없음). 구현에서 정한 해석, 상세: `docs/strength-set-timing.md`.
+
+- 확인 순서: `no_preceding_rest` -> `set_time_missing`(의심 세트 시작·길이) -> REST 시작 결정(`rest_start_unverified`) -> v1 심박 이유.
+- derived는 `startTime`이 비어 있을 때(null 또는 "")만이다. 기록됐지만 읽을 수 없는 시작은 바꾸지 않고 v1처럼 `set_time_missing`.
+- 앞 행은 ACTIVE이고 시작·길이만 있으면 된다(`is_checked`는 따지지 않는다).
+- `rest_start_source`는 추정한 세트에서만 값이 있다(`estimated_*`, `confidence`와 같다). text 표시도 추정한 줄에만 붙는다.
+- 새 공개 이름: `RestStartSource`(`recorded`/`derived`), `NotEstimatedReason.REST_START_UNVERIFIED`,
+  `MAX_REST_START_DISAGREEMENT_MILLISECONDS = 1000`, `REST_START_DISAGREEMENT_EVIDENCE = ("design",)`.
+  `rules`·`evidence` key는 `max_rest_start_disagreement_seconds`.
+- `SET_TIMING_VERSION`은 1 그대로다(추가만 하는 변경).
