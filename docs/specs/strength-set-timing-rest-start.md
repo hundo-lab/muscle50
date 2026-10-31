@@ -51,9 +51,11 @@ user_gates: [design, integration]
   추정하지 않는다. 경계 1000 ms는 쓴다.
 - [x] AC3: REST `startTime`이 기록된 경우의 결과는 v1과 같고 `rest_start_source: "recorded"`다(기록값이 derived와 달라도 기록값을 쓴다).
 - [x] AC4: RAW, 정규화된 세트, `recommend`/`daily` 출력은 바뀌지 않는다. 의심 세트가 없는 창의 `analytics snapshot`은 byte-identical.
-- [ ] AC5: 실제 RAW 확인(읽기 전용): 통합 후 main checkout에서 `analytics snapshot --date 2026-10-28 --days 1 --json`을 실행해
+- [x] AC5: 실제 RAW 확인(읽기 전용): 통합 후 main checkout에서 `analytics snapshot --date 2026-10-28 --days 1 --json`을 실행해
   활동 24876655521의 `seq 11`, `seq 61`이 더 이상 `set_time_missing`이 아니다(`heart_rate` 또는 다른 이유). 상태만 기록한다.
-  pending: post-integration read-only check from main.
+  확인(2026-11-01, main daf27a5, 운영 DB 읽기 전용, 상태만): heart rate `available`, lag `calibrated`. `seq 61 CURL #1`은
+  `heart_rate`(low), `rest_start_source: "derived"`로 추정됐다. `seq 11 PULL_UP #1`은 derived REST 시작을 지나 심박 단계에서
+  `heart_rate_gap`으로 추정하지 않았다(REST 198 s). 두 세트 모두 `set_time_missing`이 아니다.
 - [x] AC6: 품질 게이트 4개가 통과한다.
 
 ## 한계 / 후속 후보
