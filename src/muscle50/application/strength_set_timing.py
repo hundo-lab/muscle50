@@ -1,7 +1,8 @@
 """The training snapshot plus strength set timing, computed on read from stored sets and RAW (no Garmin calls).
 
 Nothing is stored: the estimates are recomputed from the canonical sets and the stored
-``details.json`` every time, and they are display only.
+``details.json`` every time, and they are display only. The rest interval advice is computed from
+the same sessions' recorded REST rows only (no heart rate) and is advice only.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from typing import Protocol
 from muscle50.application.training_snapshot import TrainingDataReader, snapshot_from_data
 from muscle50.domain.activity import NormalizedActivity
 from muscle50.domain.analytics import DEFAULT_LOOKBACK_DAYS, TrainingSnapshot, activity_local_date, snapshot_window
+from muscle50.domain.rest_interval_advice import RestIntervalAdvice, summarize_rest_intervals
 from muscle50.domain.strength_set_timing import (
     HeartRateLoad,
     StrengthSetTimingSummary,
@@ -30,6 +32,8 @@ class SnapshotWithSetTiming:
     snapshot: TrainingSnapshot
     set_timing: StrengthSetTimingSummary | None
     """None when the window has no set that is too short for its reps."""
+    rest_advice: RestIntervalAdvice | None = None
+    """None when the window has no ACTIVE, REST, ACTIVE triple."""
 
 
 class BuildSnapshotWithSetTiming:
@@ -55,4 +59,6 @@ class BuildSnapshotWithSetTiming:
             for _day, activity in sessions
             if needs_heart_rate(activity)
         }
-        return SnapshotWithSetTiming(snapshot, summarize_set_timing(sessions, heart_rates))
+        return SnapshotWithSetTiming(
+            snapshot, summarize_set_timing(sessions, heart_rates), summarize_rest_intervals(sessions)
+        )

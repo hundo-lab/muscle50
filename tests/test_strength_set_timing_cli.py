@@ -111,10 +111,13 @@ def test_text_adds_the_set_timing_block_at_the_end_of_the_strength_section(
     start = lines.index(EXPECTED_SET_TIMING_LINES[0])
     assert lines[start : start + 4] == EXPECTED_SET_TIMING_LINES
     assert lines[start - 1].startswith("      ")  # the last taxonomy label line
-    assert lines[start + 4 : start + 6] == ["", "Swimming: 0 sessions"]
+    # Rest Interval Advice v1: the same-label PULL_UP triples add the Rest advice block right after.
+    assert lines[start + 4].startswith("  Rest advice [advice only; used by no rule]: ")
+    end = lines.index("", start + 4)
+    assert lines[end : end + 2] == ["", "Swimming: 0 sessions"]
     assert out.isascii()
-    # Removing the block gives exactly the old text.
-    assert "\n".join(lines[:start] + lines[start + 4 :]) + "\n" == render_training_snapshot(_old_snapshot(home)) + "\n"
+    # Removing both blocks gives exactly the old text.
+    assert "\n".join(lines[:start] + lines[end:]) + "\n" == render_training_snapshot(_old_snapshot(home)) + "\n"
 
 
 def test_json_appends_one_trailing_key(home: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -125,10 +128,14 @@ def test_json_appends_one_trailing_key(home: Path, capsys: pytest.CaptureFixture
 
     assert code == 0
     payload = json.loads(out)
-    assert list(payload) == [*old, "strength_set_timing"]
+    # Rest Interval Advice v1 appends its key after this one.
+    assert list(payload) == [*old, "strength_set_timing", "rest_interval_advice"]
+    advice = payload.pop("rest_interval_advice")
     timing = payload.pop("strength_set_timing")
     assert payload == old
-    assert out == json.dumps({**payload, "strength_set_timing": timing}, indent=2) + "\n"
+    assert (
+        out == json.dumps({**payload, "strength_set_timing": timing, "rest_interval_advice": advice}, indent=2) + "\n"
+    )
     assert list(timing) == [
         "set_timing_version",
         "display_only",
@@ -314,8 +321,15 @@ def test_no_suspect_set_keeps_text_and_json_byte_identical(home: Path, capsys: p
     _code, text, _err = _run(capsys, "analytics", "snapshot", "--date", AS_OF)
     _code, document, _err = _run(capsys, "analytics", "snapshot", "--date", AS_OF, "--json")
 
-    assert text == render_training_snapshot(snapshot) + "\n"
-    assert document == render_training_snapshot_json(snapshot) + "\n"
+    # Rest Interval Advice v1: the BENCH_PRESS triples add only the Rest advice block and its key.
+    lines = text.splitlines()
+    start = next(index for index, line in enumerate(lines) if line.startswith("  Rest advice [advice only; "))
+    end = lines.index("", start)
+    assert "\n".join(lines[:start] + lines[end:]) + "\n" == render_training_snapshot(snapshot) + "\n"
+    payload = json.loads(document)
+    assert list(payload)[-1] == "rest_interval_advice"
+    payload.pop("rest_interval_advice")
+    assert json.dumps(payload, indent=2, ensure_ascii=True) + "\n" == render_training_snapshot_json(snapshot) + "\n"
     assert "Set timing" not in text
     assert "strength_set_timing" not in document
 

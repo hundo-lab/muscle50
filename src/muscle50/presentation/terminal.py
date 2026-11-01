@@ -33,6 +33,7 @@ from muscle50.domain.analytics import (
 )
 from muscle50.domain.derivation import derive_summary
 from muscle50.domain.recovery_assessment import RecoveryObservation
+from muscle50.domain.rest_interval_advice import RestIntervalAdvice
 from muscle50.domain.strength_recommendation import (
     LOAD_STEP_SMALLEST_AVAILABLE_DIRECTION_UNKNOWN,
     PlannedExercise,
@@ -51,6 +52,7 @@ from muscle50.domain.sync_catch_up import (
 from muscle50.domain.training_recommendation import TrainingRecommendation
 from muscle50.presentation.goal_terminal import goal_mode_lines, goal_mode_payload
 from muscle50.presentation.nutrition_terminal import nutrition_context_lines, nutrition_context_payload
+from muscle50.presentation.rest_advice_terminal import rest_advice_lines, rest_advice_payload
 from muscle50.presentation.set_timing_terminal import set_timing_lines, set_timing_payload
 from muscle50.presentation.sync_coverage_terminal import sync_coverage_freshness_lines, sync_coverage_payload
 
@@ -357,20 +359,32 @@ def _strength_set_value(strength_set: StrengthSet) -> str:
 
 
 def render_training_snapshot_json(
-    snapshot: TrainingSnapshot, set_timing: StrengthSetTimingSummary | None = None
+    snapshot: TrainingSnapshot,
+    set_timing: StrengthSetTimingSummary | None = None,
+    *,
+    rest_advice: RestIntervalAdvice | None = None,
 ) -> str:
     """Full snapshot including provenance; ASCII-only and stable for identical input.
 
-    ``strength_set_timing`` is appended as the last key only when the window has a suspect set.
+    ``strength_set_timing`` is appended only when the window has a suspect set, then
+    ``rest_interval_advice`` only when it has an ACTIVE, REST, ACTIVE triple; both after every other key.
     """
-    if set_timing is None:
+    if set_timing is None and rest_advice is None:
         return json.dumps(dataclasses.asdict(snapshot), indent=2, ensure_ascii=True, default=_json_default)
     payload = dataclasses.asdict(snapshot)
-    payload["strength_set_timing"] = set_timing_payload(set_timing)
+    if set_timing is not None:
+        payload["strength_set_timing"] = set_timing_payload(set_timing)
+    if rest_advice is not None:
+        payload["rest_interval_advice"] = rest_advice_payload(rest_advice)
     return json.dumps(payload, indent=2, ensure_ascii=True, default=_json_default)
 
 
-def render_training_snapshot(snapshot: TrainingSnapshot, set_timing: StrengthSetTimingSummary | None = None) -> str:
+def render_training_snapshot(
+    snapshot: TrainingSnapshot,
+    set_timing: StrengthSetTimingSummary | None = None,
+    *,
+    rest_advice: RestIntervalAdvice | None = None,
+) -> str:
     # ASCII only: Windows cp949 consoles cannot encode some punctuation (see recovery output).
     window = snapshot.window
     lines = [
@@ -415,6 +429,8 @@ def render_training_snapshot(snapshot: TrainingSnapshot, set_timing: StrengthSet
         _taxonomy_lines(lines, strength.taxonomy)
         if set_timing is not None:
             lines.extend(set_timing_lines(set_timing))
+        if rest_advice is not None:
+            lines.extend(rest_advice_lines(rest_advice))
 
     swimming = snapshot.swimming
     lines.extend(("", f"Swimming: {swimming.session_count} sessions"))

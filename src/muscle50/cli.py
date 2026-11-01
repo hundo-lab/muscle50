@@ -1296,9 +1296,9 @@ def _analytics_snapshot(as_of_text: str, lookback_days: int, *, as_json: bool) -
         heart_rate = RawHeartRateSource(reader, paths.root, paths.raw_dir)
         result = BuildSnapshotWithSetTiming(reader, heart_rate).execute(as_of, lookback_days)
         print(
-            render_training_snapshot_json(result.snapshot, result.set_timing)
+            render_training_snapshot_json(result.snapshot, result.set_timing, rest_advice=result.rest_advice)
             if as_json
-            else render_training_snapshot(result.snapshot, result.set_timing)
+            else render_training_snapshot(result.snapshot, result.set_timing, rest_advice=result.rest_advice)
         )
         return 0
     except (AnalyticsDatabaseError, ConfigurationError, InvalidSnapshotWindowError) as exc:
