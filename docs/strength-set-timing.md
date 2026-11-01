@@ -204,6 +204,8 @@ JSON `evidence`: `min_seconds_per_rep ["design"]`, `min_heart_rate_rise_bpm ["HR
 - `analytics snapshot` text와 `--json`: window에 의심 세트가 없으면 byte 단위로 같다(기존 analytics 테스트 DB와
   `tests/fixtures/inbody_trend_golden/analytics_snapshot_2026-03-16.json` 포함. 그 세트는 30 s에 10회라 RAW도 읽지 않는다).
 - 의심 세트가 있으면 text는 Strength 절 안에 줄이 더해지고, JSON은 끝에 key 하나만 더해진다(앞의 key는 같음).
+- Rest Interval Advice v1부터: window에 `ACTIVE, REST, ACTIVE`가 하나라도 있으면 의심 세트와 무관하게 이 블록 뒤(없으면
+  taxonomy 줄 뒤)에 `Rest advice` 블록이, JSON 끝에 `rest_interval_advice` key가 더해진다(`docs/rest-interval-advice.md`).
 - 항상 같음: `recommend`(text/JSON, golden 전부), `daily`, `garmin *`, `goal *`, `inbody *`, 모든 `nutrition` 명령, Telegram 응답,
   기존 `analytics snapshot` 거절(잘못된 날짜, `--days`, DB 없음).
 
