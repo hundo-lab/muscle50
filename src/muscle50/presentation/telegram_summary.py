@@ -9,6 +9,8 @@ adjustment from a non-recovery rule, a missing or partial recovery row) are neve
 
 The bot-own fixed texts live in `domain/telegram_commands.py`; the data-driven layouts live here.
 An unexpected JSON shape raises `SummaryUnavailableError` (the bot then points to the full text).
+Telegram Goal Summary v1: with a goal set, a successful `/daily` adds the `goal_mode` lines, copied from
+`recommendation.goal_mode` with the CLI's evidence tags; an unknown state value is a shape error.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from muscle50.application.telegram_bot import (
     RefreshTarget,
     SummaryUnavailableError,
 )
+from muscle50.domain.goal_mode import GOAL_MODE_VERSION
 from muscle50.domain.nutrition import NutrientField
 from muscle50.domain.nutrition_guidance import NutritionAvailability
 from muscle50.domain.nutrition_targets import TargetStatus
@@ -48,6 +51,8 @@ from muscle50.domain.telegram_commands import (
     unexpected_error_text,
 )
 from muscle50.domain.telegram_sync import older_unsynced_line, range_text, sync_command_text
+from muscle50.domain.training_goal import GoalMode
+from muscle50.presentation.goal_terminal import _km
 from muscle50.presentation.telegram_format import BotReply, Code, Link, RichLine, reply_messages
 from muscle50.presentation.terminal import _duration, _fixed
 
@@ -151,6 +156,9 @@ def daily_summary(document: Any) -> BotReply:
         updated = f"회복 {days}일 갱신"
     recommendation = _object(daily["recommendation"])
     lines = [f"daily {as_of}: 동기화 완료 ({new}, {updated})", *catch_up, *warnings, *_plan_lines(recommendation)]
+    # Telegram Goal Summary v1: only with a goal set (the CLI omits the key otherwise); `/today` stays as it was.
+    if "goal_mode" in recommendation:
+        lines += ["", *_goal_lines(_object(recommendation["goal_mode"]))]
     return BotReply("\n".join(lines), (*catch_up_tail, *_plan_tail(recommendation)))
 
 
@@ -395,7 +403,268 @@ def _unknown_groups(notices: list[Any], *, with_sequences: bool) -> list[tuple[R
     return groups
 
 
-# --- /unknown ----------------------------------------------------------------------------------------
+# --- the goal lines of /daily (Telegram Goal Summary v1) ---------------------------------------------
+
+# Each line carries the tag of the CLI goal-section line that shows the same content. An indented line
+# belongs to the tagged line above it; the reference marks and the options carry their own tags.
+_USER_SETTING_TAG = "[design: user setting]"
+_WEIGHT_TAG = "[MAINT-05; design]"
+_AEROBIC_TAG = "[EXL-03; design]"
+_PLATEAU_TAG = "[design: user setting; PLAT-01, PLAT-02]"
+_RUN_TAG = "[RUNPROG-03: 관찰 연구의 연관, 알림만]"
+_ASSUMPTION_TAG = "[design: fat-free mass assumed constant]"
+_AEROBIC_TYPE_NAMES = {"running": "러닝", "swimming": "수영"}
+# FATEX-02: 300 is the end of the studied range, never a point past which the benefit is gone. The 75 is
+# the CLI's own fixed wording of EXL-03 ("150 moderate or 75 vigorous").
+_REFERENCE_MEANINGS = {
+    "guideline_minimum": "분 지침 최소(고강도면 75분)",
+    "end_of_studied_range": "분 연구된 범위의 끝",
+}
+_UNFLAGGED_RUN_STATUSES = frozenset({"within", "no_previous_run", "no_distance"})
+_CHOICE_EVIDENCE = ["PLAT-06", "FATEX-07"]
+# The wording of each option is written for exactly these IDs (`aerobic_guide.plateau_options()`), so other
+# IDs in the JSON are a shape error rather than a tag next to text that does not say what it supports.
+_OPTION_EVIDENCE = {
+    "check_meal_logging": ("PLAT-04",),
+    "eat_less": ("design", "PRO-04"),
+    "keep_intake_add_activity": ("FATEX-05", "FATEX-04", "RUNPROG-03", "CONC-04"),
+    "maintenance_week": ("PLAT-05",),
+}
+
+
+def _goal_lines(goal_mode: dict[str, Any]) -> list[str]:
+    """`recommendation.goal_mode` as short lines: rates, flags, dates, minutes and the user's own settings.
+
+    Nothing is recalculated and no measured kg is shown; an unknown status, flag, option code, meaning or
+    activity type raises `ValueError` (never a dropped line).
+    """
+    if _int(goal_mode["goal_mode_version"]) != GOAL_MODE_VERSION:
+        raise ValueError("unsupported goal_mode_version")
+    goal = _object(goal_mode["goal"])
+    mode = GoalMode(_text(goal["mode"]))
+    return [
+        f"목표: {mode.value} (내 설정) {_USER_SETTING_TAG}",
+        *_goal_weight_lines(_object(goal_mode["weight_change"]), goal),
+        _goal_smm_line(_object(goal_mode["smm_floor"])),
+        _goal_progress_line(_object(goal_mode["goal_progress"]), goal),
+        *_goal_aerobic_lines(_object(goal_mode["aerobic_minutes"])),
+        *_goal_run_lines(_object(goal_mode["run_length"])),
+        *_goal_plateau_lines(goal_mode["plateau"]),
+    ]
+
+
+def _goal_weight_lines(change: dict[str, Any], goal: dict[str, Any]) -> list[str]:
+    status = _text(change["status"])
+    if status == "known":
+        span = f"{_month_day(change['from_date'])} -> {_month_day(change['to_date'])}"
+        lines = [f"체중 변화 {span}: {_text(change['percent_per_week'])} %/주 {_WEIGHT_TAG}"]
+    elif status == "unknown":
+        lines = [f"체중 변화: {UNKNOWN} ({_text(change['reason'])}) {_WEIGHT_TAG}"]
+    else:
+        raise ValueError(f"unknown weight_change status {status}")
+    # Caution markers: one line per flag, in JSON order, never dropped.
+    for flag in (_text(item) for item in _list(change["flags"])):
+        if flag == "faster_than_evidence":
+            maximum = _text(_object(change["evidence_range_percent_per_week"])["maximum"])
+            lines.append(f"  -> 감량이 주 {maximum} %보다 빠름: 근육 유지에 불리할 수 있음 [MAINT-05]")
+        elif flag == "outside_user_target":
+            rate = _object(goal["weekly_loss_percent"])
+            target = f"{_text(rate['minimum'])}-{_text(rate['maximum'])}"
+            lines.append(f"  -> 내 목표 감량 {target} %/주 밖 {_USER_SETTING_TAG}")
+        elif flag == "gaining":
+            lines.append("  -> 감량 중 체중 증가 [design]")
+        else:
+            raise ValueError(f"unknown weight_change flag {flag}")
+    return lines
+
+
+def _goal_smm_line(floor: dict[str, Any]) -> str:
+    """The user's own SMM floor (a setting, not a measurement) and where the latest InBody stands."""
+    status = _text(floor["status"])
+    if status == "not_set":
+        return f"골격근량 하한: 설정 안 함 {_USER_SETTING_TAG}"
+    limit = f"내 하한 {_text(floor['floor_kg'])} kg"
+    if status == "unknown":
+        return f"골격근량: {limit} 대비 {UNKNOWN} (InBody 골격근량 없음) {_USER_SETTING_TAG}"
+    if status in ("at_or_above", "below"):
+        where = "이상" if status == "at_or_above" else "아래"
+        return f"골격근량: {limit} {where} (InBody {_month_day(floor['measurement_date'])}) {_USER_SETTING_TAG}"
+    raise ValueError(f"unknown smm_floor status {status}")
+
+
+def _goal_progress_line(progress: dict[str, Any], goal: dict[str, Any]) -> str:
+    assumption = progress["assumption"]
+    tag = "[design]" if assumption is None else _ASSUMPTION_TAG
+    if assumption is not None:
+        _text(assumption)  # the CLI's `fat_free_mass_constant`: a body-fat target
+    status = _text(progress["status"])
+    if status == "known":
+        actual = progress["actual_percent_per_week"]
+        actual_text = f"실제 {_text(actual)} %/주" if actual is not None else f"실제 {UNKNOWN}"
+        required = _text(progress["required_percent_per_week"])
+        text = f"{_goal_target(goal)}까지 {required} %/주 필요 (기한 {_text(goal['target_date'])}), {actual_text}"
+    elif status == "reached":
+        text = f"{_goal_target(goal)} 도달 (InBody {_month_day(progress['measurement_date'])})"
+    elif status == "deadline_passed":
+        text = f"기한 {_text(goal['target_date'])} 지남"
+    elif status == "not_set":
+        text = "계산 안 함 (목표와 기한이 둘 다 있어야 함)"
+    elif status == "unknown":
+        text = f"{UNKNOWN} ({_text(progress['reason'])})"
+    else:
+        raise ValueError(f"unknown goal_progress status {status}")
+    return f"목표 진행: {text} {tag}"
+
+
+def _goal_target(goal: dict[str, Any]) -> str:
+    """The user's own target, as entered (a setting, not a measurement)."""
+    body_fat, weight = goal["target_body_fat_percent"], goal["target_weight_kg"]
+    if body_fat is not None:
+        return f"체지방 {_text(body_fat)} %"
+    if weight is not None:
+        return f"체중 {_text(weight)} kg"
+    raise ValueError("goal progress without a body fat or weight target")
+
+
+def _goal_aerobic_lines(aerobic: dict[str, Any]) -> list[str]:
+    """Stored Garmin intensity minutes of the counted types, then the 150/300 marks side by side (no verdict)."""
+    types = "·".join(_aerobic_type_name(item) for item in _list(aerobic["activity_types"]))
+    head = f"유산소({types}) {_month_day(aerobic['from'])}..{_month_day(aerobic['to'])}: "
+    status = _text(aerobic["status"])
+    if status in ("known", "lower_bound"):
+        total = f"{_number(aerobic['total_minutes']):g}분" + (" 이상" if status == "lower_bound" else "")
+        parts = (
+            f"중강도 {_goal_minutes(aerobic['moderate_minutes'])} + 고강도 {_goal_minutes(aerobic['vigorous_minutes'])}"
+        )
+        lines = [f"{head}{total} ({parts}) {_AEROBIC_TAG}"]
+        if status == "lower_bound":
+            without = _object(aerobic["without_intensity_minutes"])
+            missing, partial = _int(without["activity_count"]), _int(without["one_metric_only_count"])
+            reasons = []
+            if missing:
+                reasons.append(f"intensity minutes 없는 활동 {missing}개 빠짐")
+            if partial:
+                reasons.append(f"중강도·고강도 중 하나만 있는 활동 {partial}개")
+            if not reasons:
+                raise ValueError("a lower bound without an activity that lacks intensity minutes")
+            lines.append(f"  하한: {' · '.join(reasons)} [design]")
+    elif status == "unknown":
+        count = _int(_object(aerobic["without_intensity_minutes"])["activity_count"])
+        lines = [f"{head}{UNKNOWN} (활동 {count}개 모두 intensity minutes 없음) {_AEROBIC_TAG}"]
+    elif status == "none_stored":
+        lines = [f"{head}저장된 활동 없음 (동기화 안 됐을 수 있음, 0분이 아님) {_AEROBIC_TAG}"]
+    else:
+        raise ValueError(f"unknown aerobic_minutes status {status}")
+    references = [_reference_text(_object(item)) for item in _list(aerobic["reference_minutes_per_week"])]
+    if not references:
+        raise ValueError("no aerobic reference marks")
+    lines.append(f"  기준선: {' · '.join(references)}")
+    return lines
+
+
+def _aerobic_type_name(value: Any) -> str:
+    name = _AEROBIC_TYPE_NAMES.get(_text(value))
+    if name is None:
+        raise ValueError(f"unknown aerobic activity type {value}")
+    return name
+
+
+def _goal_minutes(value: Any) -> str:
+    """Minutes as the CLI writes them (`:g`); null is `알 수 없음`, never 0."""
+    return UNKNOWN if value is None else f"{_number(value):g}"
+
+
+def _reference_text(reference: dict[str, Any]) -> str:
+    meaning = _REFERENCE_MEANINGS.get(_text(reference["meaning"]))
+    if meaning is None:
+        raise ValueError("unknown aerobic reference meaning")
+    tags = ", ".join(_text(item) for item in _list(reference["evidence"]))
+    return f"{_int(reference['minutes'])}{meaning} [{tags}]"
+
+
+def _goal_run_lines(report: dict[str, Any]) -> list[str]:
+    """One line per run flagged `longer_than_threshold` (a caution marker: every one, never capped)."""
+    previous_days = _int(report["previous_days"])
+    lines = []
+    for entry in _list(report["runs"]):
+        run = _object(entry)
+        status = _text(run["status"])
+        if status in _UNFLAGGED_RUN_STATUSES:
+            continue
+        if status != "longer_than_threshold":
+            raise ValueError(f"unknown run_length status {status}")
+        caveat = ""
+        if _bool(run["baseline_lower_bound"]):
+            caveat = f" (이전 러닝 {_int(run['previous_without_distance'])}개 거리 없음, 최장이 더 길 수 있음)"
+        lines.append(
+            f"러닝 길이 {_month_day(run['date'])}: {_km(_number(run['distance_meters']))} km, 지난 {previous_days}일 "
+            f"최장보다 {_text(run['increase_percent'])} % 김{caveat} {_RUN_TAG}"
+        )
+    return lines
+
+
+def _goal_plateau_lines(value: Any) -> list[str]:
+    """Cut only (null otherwise). `insufficient_measurements` is "not known", never "not a plateau"."""
+    if value is None:
+        return []
+    plateau = _object(value)
+    status = _text(plateau["status"])
+    options = [_object(item) for item in _list(plateau["options"])]
+    if options and status != "met":
+        raise ValueError(f"plateau options with status {status}")
+    if status in ("met", "not_met"):
+        setting = (
+            f"내 설정 {_int(plateau['weeks'])}주, {_text(plateau['below_loss_percent_per_week'])} %/주 미만 감량, "
+            f"InBody 구간 {_int(plateau['min_intervals'])}개 이상"
+        )
+        if status == "not_met":
+            return [f"정체 확인: 조건 미충족 ({setting}) {_PLATEAU_TAG}"]
+        if [_text(item) for item in _list(plateau["choice_evidence"])] != _CHOICE_EVIDENCE:
+            raise ValueError("unexpected plateau choice evidence")
+        noise = _text(_object(plateau["noise"])["within_week_weight_percent"])
+        lines = [
+            f"정체 확인: 조건 충족 ({setting}) {_PLATEAU_TAG}",
+            f"  체중은 주 안에서 약 {noise} % 오르내림, 같은 기기·조건 InBody끼리 비교 [PLAT-02]",
+            "  선택지, 순위 없음 (표시 순서) [PLAT-06]; 내 선호·지킬 수 있는 것도 정당한 기준 [FATEX-07]",
+        ]
+        for option in options:
+            lines.extend(_option_lines(option))
+        return lines
+    if status == "insufficient_measurements":
+        return [f"정체 확인: 판단 못 함, 정체 여부 모름 ({_text(plateau['reason'])}) [design: user setting; PLAT-02]"]
+    if status == "unknown":
+        return [f"정체 확인: {UNKNOWN} ({_text(plateau['reason'])}) {_USER_SETTING_TAG}"]
+    if status == "not_set":
+        return ["정체 확인: 설정 안 함 (근거로 정한 기준 없음; goal set ... --plateau-weeks N) [design; PLAT-01]"]
+    raise ValueError(f"unknown plateau status {status}")
+
+
+def _option_lines(option: dict[str, Any]) -> list[str]:
+    """One option, unranked (a fixed display letter per code); every tag sits next to the content it supports."""
+    code = _text(option["code"])
+    expected = _OPTION_EVIDENCE.get(code)
+    if expected is None:
+        raise ValueError(f"unknown plateau option {code}")
+    if tuple(_text(item) for item in _list(option["evidence"])) != expected:
+        raise ValueError(f"unexpected evidence for plateau option {code}")
+    if code == "check_meal_logging":
+        return ["  a) 식사 기록이 빠짐없는지 확인 (빠진 끼니, 일반식, 주말) [PLAT-04]"]
+    if code == "eat_less":
+        if _bool(option["deficit_measurable"]):
+            raise ValueError("the eat_less line says muscle50 cannot measure the deficit")
+        step = _object(option["step_kcal_per_day"])
+        return [
+            f"  b) 하루 {_int(step['minimum'])}-{_int(step['maximum'])} kcal 덜 먹기 [design]; 결손은 약 "
+            f"{_int(option['deficit_limit_kcal_per_day'])} kcal/일 이하, muscle50은 결손을 잴 수 없음 [PRO-04]"
+        ]
+    if code == "keep_intake_add_activity":
+        return [
+            "  c) 섭취는 두고 활동 늘리기: 같은 결손이면 같은 지방 감소, 활동 뒤 더 먹으면 결손 일부가 "
+            "상쇄될 수 있음(개인차 큼) [FATEX-05, FATEX-04]",
+            f"     러닝 길이·러닝/하체 {_int(option['run_legs_gap_hours'])}시간 간격 주의 [RUNPROG-03, CONC-04]",
+        ]
+    weeks = _int(option["weeks"])
+    return [f"  d) {weeks}주 유지 휴식: 체중이 글리코겐·수분으로 오를 수 있고 기한이 {weeks}주 늦어짐 [PLAT-05]"]
 
 
 def unknown_list(document: Any) -> BotReply:
