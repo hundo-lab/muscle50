@@ -25,6 +25,8 @@ from muscle50.domain.nutrition import (
     NutritionRange,
     NutritionSourceType,
     NutritionValue,
+    OptionalNutrient,
+    OptionalNutrientAmount,
     QuantityUnit,
 )
 from muscle50.infrastructure.decimal_text import decimal_from_text, decimal_to_text
@@ -134,10 +136,7 @@ class SqliteMealRepository:
             ).fetchone()
             if item_row is None or item_sequence in _removed_sequences(connection, meal_id):
                 raise ValueError(f"no meal item {meal_id!r}/{item_sequence} to attach a nutrition fact to")
-            connection.execute(
-                _FACT_INSERT_SQL,
-                _fact_insert_row(fact, meal_id=meal_id, item_sequence=item_sequence, profile_id=None),
-            )
+            _insert_fact(connection, fact, meal_id=meal_id, item_sequence=item_sequence, profile_id=None)
             meal = _load_meal(connection, meal_id)
         if meal is None:
             raise RuntimeError(f"meal {meal_id!r} disappeared after appending a nutrition fact")
@@ -345,10 +344,7 @@ class SqliteFoodNutritionRepository:
             ).fetchone()
             if existing is None:
                 raise ValueError(f"no food profile {profile_id!r} to attach a nutrition fact to")
-            connection.execute(
-                _FACT_INSERT_SQL,
-                _fact_insert_row(fact, meal_id=None, item_sequence=None, profile_id=profile_id),
-            )
+            _insert_fact(connection, fact, meal_id=None, item_sequence=None, profile_id=profile_id)
             profile = _load_profile(connection, profile_id)
         if profile is None:
             raise RuntimeError(f"food profile {profile_id!r} disappeared after appending a nutrition fact")
@@ -376,9 +372,12 @@ def _load_meal(connection: sqlite3.Connection, meal_id: str) -> Meal | None:
         ).fetchall()
         if row["item_sequence"] not in removed
     ]
+    optional = _optional_amounts(connection, "meal_id", meal_id)
     facts_by_item: dict[int, list[NutritionFact]] = {}
     for fact_row in fact_rows:
-        facts_by_item.setdefault(fact_row["item_sequence"], []).append(_fact_from_row(fact_row))
+        facts_by_item.setdefault(fact_row["item_sequence"], []).append(
+            _fact_from_row(fact_row, optional.get(fact_row["fact_id"], ()))
+        )
     # created_at is stored as ISO text with its original offset; sorting it as SQL text would
     # be wrong across differing offsets (the same trap eaten_at_utc_sort_key exists to avoid).
     # Sort the reconstructed aware datetimes instead, once the row count per item is tiny.
@@ -678,8 +677,9 @@ def _load_profile(connection: sqlite3.Connection, profile_id: str) -> FoodNutrit
     ).fetchall()
     # See the matching comment in _load_meal: created_at is offset-bearing ISO text, so it
     # must be sorted as reconstructed aware datetimes, not as raw SQL text.
+    optional = _optional_amounts(connection, "profile_id", profile_id)
     facts = sorted(
-        (_fact_from_row(row) for row in fact_rows),
+        (_fact_from_row(row, optional.get(row["fact_id"], ())) for row in fact_rows),
         key=lambda fact: (fact.provenance.created_at, fact.fact_id),
     )
     return FoodNutritionProfile(
@@ -751,7 +751,7 @@ def _fact_insert_row(
     )
 
 
-def _fact_from_row(row: sqlite3.Row) -> NutritionFact:
+def _fact_from_row(row: sqlite3.Row, optional: tuple[OptionalNutrientAmount, ...] = ()) -> NutritionFact:
     values = NutritionValue(
         calories_kcal=_optional_decimal(row["calories_kcal"]),
         protein_g=_optional_decimal(row["protein_g"]),
@@ -787,6 +787,7 @@ def _fact_from_row(row: sqlite3.Row) -> NutritionFact:
         ),
         value_range=value_range,
         supersedes_fact_id=row["supersedes_fact_id"],
+        optional=optional,
     )
 
 
@@ -810,12 +811,71 @@ def _insert_facts_in_dependency_order(
         if not ready:
             raise ValueError("nutrition fact history has an unresolvable supersession reference")
         for fact in ready:
-            connection.execute(
-                _FACT_INSERT_SQL,
-                _fact_insert_row(fact, meal_id=meal_id, item_sequence=item_sequence, profile_id=profile_id),
-            )
+            _insert_fact(connection, fact, meal_id=meal_id, item_sequence=item_sequence, profile_id=profile_id)
             inserted.add(fact.fact_id)
         remaining = [fact for fact in remaining if fact.fact_id not in inserted]
+
+
+def _insert_fact(
+    connection: sqlite3.Connection,
+    fact: NutritionFact,
+    *,
+    meal_id: str | None,
+    item_sequence: int | None,
+    profile_id: str | None,
+) -> None:
+    """The fact row, then its optional nutrient rows (migration 11), in the caller's transaction."""
+    connection.execute(
+        _FACT_INSERT_SQL,
+        _fact_insert_row(fact, meal_id=meal_id, item_sequence=item_sequence, profile_id=profile_id),
+    )
+    for amount in fact.optional:
+        connection.execute(
+            "INSERT INTO nutrition_fact_optional_nutrients (fact_id, nutrient, value, minimum, maximum) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                fact.fact_id,
+                amount.nutrient.value,
+                decimal_to_text(amount.value) if amount.value is not None else None,
+                decimal_to_text(amount.minimum) if amount.minimum is not None else None,
+                decimal_to_text(amount.maximum) if amount.maximum is not None else None,
+            ),
+        )
+
+
+def _optional_amounts(
+    connection: sqlite3.Connection, owner_column: str, owner: str
+) -> dict[str, tuple[OptionalNutrientAmount, ...]]:
+    """Optional nutrients of the facts owned by a meal or a profile, by fact ID.
+
+    A database before migration 11 has no such table (read-only readers never migrate); it cannot
+    hold optional nutrients either, so every one of them is unknown.
+    """
+    if owner_column not in ("meal_id", "profile_id"):
+        raise ValueError(f"unexpected fact owner column {owner_column!r}")
+    if not _has_table(connection, "nutrition_fact_optional_nutrients"):
+        return {}
+    rows = connection.execute(
+        f"""
+        SELECT o.fact_id, o.nutrient, o.value, o.minimum, o.maximum
+        FROM nutrition_fact_optional_nutrients o
+        JOIN nutrition_facts f ON f.fact_id = o.fact_id
+        WHERE f.{owner_column} = ?
+        ORDER BY o.fact_id, o.nutrient
+        """,
+        (owner,),
+    ).fetchall()
+    amounts: dict[str, list[OptionalNutrientAmount]] = {}
+    for row in rows:
+        amounts.setdefault(row["fact_id"], []).append(
+            OptionalNutrientAmount(
+                OptionalNutrient(row["nutrient"]),
+                _optional_decimal(row["value"]),
+                _optional_decimal(row["minimum"]),
+                _optional_decimal(row["maximum"]),
+            )
+        )
+    return {fact_id: tuple(values) for fact_id, values in amounts.items()}
 
 
 def _optional_decimal(text: str | None) -> Decimal | None:

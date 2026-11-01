@@ -29,6 +29,7 @@ from muscle50.domain.nutrition import (
     GENERAL_MEAL_NAME,
     Accuracy,
     CalculatedNutrition,
+    CalculatedOptionalNutrient,
     DailyNutritionSummary,
     FoodNutritionProfile,
     Meal,
@@ -41,6 +42,8 @@ from muscle50.domain.nutrition import (
     NutritionRange,
     NutritionSourceType,
     NutritionValue,
+    OptionalNutrient,
+    OptionalNutrientAmount,
     QuantityUnit,
     aggregate_day,
     aggregate_meal,
@@ -70,6 +73,10 @@ _FLAG_NAMES: dict[NutrientField, str] = {
     NutrientField.CARBOHYDRATE_G: "carbs",
     NutrientField.FAT_G: "fat",
 }
+_OPTIONAL_FLAG_NAMES: dict[OptionalNutrient, str] = {
+    OptionalNutrient.SATURATED_FAT_G: "satfat",
+    OptionalNutrient.FIBER_G: "fiber",
+}
 
 
 class NutritionLoggingError(ValueError):
@@ -87,6 +94,8 @@ class NewFood:
     accuracy: Accuracy
     source_reference: str
     aliases: tuple[str, ...] = ()
+    # LDL Nutrients v1: --satfat/--fiber point values; a nutrient not listed stays unknown.
+    optional: tuple[OptionalNutrientAmount, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -100,6 +109,7 @@ class NewFoodFact:
     source_type: NutritionSourceType
     accuracy: Accuracy
     source_reference: str
+    optional: tuple[OptionalNutrientAmount, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -126,6 +136,8 @@ class GeneralMealEstimate:
     """(nutrient, minimum, maximum) in NutrientField order; nutrients not listed stay unknown."""
     source_reference: str
     created_at: datetime
+    optional_ranges: tuple[tuple[OptionalNutrient, Decimal, Decimal], ...] = ()
+    """`satfat=`/`fiber=` ranges in OptionalNutrient order (LDL Nutrients v1); never enough on their own."""
 
 
 @dataclass(frozen=True)
@@ -149,6 +161,8 @@ class ItemIntake:
     calculated: CalculatedNutrition | None
     # Nutrients this item cannot supply a value for, in NutrientField order.
     missing_fields: tuple[NutrientField, ...]
+    # LDL Nutrients v1: the item's saturated fat / fiber (only those it has a fact for).
+    optional: tuple[CalculatedOptionalNutrient, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -201,7 +215,7 @@ class AddFood:
         name = food.name.strip()
         if not name:
             raise NutritionLoggingError("food name must not be blank")
-        _check_catalog_fact(food.source_type, food.values)
+        _check_catalog_fact(food.source_type, food.values, food.optional)
         aliases = tuple(alias.strip() for alias in food.aliases)
         # The general meal's ID and name are reserved, whether or not its profile row exists yet.
         if is_reserved_food_reference(food.food_id):
@@ -241,6 +255,7 @@ class AddFood:
                             source_reference=food.source_reference,
                             created_at=self._clock(),
                         ),
+                        optional=food.optional,
                     ),
                 ),
             )
@@ -265,7 +280,7 @@ class AddFoodFact:
     def execute(self, new: NewFoodFact, *, new_unit: bool = False) -> AddedFoodFact:
         """With ``new_unit`` the fact is the food's first fact in a unit it has no fact for yet
         (it supersedes nothing; the facts in other units are untouched)."""
-        _check_catalog_fact(new.source_type, new.values)
+        _check_catalog_fact(new.source_type, new.values, new.optional)
         _refuse_general_meal_food(new.food_id)
         profile = self._repository.get(new.food_id)
         if profile is None:
@@ -298,8 +313,18 @@ class AddFoodFact:
             for nutrient in NutrientField
             if new.values.get(nutrient) is None and select_preferred_fact(profile.facts, unit, nutrient) is not None
         ]
-        if dropped:
-            names = ", ".join(_FLAG_NAMES[nutrient] for nutrient in dropped)
+        # The optional nutrients follow the same rule (LDL Nutrients v1): left out means unknown.
+        new_optional = {amount.nutrient: amount for amount in new.optional}
+        dropped_optional = [
+            nutrient
+            for nutrient in OptionalNutrient
+            if nutrient not in new_optional and select_preferred_fact(profile.facts, unit, nutrient) is not None
+        ]
+        if dropped or dropped_optional:
+            names = ", ".join(
+                [_FLAG_NAMES[nutrient] for nutrient in dropped]
+                + [_OPTIONAL_FLAG_NAMES[nutrient] for nutrient in dropped_optional]
+            )
             raise NutritionLoggingError(
                 f"the current fact {previous.fact_id} has a value for {names}; a new version must give a number "
                 "for it too (unknown cannot replace a known value). Nothing was changed."
@@ -307,6 +332,7 @@ class AddFoodFact:
         if (
             previous.value_range is None
             and previous.values == new.values
+            and previous.optional == _canonical_optional(new.optional)
             and previous.basis_quantity == new.basis_quantity
             and previous.provenance.source_type is new.source_type
             and previous.provenance.accuracy is new.accuracy
@@ -332,6 +358,7 @@ class AddFoodFact:
                     created_at=self._clock(),
                 ),
                 supersedes_fact_id=previous.fact_id,
+                optional=new.optional,
             )
             history = (*profile.facts, fact)
             for nutrient in NutrientField:
@@ -340,6 +367,15 @@ class AddFoodFact:
                 if (selected.fact_id if selected is not None else None) != expected:
                     raise NutritionLoggingError(
                         f"the new fact would not be the active fact for {_FLAG_NAMES[nutrient]} "
+                        f"(the history of {profile.profile_id!r} would select "
+                        f"{selected.fact_id if selected is not None else 'nothing'}). Nothing was changed."
+                    )
+            for optional_nutrient in OptionalNutrient:
+                selected = select_preferred_fact(history, unit, optional_nutrient)
+                expected = fact.fact_id if optional_nutrient in new_optional else None
+                if (selected.fact_id if selected is not None else None) != expected:
+                    raise NutritionLoggingError(
+                        f"the new fact would not be the active fact for {_OPTIONAL_FLAG_NAMES[optional_nutrient]} "
                         f"(the history of {profile.profile_id!r} would select "
                         f"{selected.fact_id if selected is not None else 'nothing'}). Nothing was changed."
                     )
@@ -373,6 +409,7 @@ class AddFoodFact:
                     source_reference=new.source_reference,
                     created_at=self._clock(),
                 ),
+                optional=new.optional,
             )
             stored = self._repository.append_nutrition_fact(profile.profile_id, fact)
         except ValueError as exc:
@@ -678,6 +715,14 @@ def _general_estimate_fact(fact_id: str, estimate: GeneralMealEstimate, *, label
         if minimum > maximum:
             raise refused(f"{_FLAG_NAMES[nutrient]} minimum is above its maximum")
         minimums[nutrient.value], maximums[nutrient.value] = minimum, maximum
+    optional: list[OptionalNutrientAmount] = []
+    for optional_nutrient, minimum, maximum in estimate.optional_ranges:
+        name = _OPTIONAL_FLAG_NAMES[optional_nutrient]
+        if any(amount.nutrient is optional_nutrient for amount in optional):
+            raise refused(f"lists {name} twice")
+        if minimum > maximum:
+            raise refused(f"{name} minimum is above its maximum")
+        optional.append(OptionalNutrientAmount(optional_nutrient, None, minimum, maximum))
     try:
         return NutritionFact(
             fact_id=fact_id,
@@ -691,6 +736,7 @@ def _general_estimate_fact(fact_id: str, estimate: GeneralMealEstimate, *, label
                 created_at=estimate.created_at,
             ),
             value_range=NutritionRange(NutritionValue(**minimums), NutritionValue(**maximums)),
+            optional=tuple(optional),
         )
     except ValueError as exc:
         raise refused(str(exc)) from exc
@@ -701,6 +747,7 @@ GENERAL_ESTIMATE_REFERENCE_MAX_LENGTH = 100
 _ESTIMATE_NUMBER = re.compile(r"[0-9]+(\.[0-9]+)?\Z")
 _ESTIMATE_SOURCES = {source.value: source for source in GENERAL_ESTIMATE_SOURCE_TYPES}
 _ESTIMATE_NUTRIENTS = {name: nutrient for nutrient, name in _FLAG_NAMES.items()}
+_ESTIMATE_OPTIONAL_NUTRIENTS = {name: nutrient for nutrient, name in _OPTIONAL_FLAG_NAMES.items()}
 
 
 def _general_estimate_reference(text: str) -> str:
@@ -718,9 +765,10 @@ def parse_general_estimate(
     spec: str, reference: str | None, created_at: datetime, *, label: str
 ) -> GeneralMealEstimate:
     """`--general-estimate SPEC [--general-estimate-ref TEXT]`, SPEC being
-    ``<visual_estimate|language_estimate>:<kcal|protein|carbs|fat>=<min>-<max>[,...]``.
+    ``<visual_estimate|language_estimate>:<kcal|protein|carbs|fat|satfat|fiber>=<min>-<max>[,...]``.
 
     Nothing is guessed: a malformed SPEC, an unknown source or nutrient, or min > max is refused.
+    ``satfat``/``fiber`` (LDL Nutrients v1) are optional extras: at least one of the four is still needed.
     """
 
     def refused(reason: str) -> NutritionLoggingError:
@@ -733,36 +781,55 @@ def parse_general_estimate(
     if source is None:
         raise refused(f"source must be visual_estimate or language_estimate, not {source_text.strip()!r}")
     ranges: list[tuple[NutrientField, Decimal, Decimal]] = []
+    optional_ranges: list[tuple[OptionalNutrient, Decimal, Decimal]] = []
     for part in ranges_text.split(","):
         name, equals, bounds = part.strip().partition("=")
         nutrient = _ESTIMATE_NUTRIENTS.get(name.strip())
+        optional_nutrient = _ESTIMATE_OPTIONAL_NUTRIENTS.get(name.strip())
         minimum_text, dash, maximum_text = bounds.strip().partition("-")
-        if not equals or nutrient is None or not dash:
+        if not equals or (nutrient is None and optional_nutrient is None) or not dash:
             raise refused(f"each range must be <kcal|protein|carbs|fat>=<min>-<max>, got {part.strip()!r}")
         if _ESTIMATE_NUMBER.match(minimum_text) is None or _ESTIMATE_NUMBER.match(maximum_text) is None:
             raise refused(f"{name.strip()} bounds must be plain non-negative numbers, got {bounds.strip()!r}")
         minimum, maximum = Decimal(minimum_text), Decimal(maximum_text)
         if minimum > maximum:
             raise refused(f"{name.strip()} minimum {minimum_text} is above its maximum {maximum_text}")
-        if any(existing is nutrient for existing, _, _ in ranges):
+        if optional_nutrient is not None:
+            if any(existing is optional_nutrient for existing, _, _ in optional_ranges):
+                raise refused(f"lists {name.strip()} twice")
+            optional_ranges.append((optional_nutrient, minimum, maximum))
+            continue
+        if nutrient is None or any(existing is nutrient for existing, _, _ in ranges):
             raise refused(f"lists {name.strip()} twice")
         ranges.append((nutrient, minimum, maximum))
+    if not ranges:
+        # [design] satfat/fiber alone are not an estimate of the meal: the four-nutrient rule is kept.
+        raise refused("needs a kcal, protein, carbs or fat range; satfat and fiber cannot be the only ranges")
     ranges.sort(key=lambda item: list(NutrientField).index(item[0]))
+    optional_ranges.sort(key=lambda item: list(OptionalNutrient).index(item[0]))
     try:
         checked = _general_estimate_reference(
             reference if reference is not None else GENERAL_ESTIMATE_REFERENCE_DEFAULT
         )
     except ValueError as exc:
         raise NutritionLoggingError(f"{label}--general-estimate-ref {exc}. Nothing was changed.") from exc
-    return GeneralMealEstimate(source, tuple(ranges), checked, created_at)
+    return GeneralMealEstimate(source, tuple(ranges), checked, created_at, tuple(optional_ranges))
 
 
 def format_general_estimate(
-    source_type: NutritionSourceType, ranges: tuple[tuple[NutrientField, Decimal, Decimal], ...]
+    source_type: NutritionSourceType,
+    ranges: tuple[tuple[NutrientField, Decimal, Decimal], ...],
+    optional_ranges: tuple[tuple[OptionalNutrient, Decimal, Decimal], ...] = (),
 ) -> str:
-    """The SPEC `parse_general_estimate` reads back to the same source and ranges."""
-    parts = ",".join(f"{_FLAG_NAMES[nutrient]}={minimum:f}-{maximum:f}" for nutrient, minimum, maximum in ranges)
-    return f"{source_type.value}:{parts}"
+    """The SPEC `parse_general_estimate` reads back to the same source and ranges.
+
+    Without ``optional_ranges`` the SPEC is exactly the one before LDL Nutrients v1.
+    """
+    parts = [f"{_FLAG_NAMES[nutrient]}={minimum:f}-{maximum:f}" for nutrient, minimum, maximum in ranges]
+    parts.extend(
+        f"{_OPTIONAL_FLAG_NAMES[nutrient]}={minimum:f}-{maximum:f}" for nutrient, minimum, maximum in optional_ranges
+    )
+    return f"{source_type.value}:{','.join(parts)}"
 
 
 def is_general_meal_profile(profile: FoodNutritionProfile) -> bool:
@@ -815,6 +882,7 @@ def snapshot_item(
             provenance=fact.provenance,
             value_range=fact.value_range,
             supersedes_fact_id=snapshot_id(fact.supersedes_fact_id) if fact.supersedes_fact_id else None,
+            optional=fact.optional,
         )
         for fact in profile.facts
         if fact.basis_unit is entry.unit
@@ -894,11 +962,32 @@ def _entry_label(entry: MealEntry, index: int) -> str:
     return f"--item {index}" if isinstance(entry, MealEntryItem) else f"item {index}"
 
 
-def _check_catalog_fact(source_type: NutritionSourceType, values: NutritionValue) -> None:
+def _check_catalog_fact(
+    source_type: NutritionSourceType,
+    values: NutritionValue,
+    optional: tuple[OptionalNutrientAmount, ...] = (),
+) -> None:
     if source_type not in CATALOG_SOURCE_TYPES:
         raise NutritionLoggingError(f"source {source_type.value!r} cannot be entered into the food catalog")
     if not values.has_any_value:
+        # Saturated fat / fiber alone do not make a fact either [design]: the four-nutrient rule is kept.
         raise NutritionLoggingError("at least one of kcal/protein/carbohydrate/fat must be a number")
+    saturated = next((amount for amount in optional if amount.nutrient is OptionalNutrient.SATURATED_FAT_G), None)
+    if (
+        saturated is not None
+        and saturated.value is not None
+        and values.fat_g is not None
+        and saturated.value > values.fat_g
+    ):
+        raise NutritionLoggingError(
+            f"--satfat {saturated.value:f} is more than --fat {values.fat_g:f}; saturated fat is part of total "
+            "fat. Nothing was changed."
+        )
+
+
+def _canonical_optional(optional: tuple[OptionalNutrientAmount, ...]) -> tuple[OptionalNutrientAmount, ...]:
+    order = list(OptionalNutrient)
+    return tuple(sorted(optional, key=lambda amount: order.index(amount.nutrient)))
 
 
 def _existing_meal(meals: MealRepository, meal_id: str) -> Meal:
@@ -952,7 +1041,7 @@ def _item_intake(item: MealItem) -> ItemIntake:
         for nutrient in NutrientField
         if calculated is None or (selection := calculated.get(nutrient)) is None or selection.value is None
     )
-    return ItemIntake(item, calculated, missing)
+    return ItemIntake(item, calculated, missing, item.calculated_optional())
 
 
 def _structured_text(meal_type: MealType, day: date, eaten_time: time | None, items: tuple[MealEntry, ...]) -> str:
@@ -966,6 +1055,21 @@ def _entry_text(item: MealEntry) -> str:
         note = normalize_general_meal_note(item.note)
         text = "general meal" if note is None else f"general meal (note: {note})"
         if item.estimate is not None:
-            text += f" estimated {format_general_estimate(item.estimate.source_type, item.estimate.ranges)}"
+            estimate = item.estimate
+            text += (
+                f" estimated {format_general_estimate(estimate.source_type, estimate.ranges, estimate.optional_ranges)}"
+            )
         return text
     return f"{item.food_id} {item.quantity} {item.unit.value}"
+
+
+def general_optional_ranges(item: MealItem) -> tuple[tuple[OptionalNutrient, Decimal, Decimal], ...]:
+    """The stored `satfat=`/`fiber=` ranges of an estimated general item (empty for any other item)."""
+    fact = item.general_estimate
+    if fact is None:
+        return ()
+    return tuple(
+        (amount.nutrient, amount.minimum, amount.maximum)
+        for amount in fact.optional
+        if amount.minimum is not None and amount.maximum is not None
+    )

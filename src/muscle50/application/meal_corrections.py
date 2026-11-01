@@ -23,13 +23,26 @@ from muscle50.application.nutrition_logging import (
     meal_intake,
 )
 from muscle50.domain.meal_history import MealRevision, recorded_time, timestamp_text
-from muscle50.domain.nutrition import Meal, MealItem, MealType, NutrientField, NutritionAggregate, aggregate_day
+from muscle50.domain.nutrition import (
+    Meal,
+    MealItem,
+    MealType,
+    NutrientField,
+    NutritionAggregate,
+    OptionalNutrient,
+    OptionalNutrientAggregate,
+    aggregate_day,
+)
 
 _NUTRIENT_NAMES: dict[NutrientField, str] = {
     NutrientField.CALORIES_KCAL: "kcal",
     NutrientField.PROTEIN_G: "protein",
     NutrientField.CARBOHYDRATE_G: "carbohydrate",
     NutrientField.FAT_G: "fat",
+}
+_OPTIONAL_NAMES: dict[OptionalNutrient, str] = {
+    OptionalNutrient.SATURATED_FAT_G: "saturated fat",
+    OptionalNutrient.FIBER_G: "fiber",
 }
 
 
@@ -225,9 +238,16 @@ def _changed_day_totals(
     zone = timezone_for(day)
     day_meals = meals.list_eaten_between(*local_day_bounds(day, zone))
     after_meals = (*(meal for meal in day_meals if meal.meal_id not in (target.meal_id, source.meal_id)), merged)
-    before = aggregate_day(day_meals, day, zone, timezone_name="merge check").nutrition
-    after = aggregate_day(after_meals, day, zone, timezone_name="merge check").nutrition
+    before_day = aggregate_day(day_meals, day, zone, timezone_name="merge check")
+    after_day = aggregate_day(after_meals, day, zone, timezone_name="merge check")
+    before, after = before_day.nutrition, after_day.nutrition
     changed = [_NUTRIENT_NAMES[nutrient] for nutrient in NutrientField if _differs(before, after, nutrient)]
+    # LDL Nutrients v1: saturated fat and fiber totals must not change either.
+    changed.extend(
+        _OPTIONAL_NAMES[old.nutrient]
+        for old, new in zip(before_day.optional, after_day.optional, strict=True)
+        if _optional_differs(old, new)
+    )
     # Item references (meal ID, item number) do change by design; only the amounts must not.
     if not changed and before.item_count != after.item_count:
         changed.append("the item count")
@@ -244,6 +264,17 @@ def _differs(before: NutritionAggregate, after: NutritionAggregate, nutrient: Nu
         or bounds(before) != bounds(after)
         or (nutrient in before.incomplete_fields) != (nutrient in after.incomplete_fields)
         or (nutrient in before.estimated_fields) != (nutrient in after.estimated_fields)
+    )
+
+
+def _optional_differs(before: OptionalNutrientAggregate, after: OptionalNutrientAggregate) -> bool:
+    # Missing item references (meal ID, item number) change by design; only amounts and states count.
+    return (
+        before.total != after.total
+        or before.known_subtotal != after.known_subtotal
+        or before.complete != after.complete
+        or before.estimated != after.estimated
+        or before.has_data != after.has_data
     )
 
 

@@ -947,7 +947,7 @@ def test_fresh_home_without_a_database_runs_the_command(
 
 
 def test_code_migration_versions_are_listed_from_the_package() -> None:
-    assert code_migration_versions() == tuple(range(1, 11))
+    assert code_migration_versions() == tuple(range(1, 12))
 
 
 # --- console ----------------------------------------------------------------------------------------------
