@@ -1,7 +1,7 @@
 ---
 id: telegram-goal-summary
 title: Telegram Goal Summary v1
-status: draft
+status: integrated
 migration: none
 output_change: additive
 user_gates: [design, integration]
@@ -264,35 +264,65 @@ maintain/gain 목표의 경우:
 
 ## 인수 조건
 
-- [ ] AC1: `recommendation`에 `goal_mode` key가 없는 `daily --json` 문서의 `/daily` 요약이 지금과 byte-identical이다. 기존
+- [x] AC1: `recommendation`에 `goal_mode` key가 없는 `daily --json` 문서의 `/daily` 요약이 지금과 byte-identical이다. 기존
   golden 테스트(`test_daily_summary_of_the_daily_golden_matches_its_json` 등)가 수정 없이 통과한다.
-- [ ] AC2: `goal_mode`가 있는 성공 문서(cut, 정체 `met`)에서 `/daily` 요약이 위 예시의 줄을 이 순서로 담는다. 순서는 영양 줄
+- [x] AC2: `goal_mode`가 있는 성공 문서(cut, 정체 `met`)에서 `/daily` 요약이 위 예시의 줄을 이 순서로 담는다. 순서는 영양 줄
   뒤의 머리줄, 체중 변화와 flag, 골격근량, 목표 진행, 유산소와 기준선, 러닝 알림, 정체와 선택지 a-d다. 숫자는 JSON 문자열을
   그대로 옮긴 것이다(`-0.11`, `25.0`). 분은 `:g`, km는 `_km` 형식이다.
-- [ ] AC3: `weight_change`, `smm_floor`, `goal_progress`, `aerobic_minutes`, `plateau`의 각 status와 각 flag가 "규칙"의 문구를
+- [x] AC3: `weight_change`, `smm_floor`, `goal_progress`, `aerobic_minutes`, `plateau`의 각 status와 각 flag가 "규칙"의 문구를
   만든다(상태마다 테스트 한 개 이상). null 값은 `알 수 없음`으로 나오고 0으로 나오지 않는다. `insufficient_measurements`
   줄에는 "조건 미충족"이 없다.
-- [ ] AC4: 러닝 줄은 `longer_than_threshold`인 러닝마다 하나씩만 나온다. 그런 러닝이 없으면 러닝 줄이 없다.
+- [x] AC4: 러닝 줄은 `longer_than_threshold`인 러닝마다 하나씩만 나온다. 그런 러닝이 없으면 러닝 줄이 없다.
   `baseline_lower_bound`가 true이면 거리 없는 이전 러닝 표시가 붙는다.
-- [ ] AC5: 정체 줄은 `plateau`가 null이 아닐 때만 나오고, 선택지는 `met`일 때만 JSON 순서대로 나온다. 선택지 머리줄에
+- [x] AC5: 정체 줄은 `plateau`가 null이 아닐 때만 나오고, 선택지는 `met`일 때만 JSON 순서대로 나온다. 선택지 머리줄에
   "순위 없음"이 있고, 새 줄에 "추천/먼저/가장/권장"이 없다. 선택지 c에 보상 섭취 문구("상쇄")가 있다(FATEX-04).
   gain/maintain 문서에는 정체 줄과 선택지가 없다.
-- [ ] AC6: 유산소 줄과 기준선 줄에 영어(`stop`, `ceiling`, `limit`, `upper`, `max`)와 한국어(`상한`, `최대`, `최고`, `한계`,
+- [x] AC6: 유산소 줄과 기준선 줄에 영어(`stop`, `ceiling`, `limit`, `upper`, `max`)와 한국어(`상한`, `최대`, `최고`, `한계`,
   `한도`, `제한`, `멈`, `그만`, `충분`, `목표`, `달성`, `부족`, `초과`, `미달`) 금지어가 하나도 없다(테스트로 고정). 150/300과
   그 근거 ID는 `reference_minutes_per_week[]`에서 읽는다.
-- [ ] AC7: 새 줄마다(머리줄 포함) 근거 ID나 `[design...]` 태그가 있다. 들여쓴 이어지는 줄은 위 줄을 따른다(선택지
+- [x] AC7: 새 줄마다(머리줄 포함) 근거 ID나 `[design...]` 태그가 있다. 들여쓴 이어지는 줄은 위 줄을 따른다(선택지
   a-d와 기준선 줄은 자기 태그가 있다). 쓰는 ID는 모두 `docs/evidence/training-nutrition-evidence.md`에 있다.
-- [ ] AC8: 새 줄에 측정 kg이 없다. kg은 `goal.min_skeletal_muscle_mass_kg`, `goal.target_weight_kg` 값으로만 나온다.
-- [ ] AC9: 모르는 status, flag, option code, `meaning`이나 타입이 틀린 값이 오면 `SummaryUnavailableError`가 나고, bot은
+- [x] AC8: 새 줄에 측정 kg이 없다. kg은 `goal.min_skeletal_muscle_mass_kg`, `goal.target_weight_kg` 값으로만 나온다.
+- [x] AC9: 모르는 status, flag, option code, `meaning`이나 타입이 틀린 값이 오면 `SummaryUnavailableError`가 나고, bot은
   지금 대체 답장을 보낸다(bot이 멈추지 않음).
-- [ ] AC10: `ok: false`인 `daily` 문서에는 `goal_mode`가 있어도 목표 줄이 없다(지금 실패 답장과 byte-identical).
-- [ ] AC11: 다음은 목표가 있어도 byte-identical이다.
+- [x] AC10: `ok: false`인 `daily` 문서에는 `goal_mode`가 있어도 목표 줄이 없다(지금 실패 답장과 byte-identical).
+- [x] AC11: 다음은 목표가 있어도 byte-identical이다.
   - `/today`, `/today full`, `/daily full`, `/status` 답장
   - 모든 CLI 명령의 text와 `--json`(`recommend`, `daily`의 golden 포함)
   - 코치 LLM에 넘기는 입력(`recommend --json` 그대로)
-- [ ] AC12: 같은 JSON으로 두 번 만든 요약이 byte-identical이다. 요약 함수는 시계, 환경 변수, 파일을 읽지 않는다.
-- [ ] AC13: 품질 게이트 4개가 통과한다: `uv run --extra dev pytest`, `uv run ruff check .`, `uv run mypy src tests`,
+- [x] AC12: 같은 JSON으로 두 번 만든 요약이 byte-identical이다. 요약 함수는 시계, 환경 변수, 파일을 읽지 않는다.
+- [x] AC13: 품질 게이트 4개가 통과한다: `uv run --extra dev pytest`, `uv run ruff check .`, `uv run mypy src tests`,
   `git diff --check`.
+
+AC11의 CLI와 `/daily full` 항목은 구조로 확인했다: `src/` 변경은 `presentation/telegram_summary.py`에 줄을 더한 것뿐이고(삭제
+0줄, 검증 1차에서 지워졌던 `/unknown` 절 머리 주석을 되살린 뒤), golden 파일은 그대로다.
+
+## 설계 승인 결정 (2026-11-01)
+
+사용자 답: 모두 추천안(D1-D14), 아래 3a 문구 표 포함. 상세 문구: `docs/telegram-goal-summary.md`.
+
+- **D1 (Q1)**: `/daily`만. `/today`는 그대로다(코치 대체 답장이 `/today` 요약을 쓰므로). **D2 (Q2)**: 영양 줄 뒤 `<pre>` 안,
+  빈 줄 하나 다음. UNKNOWN 묶음과 `기타 알림`은 그대로 `<pre>` 밖 끝.
+- **D3 (Q3)**: 영어 `reason`은 그대로 옮긴다. **D4 (Q4)**: 골격근량 하한과 정체의 `not_set`도 한 줄씩 보인다.
+- **D5 (Q5)**: 정체 `met`일 때만 측정 잡음 줄 하나(`noise.within_week_weight_percent`, `[PLAT-02]`). 스펙 기본안(빼기)과 다르다.
+- **D6 (Q6)**: `goal_mode_version`이 1이 아니면 모양 오류, 대체 답장. **D7 (Q7)**: 표시된 러닝은 개수 제한 없이 모두.
+- **D8 (Q8)**: `outside_user_target` flag 줄에만 사용자 목표 범위(`goal.weekly_loss_percent`)를 적는다.
+- **D9 (Q9)**: 새 `docs/telegram-goal-summary.md`, `docs/telegram-bot.md`에 한 줄 안내, `docs/aerobic-guide.md` Known issues 한 문장 수정.
+- **D10 (Q10)**: 실제 `recommend --json`(임시 `MUSCLE50_HOME`, 합성 값)을 golden `daily` 봉투에 넣고 상태마다 바꾼 사본, 그리고 실제
+  `daily --json` 하나.
+- **D11**: 선택지마다 절별로 태그를 달고, c는 두 줄로 나눈다. **D12**: 선택지 태그는 JSON에서 쓰되 code마다 기대 ID 목록과 같아야
+  한다. `choice_evidence`는 `["PLAT-06", "FATEX-07"]`, `eat_less.deficit_measurable`은 `false`여야 하고, 아니면 모양 오류다.
+- **D13**: 150 기준선에 `(고강도면 75분)`을 적는다(EXL-03, CLI 문구와 같음; 75는 고정 문구). **D14**: 한국어 표는
+  `presentation/telegram_summary.py`에 둔다.
+
+### 3a. 위 예시와 다르게 승인된 문구
+
+- 선택지 머리줄에 FATEX-07 내용(내 선호·지킬 수 있는 것도 정당한 기준)을 적는다.
+- c는 FATEX-05 내용(같은 결손이면 같은 지방 감소)을 담고 두 줄로 나뉜다. b는 muscle50이 결손을 잴 수 없다고 적는다. d는
+  글리코겐·수분으로 체중이 오를 수 있고 기한이 늦어진다고 적는다(PLAT-05).
+- 유산소 `unknown`의 "센 활동"은 "활동 N개 모두"로, 유산소 머리줄은 세는 종류를 적는 `유산소(러닝·수영)`으로 바뀌었다.
+- 정체 머리줄에 `InBody 구간 2개 이상`이 붙고, `insufficient`의 "정체 아님이 아님"은 "정체 여부 모름"이 되었다.
+- 목표 진행 `not_set`의 "목표·기한 없음"은 "계산 안 함 (목표와 기한이 둘 다 있어야 함)"이 되었다.
 
 ## 설계에서 정할 것(열린 질문)
 
@@ -322,7 +352,8 @@ maintain/gain 목표의 경우:
 
 ## 한계 / 후속 후보
 
-- 요약은 goal 절의 일부만 보인다. 주당 set, 러닝/하체 간격, 수면, 진행 목표 변경, 측정 잡음 문구는 `/daily full`로 본다.
+- 요약은 goal 절의 일부만 보인다. 주당 set, 러닝/하체 간격, 수면, 진행 목표 변경, 정체 구간별 속도는 `/daily full`로 본다
+  (측정 잡음 줄은 D5대로 정체 `met`일 때 요약에도 있다).
 - 감량 속도와 정체는 InBody 측정 간격에 기대므로 `/daily`에서도 측정 뒤에야 바뀐다(목표 모드·유산소 가이드의 known issue와 같음).
 - 요약은 `goal_mode` key 이름과 status 값에 결합된다. CLI JSON이 바뀌면 테스트가 잡고, 실행 중에는 대체 답장으로 낮아진다.
 - 후속 후보:
@@ -330,4 +361,14 @@ maintain/gain 목표의 경우:
   - Telegram `/goal`(목표와 goal 절만 짧게)
   - 코치가 정체 선택지를 읽어 대답하기
   - 아침 예약 요약
+- 구현자·검증자가 보고한 한계:
+  - 통합 뒤 `telegram run`을 다시 시작해야 한다. 실행 중인 bot은 이전 코드를 쓴다.
+  - 휴대폰에서 긴 `<pre>` 줄(영어 `reason`, 태그)이 어떻게 접히는지는 아직 확인하지 않았다.
+  - `goal_mode` status 값에 강하게 결합된다. CLI가 새 status, flag, option code, `meaning`을 더하면 요약을 고칠 때까지 목표가 있는
+    모든 `/daily`가 대체 답장이 된다. option code는 테스트가 `plateau_options()`와 비교하지만 status 문자열은 enum이 없다.
+  - 계획 밖 guard 두 개(빈 `reference_minutes_per_week`, 목표 없는 `known`/`reached` 진행)는 모양 오류로 가지만 테스트가 없다.
+  - `MM-DD`는 연도 경계에서 모호하다(기존 요약과 같음). 목표 기한은 전체 날짜로 적는다.
+- 후속 후보(추가): `plateau.options_ranked`(CLI는 항상 false)와 `plateau.noise.evidence`도 모양 검사하기.
+  `docs/aerobic-guide.md` 마지막 후속 후보 줄의 "Telegram 요약 줄(러닝 알림, 정체)"은 이 기능으로 `/daily`에서는 됐고
+  `/today`는 남았다(그 줄은 아직 고치지 않았다).
 - migration이 없고 Garmin 동기화를 바꾸지 않으므로 production migration(gate 3)과 live Garmin 확인(gate 4)은 없다.

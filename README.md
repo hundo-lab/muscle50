@@ -446,6 +446,9 @@ token은 콘솔, 오류, 답장 어디에도 출력하지 않습니다. 처리�
 다시 실행하지 않고(`/log` 중복 방지), bot이 시작되기 전에 보낸 메시지는 실행하지 않습니다. 적용하지 않은 migration이
 있으면 bot은 migration을 적용하지 않고 `/status`, `/day`, `/show`, `/log`, `/void`, `/daily`, `/sync`, `/refresh`를 거부합니다(터미널에서 백업 후 적용하고
 `telegram run`을 다시 시작). bot이 직접 쓰는 문구(`/help`, 사용법, `취소: /void <meal_id>` 줄 등)는 한국어입니다.
+목표(`goal set`)가 있으면 `/daily` 요약 끝에 목표 줄(체중 변화, 골격근량 하한, 목표 진행, 지난 7일 유산소 분과 150/300 기준선, 긴 러닝
+알림, cut 정체 확인과 순위 없는 선택지)이 붙습니다. 값은 `daily --json`의 `goal_mode` 그대로이고 `/today`와 CLI 출력은 그대로입니다
+(`docs/telegram-goal-summary.md`).
 상세와 한계: `docs/telegram-bot.md`.
 
 ### Telegram v2: 자유 문장, 사진, 코치 (선택)
