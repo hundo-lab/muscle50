@@ -39,6 +39,17 @@ class NutrientField(StrEnum):
     FAT_G = "fat_g"
 
 
+class OptionalNutrient(StrEnum):
+    """Nutrients a fact may carry beyond the four NutrientField ones (LDL Nutrients v1).
+
+    They are stored apart from the four (migration 011) and never enter NutrientField loops,
+    so every existing total, field list and output stays as it was. Absent means unknown, never 0.
+    """
+
+    SATURATED_FAT_G = "saturated_fat_g"
+    FIBER_G = "fiber_g"
+
+
 class NutritionSourceType(StrEnum):
     NUTRITION_LABEL = "nutrition_label"
     USER_PROVIDED = "user_provided"
@@ -166,6 +177,51 @@ class NutritionRange:
 
 
 @dataclass(frozen=True)
+class OptionalNutrientAmount:
+    """One optional nutrient of a fact: a point value, an estimate range, or both (value inside the range)."""
+
+    nutrient: OptionalNutrient
+    value: Decimal | None = None
+    minimum: Decimal | None = None
+    maximum: Decimal | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.nutrient, OptionalNutrient):
+            raise ValueError("optional nutrient must be an OptionalNutrient")
+        name = self.nutrient.value
+        for amount in (self.value, self.minimum, self.maximum):
+            if amount is not None:
+                _validate_non_negative_decimal(amount, name)
+        if (self.minimum is None) != (self.maximum is None):
+            raise ValueError(f"{name} range requires both minimum and maximum")
+        if self.minimum is not None and self.maximum is not None and self.minimum > self.maximum:
+            raise ValueError(f"{name} minimum cannot exceed maximum")
+        if self.value is None and self.minimum is None:
+            raise ValueError(f"{name} needs a value or a range (unknown is stored as no amount at all)")
+        if (
+            self.value is not None
+            and self.minimum is not None
+            and self.maximum is not None
+            and not self.minimum <= self.value <= self.maximum
+        ):
+            raise ValueError(f"{name} must fall within its estimate range")
+
+    @property
+    def has_range(self) -> bool:
+        return self.minimum is not None
+
+    def scaled_ratio(self, numerator: Decimal, denominator: Decimal) -> OptionalNutrientAmount:
+        _validate_non_negative_decimal(numerator, "numerator")
+        _validate_positive_decimal(denominator, "denominator")
+        return OptionalNutrientAmount(
+            self.nutrient,
+            _scale_ratio(self.value, numerator, denominator),
+            _scale_ratio(self.minimum, numerator, denominator),
+            _scale_ratio(self.maximum, numerator, denominator),
+        )
+
+
+@dataclass(frozen=True)
 class NutritionProvenance:
     source_type: NutritionSourceType
     accuracy: Accuracy
@@ -200,9 +256,12 @@ class NutritionFact:
     provenance: NutritionProvenance
     value_range: NutritionRange | None = None
     supersedes_fact_id: str | None = None
+    # LDL Nutrients v1: saturated fat / fiber, kept in OptionalNutrient order; absent means unknown.
+    optional: tuple[OptionalNutrientAmount, ...] = ()
 
     def __post_init__(self) -> None:
         _require_text(self.fact_id, "fact_id")
+        _validate_optional_amounts(self)
         _validate_positive_decimal(self.basis_quantity, "basis_quantity")
         if self.supersedes_fact_id == self.fact_id:
             raise ValueError("a nutrition fact cannot supersede itself")
@@ -240,10 +299,25 @@ class NutritionFact:
         )
         return CalculatedNutrition(nutrients)
 
+    def optional_amount(self, nutrient: OptionalNutrient) -> OptionalNutrientAmount | None:
+        return next((amount for amount in self.optional if amount.nutrient is nutrient), None)
+
 
 @dataclass(frozen=True)
 class CalculatedNutrient:
     nutrient: NutrientField
+    fact_id: str
+    value: Decimal | None
+    minimum: Decimal | None
+    maximum: Decimal | None
+    provenance: NutritionProvenance
+
+
+@dataclass(frozen=True)
+class CalculatedOptionalNutrient:
+    """An item's optional nutrient for its quantity, from the fact selected for that nutrient."""
+
+    nutrient: OptionalNutrient
     fact_id: str
     value: Decimal | None
     minimum: Decimal | None
@@ -291,7 +365,9 @@ class FoodNutritionProfile:
         for alias in self.aliases:
             _require_text(alias, "alias")
 
-    def preferred_fact(self, unit: QuantityUnit, nutrient: NutrientField | None = None) -> NutritionFact | None:
+    def preferred_fact(
+        self, unit: QuantityUnit, nutrient: NutrientField | OptionalNutrient | None = None
+    ) -> NutritionFact | None:
         return select_preferred_fact(self.facts, unit, nutrient)
 
 
@@ -343,7 +419,7 @@ class MealItem:
             return None
         return self.nutrition_facts[0]
 
-    def preferred_fact(self, nutrient: NutrientField | None = None) -> NutritionFact | None:
+    def preferred_fact(self, nutrient: NutrientField | OptionalNutrient | None = None) -> NutritionFact | None:
         estimate = self.general_estimate
         if estimate is not None:
             return select_preferred_fact(self.nutrition_facts, estimate.basis_unit, nutrient)
@@ -368,6 +444,33 @@ class MealItem:
             if selection is not None:
                 nutrients.append(selection)
         return CalculatedNutrition(tuple(nutrients)) if nutrients else None
+
+    def calculated_optional(self) -> tuple[CalculatedOptionalNutrient, ...]:
+        """The item's saturated fat / fiber, in OptionalNutrient order; a nutrient with no fact is left out.
+
+        Selection is per nutrient, exactly like the four NutrientField ones (`preferred_fact`), and an
+        estimated general meal uses its estimate for the whole meal (1 serving).
+        """
+        estimate = self.general_estimate
+        if estimate is not None:
+            quantity, unit = estimate.basis_quantity, estimate.basis_unit
+        elif self.quantity is None or self.quantity_unit is None:
+            return ()
+        else:
+            quantity, unit = self.quantity, self.quantity_unit
+        results: list[CalculatedOptionalNutrient] = []
+        for nutrient in OptionalNutrient:
+            fact = self.preferred_fact(nutrient)
+            amount = fact.optional_amount(nutrient) if fact is not None else None
+            if fact is None or amount is None or unit is not fact.basis_unit:
+                continue
+            scaled = amount.scaled_ratio(quantity, fact.basis_quantity)
+            results.append(
+                CalculatedOptionalNutrient(
+                    nutrient, fact.fact_id, scaled.value, scaled.minimum, scaled.maximum, fact.provenance
+                )
+            )
+        return tuple(results)
 
 
 @dataclass(frozen=True)
@@ -414,11 +517,31 @@ class MealItemReference:
 
 
 @dataclass(frozen=True)
+class OptionalNutrientAggregate:
+    """Saturated fat or fiber over some items: a total only when every item has a value.
+
+    ``known_subtotal`` sums the items that have a value (a lower bound when incomplete);
+    ``missing_items`` are the items without a value (unknown, never 0). An estimate range alone
+    is not a value: it makes ``has_data`` true but leaves the item missing.
+    """
+
+    nutrient: OptionalNutrient
+    total: Decimal | None
+    known_subtotal: Decimal | None
+    complete: bool
+    estimated: bool
+    has_data: bool
+    item_count: int
+    missing_items: tuple[MealItemReference, ...]
+
+
+@dataclass(frozen=True)
 class MealNutritionSummary:
     meal_id: str
     eaten_at: datetime
     meal_type: MealType
     nutrition: NutritionAggregate
+    optional: tuple[OptionalNutrientAggregate, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -427,6 +550,7 @@ class DailyNutritionSummary:
     timezone_name: str
     meals: tuple[MealNutritionSummary, ...]
     nutrition: NutritionAggregate
+    optional: tuple[OptionalNutrientAggregate, ...] = ()
 
 
 def normalize_general_meal_note(text: str | None) -> str | None:
@@ -459,6 +583,7 @@ def is_general_estimate_fact(fact: NutritionFact) -> bool:
         and fact.basis_quantity == GENERAL_ESTIMATE_BASIS_QUANTITY
         and fact.basis_unit is GENERAL_ESTIMATE_BASIS_UNIT
         and fact.supersedes_fact_id is None
+        and all(amount.value is None and amount.has_range for amount in fact.optional)
     )
 
 
@@ -470,7 +595,7 @@ def is_reserved_food_reference(text: str) -> bool:
 def select_preferred_fact(
     facts: tuple[NutritionFact, ...],
     unit: QuantityUnit,
-    nutrient: NutrientField | None = None,
+    nutrient: NutrientField | OptionalNutrient | None = None,
 ) -> NutritionFact | None:
     """Select the best active compatible fact using a stable priority order."""
     superseded_ids = {
@@ -492,7 +617,9 @@ def select_preferred_fact(
 
 def aggregate_meal(meal: Meal) -> MealNutritionSummary:
     nutrition = _aggregate_items(meal.items)
-    return MealNutritionSummary(meal.meal_id, meal.eaten_at, meal.meal_type, nutrition)
+    return MealNutritionSummary(
+        meal.meal_id, meal.eaten_at, meal.meal_type, nutrition, aggregate_optional(meal.items)
+    )
 
 
 def aggregate_day(
@@ -511,7 +638,53 @@ def aggregate_day(
     )
     summaries = tuple(aggregate_meal(meal) for meal in selected)
     items = tuple(item for meal in selected for item in meal.items)
-    return DailyNutritionSummary(day, timezone_name, summaries, _aggregate_items(items))
+    return DailyNutritionSummary(day, timezone_name, summaries, _aggregate_items(items), aggregate_optional(items))
+
+
+def aggregate_optional(items: tuple[MealItem, ...]) -> tuple[OptionalNutrientAggregate, ...]:
+    """Saturated fat and fiber over ``items``, in OptionalNutrient order (missing is never counted as 0)."""
+    calculated = tuple(
+        (item, {selection.nutrient: selection for selection in item.calculated_optional()}) for item in items
+    )
+    aggregates = []
+    for nutrient in OptionalNutrient:
+        known: list[Decimal] = []
+        missing: list[MealItemReference] = []
+        estimated = False
+        has_data = False
+        for item, selections in calculated:
+            selection = selections.get(nutrient)
+            if selection is None:
+                missing.append(MealItemReference(item.meal_id, item.sequence))
+                continue
+            has_data = True
+            if selection.provenance.accuracy is Accuracy.ESTIMATED:
+                estimated = True
+            if selection.value is None:
+                missing.append(MealItemReference(item.meal_id, item.sequence))
+            else:
+                known.append(selection.value)
+        known_subtotal = _sum_decimals(known) if known else None
+        complete = bool(items) and not missing
+        aggregates.append(
+            OptionalNutrientAggregate(
+                nutrient=nutrient,
+                total=known_subtotal if complete else None,
+                known_subtotal=known_subtotal,
+                complete=complete,
+                estimated=estimated,
+                has_data=has_data,
+                item_count=len(items),
+                missing_items=tuple(missing),
+            )
+        )
+    return tuple(aggregates)
+
+
+def optional_aggregate(
+    aggregates: tuple[OptionalNutrientAggregate, ...], nutrient: OptionalNutrient
+) -> OptionalNutrientAggregate | None:
+    return next((aggregate for aggregate in aggregates if aggregate.nutrient is nutrient), None)
 
 
 def _aggregate_items(items: tuple[MealItem, ...]) -> NutritionAggregate:
@@ -652,7 +825,38 @@ def _sum_decimals(values: list[Decimal]) -> Decimal:
         return total
 
 
-def _fact_has(fact: NutritionFact, nutrient: NutrientField) -> bool:
+def _validate_optional_amounts(fact: NutritionFact) -> None:
+    """Canonical order, one amount per nutrient, no range on an exact fact, saturated fat within fat."""
+    amounts = fact.optional
+    if not isinstance(amounts, tuple) or not all(isinstance(amount, OptionalNutrientAmount) for amount in amounts):
+        raise ValueError("optional nutrients must be a tuple of OptionalNutrientAmount")
+    nutrients = [amount.nutrient for amount in amounts]
+    if len(nutrients) != len(set(nutrients)):
+        raise ValueError("a nutrition fact lists each optional nutrient at most once")
+    ordered = tuple(sorted(amounts, key=lambda amount: list(OptionalNutrient).index(amount.nutrient)))
+    if ordered != amounts:
+        # Canonical order, so equal facts compare equal whatever order the caller listed them in.
+        object.__setattr__(fact, "optional", ordered)
+    if fact.provenance.accuracy is Accuracy.EXACT and any(amount.has_range for amount in amounts):
+        raise ValueError("exact nutrition facts cannot carry an estimate range")
+    saturated = fact.optional_amount(OptionalNutrient.SATURATED_FAT_G)
+    if saturated is None:
+        return
+    # [design: saturated fat is part of total fat] Only a provable excess is refused: the lowest
+    # saturated fat above the highest fat (points compare as points, ranges as min > max).
+    saturated_low = saturated.value if saturated.value is not None else saturated.minimum
+    fat_high = fact.values.fat_g
+    if fat_high is None and fact.value_range is not None:
+        fat_high = fact.value_range.maximum.fat_g
+    if saturated_low is not None and fat_high is not None and saturated_low > fat_high:
+        raise ValueError(
+            f"saturated fat ({saturated_low:f} g) cannot be more than total fat ({fat_high:f} g) in one fact"
+        )
+
+
+def _fact_has(fact: NutritionFact, nutrient: NutrientField | OptionalNutrient) -> bool:
+    if isinstance(nutrient, OptionalNutrient):
+        return fact.optional_amount(nutrient) is not None
     return fact.values.get(nutrient) is not None or (
         fact.value_range is not None and fact.value_range.bounds(nutrient) is not None
     )

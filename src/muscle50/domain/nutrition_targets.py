@@ -68,6 +68,68 @@ class RangeTarget:
 NutrientTarget = ExactTarget | RangeTarget
 
 
+class LdlTargetKind(StrEnum):
+    """Target kinds of the LDL Nutrients v1 targets (saturated fat, fiber); unset is ``None`` as above."""
+
+    MAX_ENERGY_PERCENT = "max_energy_percent"
+    MINIMUM = "minimum"
+
+
+@dataclass(frozen=True)
+class SaturatedFatTarget:
+    """A user-set daily saturated fat limit: under ``max_energy_percent`` % of energy (0 < P < 100).
+
+    ``meal_note_percent`` (user setting, no default) asks for a meal note when one meal's saturated fat
+    reaches that share of the day limit; ``None`` means no meal note.
+    """
+
+    max_energy_percent: Decimal
+    meal_note_percent: Decimal | None = None
+
+    def __post_init__(self) -> None:
+        _require_positive(self.max_energy_percent, "saturated fat --max-energy-percent")
+        if self.max_energy_percent >= 100:
+            raise NutritionTargetError("saturated fat --max-energy-percent must be below 100")
+        if self.meal_note_percent is not None:
+            _require_positive(self.meal_note_percent, "saturated fat --meal-note-percent")
+
+    @property
+    def kind(self) -> LdlTargetKind:
+        return LdlTargetKind.MAX_ENERGY_PERCENT
+
+
+@dataclass(frozen=True)
+class FiberTarget:
+    """A user-set daily fiber floor: at least ``minimum`` g per day (> 0)."""
+
+    minimum: Decimal
+
+    def __post_init__(self) -> None:
+        _require_positive(self.minimum, "fiber --minimum")
+
+    @property
+    def kind(self) -> LdlTargetKind:
+        return LdlTargetKind.MINIMUM
+
+
+@dataclass(frozen=True)
+class LdlTargets:
+    """LDL Nutrients v1 targets; ``None`` means not set. Never calculated, only set by the user."""
+
+    saturated_fat_g: SaturatedFatTarget | None = None
+    fiber_g: FiberTarget | None = None
+
+    def __post_init__(self) -> None:
+        if self.saturated_fat_g is not None and not isinstance(self.saturated_fat_g, SaturatedFatTarget):
+            raise NutritionTargetError("saturated_fat_g target must be max_energy_percent or unset")
+        if self.fiber_g is not None and not isinstance(self.fiber_g, FiberTarget):
+            raise NutritionTargetError("fiber_g target must be minimum or unset")
+
+    @property
+    def is_set(self) -> bool:
+        return self.saturated_fat_g is not None or self.fiber_g is not None
+
+
 @dataclass(frozen=True)
 class NutritionTargets:
     """Daily targets; ``None`` means no target is set for that nutrient."""
@@ -76,19 +138,28 @@ class NutritionTargets:
     protein_g: NutrientTarget | None = None
     carbohydrate_g: NutrientTarget | None = None
     fat_g: NutrientTarget | None = None
+    # LDL Nutrients v1 (additive): saturated fat and fiber, outside the NutrientField loops.
+    ldl: LdlTargets = LdlTargets()
 
     def __post_init__(self) -> None:
         for nutrient in NutrientField:
             target = self.get(nutrient)
             if target is not None and not isinstance(target, ExactTarget | RangeTarget):
                 raise NutritionTargetError(f"{nutrient.value} target must be exact, range or unset")
+        if not isinstance(self.ldl, LdlTargets):
+            raise NutritionTargetError("ldl targets must be LdlTargets")
 
     def get(self, nutrient: NutrientField) -> NutrientTarget | None:
         target: NutrientTarget | None = getattr(self, nutrient.value)
         return target
 
     def with_target(self, nutrient: NutrientField, target: NutrientTarget | None) -> NutritionTargets:
-        return replace(self, **{nutrient.value: target})
+        values: dict[str, NutrientTarget | None] = {field.value: self.get(field) for field in NutrientField}
+        values[nutrient.value] = target
+        return NutritionTargets(**values, ldl=self.ldl)
+
+    def with_ldl(self, ldl: LdlTargets) -> NutritionTargets:
+        return replace(self, ldl=ldl)
 
 
 class TargetStatus(StrEnum):
