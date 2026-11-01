@@ -31,6 +31,7 @@ from muscle50.application.llm_provider import LlmCallResult, LlmProvider, LlmReq
 from muscle50.application.nutrition_logging import (
     NutritionLoggingError,
     format_general_estimate,
+    general_optional_ranges,
     local_day_bounds,
 )
 from muscle50.application.telegram_bot import (
@@ -1909,6 +1910,8 @@ class TelegramLlmHandler:
         merged = merge_estimate(current, edit.estimate)
         memo = clean_memo(edit.new_memo) if edit.new_memo else item_memo(item)
         fact = item.general_estimate
+        # LDL Nutrients v1 (D10): stored satfat=/fiber= ranges are kept like the other unnamed nutrients.
+        kept = general_optional_ranges(item)
         label = edit.from_label and bool(edit.estimate) and all(low == high for _n, low, high in edit.estimate)
         codes: tuple[CheckCode, ...] = ()
         args: list[str] = ["--general"]
@@ -1916,7 +1919,7 @@ class TelegramLlmHandler:
             args.append(f"--general-note={memo}")
         if merged and fact is not None and not edit.estimate:
             # A memo-only edit sends the stored estimate again, with its own source and reference.
-            args.append(f"--general-estimate={format_general_estimate(fact.provenance.source_type, merged)}")
+            args.append(f"--general-estimate={format_general_estimate(fact.provenance.source_type, merged, kept)}")
             args.append(f"--general-estimate-ref={fact.provenance.source_reference}")
         elif merged:
             codes = tuple(
@@ -1932,7 +1935,7 @@ class TelegramLlmHandler:
                 check_needed=bool(codes),
                 label=label,
             )
-            args.append(f"--general-estimate={format_general_estimate(estimate_source(False), merged)}")
+            args.append(f"--general-estimate={format_general_estimate(estimate_source(False), merged, kept)}")
             args.append(f"--general-estimate-ref={reference}")
         lines = [f"{name}: {before}"]
         old = {nutrient: (low, high) for nutrient, low, high in current}
