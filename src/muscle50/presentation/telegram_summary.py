@@ -667,6 +667,9 @@ def _option_lines(option: dict[str, Any]) -> list[str]:
     return [f"  d) {weeks}주 유지 휴식: 체중이 글리코겐·수분으로 오를 수 있고 기한이 {weeks}주 늦어짐 [PLAT-05]"]
 
 
+# --- /unknown ----------------------------------------------------------------------------------------
+
+
 def unknown_list(document: Any) -> BotReply:
     notices = _list(_object(_object(document)["strength"])["unknown_notices"])
     window = f"최근 {UNKNOWN_NOTICE_DAYS}일, 오늘 운동 제외"
