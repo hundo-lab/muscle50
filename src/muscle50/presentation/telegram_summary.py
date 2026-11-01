@@ -405,14 +405,18 @@ def _unknown_groups(notices: list[Any], *, with_sequences: bool) -> list[tuple[R
 
 # --- the goal lines of /daily (Telegram Goal Summary v1) ---------------------------------------------
 
-# Each line carries the tag of the CLI goal-section line that shows the same content. An indented line
-# belongs to the tagged line above it; the reference marks and the options carry their own tags.
-_USER_SETTING_TAG = "[design: user setting]"
-_WEIGHT_TAG = "[MAINT-05; design]"
-_AEROBIC_TAG = "[EXL-03; design]"
-_PLATEAU_TAG = "[design: user setting; PLAT-01, PLAT-02]"
-_RUN_TAG = "[RUNPROG-03: 관찰 연구의 연관, 알림만]"
-_ASSUMPTION_TAG = "[design: fat-free mass assumed constant]"
+# Each line carries the evidence IDs of the CLI goal-section line that shows the same content, in compact
+# marks (v1.1): every ID stays in `[...]`, `*` replaces `design` (a design value without an evidence
+# number) and `(내 설정)` replaces `design: user setting`. An indented line belongs to the marked line
+# above it; the reference marks and the options carry their own marks. The legend closes the block.
+_USER_SETTING_MARK = "(내 설정)"
+_DESIGN_MARK = "*"
+_WEIGHT_TAG = "[MAINT-05]*"
+_AEROBIC_TAG = "[EXL-03]*"
+_PLATEAU_TAG = "(내 설정) [PLAT-01, PLAT-02]"
+_RUN_TAG = "[RUNPROG-03] 알림만"
+_ASSUMPTION_TAG = "* 제지방 일정 가정"
+_GOAL_LEGEND = "* 근거 수치 없는 설계값 · [ID] 근거 문서 항목 · (내 설정) 직접 정한 값"
 _AEROBIC_TYPE_NAMES = {"running": "러닝", "swimming": "수영"}
 # FATEX-02: 300 is the end of the studied range, never a point past which the benefit is gone. The 75 is
 # the CLI's own fixed wording of EXL-03 ("150 moderate or 75 vigorous").
@@ -443,14 +447,20 @@ def _goal_lines(goal_mode: dict[str, Any]) -> list[str]:
     goal = _object(goal_mode["goal"])
     mode = GoalMode(_text(goal["mode"]))
     return [
-        f"목표: {mode.value} (내 설정) {_USER_SETTING_TAG}",
+        _user_setting(f"목표: {mode.value} (내 설정)"),
         *_goal_weight_lines(_object(goal_mode["weight_change"]), goal),
         _goal_smm_line(_object(goal_mode["smm_floor"])),
         _goal_progress_line(_object(goal_mode["goal_progress"]), goal),
         *_goal_aerobic_lines(_object(goal_mode["aerobic_minutes"])),
         *_goal_run_lines(_object(goal_mode["run_length"])),
         *_goal_plateau_lines(goal_mode["plateau"]),
+        _GOAL_LEGEND,
     ]
+
+
+def _user_setting(line: str) -> str:
+    """The `(내 설정)` mark at the end of the line, once: a line that already says it is left as it is."""
+    return line if _USER_SETTING_MARK in line else f"{line} {_USER_SETTING_MARK}"
 
 
 def _goal_weight_lines(change: dict[str, Any], goal: dict[str, Any]) -> list[str]:
@@ -470,9 +480,9 @@ def _goal_weight_lines(change: dict[str, Any], goal: dict[str, Any]) -> list[str
         elif flag == "outside_user_target":
             rate = _object(goal["weekly_loss_percent"])
             target = f"{_text(rate['minimum'])}-{_text(rate['maximum'])}"
-            lines.append(f"  -> 내 목표 감량 {target} %/주 밖 {_USER_SETTING_TAG}")
+            lines.append(_user_setting(f"  -> 내 목표 감량 {target} %/주 밖"))
         elif flag == "gaining":
-            lines.append("  -> 감량 중 체중 증가 [design]")
+            lines.append(f"  -> 감량 중 체중 증가 {_DESIGN_MARK}")
         else:
             raise ValueError(f"unknown weight_change flag {flag}")
     return lines
@@ -482,19 +492,19 @@ def _goal_smm_line(floor: dict[str, Any]) -> str:
     """The user's own SMM floor (a setting, not a measurement) and where the latest InBody stands."""
     status = _text(floor["status"])
     if status == "not_set":
-        return f"골격근량 하한: 설정 안 함 {_USER_SETTING_TAG}"
+        return _user_setting("골격근량 하한: 설정 안 함")
     limit = f"내 하한 {_text(floor['floor_kg'])} kg"
     if status == "unknown":
-        return f"골격근량: {limit} 대비 {UNKNOWN} (InBody 골격근량 없음) {_USER_SETTING_TAG}"
+        return _user_setting(f"골격근량: {limit} 대비 {UNKNOWN} (InBody 골격근량 없음)")
     if status in ("at_or_above", "below"):
         where = "이상" if status == "at_or_above" else "아래"
-        return f"골격근량: {limit} {where} (InBody {_month_day(floor['measurement_date'])}) {_USER_SETTING_TAG}"
+        return _user_setting(f"골격근량: {limit} {where} (InBody {_month_day(floor['measurement_date'])})")
     raise ValueError(f"unknown smm_floor status {status}")
 
 
 def _goal_progress_line(progress: dict[str, Any], goal: dict[str, Any]) -> str:
     assumption = progress["assumption"]
-    tag = "[design]" if assumption is None else _ASSUMPTION_TAG
+    tag = _DESIGN_MARK if assumption is None else _ASSUMPTION_TAG
     if assumption is not None:
         _text(assumption)  # the CLI's `fat_free_mass_constant`: a body-fat target
     status = _text(progress["status"])
@@ -547,7 +557,7 @@ def _goal_aerobic_lines(aerobic: dict[str, Any]) -> list[str]:
                 reasons.append(f"중강도·고강도 중 하나만 있는 활동 {partial}개")
             if not reasons:
                 raise ValueError("a lower bound without an activity that lacks intensity minutes")
-            lines.append(f"  하한: {' · '.join(reasons)} [design]")
+            lines.append(f"  하한: {' · '.join(reasons)} {_DESIGN_MARK}")
     elif status == "unknown":
         count = _int(_object(aerobic["without_intensity_minutes"])["activity_count"])
         lines = [f"{head}{UNKNOWN} (활동 {count}개 모두 intensity minutes 없음) {_AEROBIC_TAG}"]
@@ -578,8 +588,17 @@ def _reference_text(reference: dict[str, Any]) -> str:
     meaning = _REFERENCE_MEANINGS.get(_text(reference["meaning"]))
     if meaning is None:
         raise ValueError("unknown aerobic reference meaning")
-    tags = ", ".join(_text(item) for item in _list(reference["evidence"]))
-    return f"{_int(reference['minutes'])}{meaning} [{tags}]"
+    return f"{_int(reference['minutes'])}{meaning} {_evidence_mark(_list(reference['evidence']))}"
+
+
+def _evidence_mark(evidence: list[Any]) -> str:
+    """A JSON evidence list as a compact mark: the IDs in order in `[...]`, then `*` when `design` is listed."""
+    items = [_text(item) for item in evidence]
+    identifiers = [item for item in items if item != "design"]
+    if not identifiers and "design" not in items:
+        return "[]"  # v1 printed an empty list as it is
+    mark = f"[{', '.join(identifiers)}]" if identifiers else ""
+    return mark + (_DESIGN_MARK if "design" in items else "")
 
 
 def _goal_run_lines(report: dict[str, Any]) -> list[str]:
@@ -631,11 +650,11 @@ def _goal_plateau_lines(value: Any) -> list[str]:
             lines.extend(_option_lines(option))
         return lines
     if status == "insufficient_measurements":
-        return [f"정체 확인: 판단 못 함, 정체 여부 모름 ({_text(plateau['reason'])}) [design: user setting; PLAT-02]"]
+        return [f"정체 확인: 판단 못 함, 정체 여부 모름 ({_text(plateau['reason'])}) (내 설정) [PLAT-02]"]
     if status == "unknown":
-        return [f"정체 확인: {UNKNOWN} ({_text(plateau['reason'])}) {_USER_SETTING_TAG}"]
+        return [_user_setting(f"정체 확인: {UNKNOWN} ({_text(plateau['reason'])})")]
     if status == "not_set":
-        return ["정체 확인: 설정 안 함 (근거로 정한 기준 없음; goal set ... --plateau-weeks N) [design; PLAT-01]"]
+        return ["정체 확인: 설정 안 함 (근거로 정한 기준 없음; goal set ... --plateau-weeks N) [PLAT-01]*"]
     raise ValueError(f"unknown plateau status {status}")
 
 
@@ -654,7 +673,7 @@ def _option_lines(option: dict[str, Any]) -> list[str]:
             raise ValueError("the eat_less line says muscle50 cannot measure the deficit")
         step = _object(option["step_kcal_per_day"])
         return [
-            f"  b) 하루 {_int(step['minimum'])}-{_int(step['maximum'])} kcal 덜 먹기 [design]; 결손은 약 "
+            f"  b) 하루 {_int(step['minimum'])}-{_int(step['maximum'])} kcal 덜 먹기 *; 결손은 약 "
             f"{_int(option['deficit_limit_kcal_per_day'])} kcal/일 이하, muscle50은 결손을 잴 수 없음 [PRO-04]"
         ]
     if code == "keep_intake_add_activity":
