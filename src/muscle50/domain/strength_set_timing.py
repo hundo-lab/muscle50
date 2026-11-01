@@ -179,6 +179,14 @@ class SuspectSet:
     """None whenever the set was not estimated, like the other estimate fields."""
 
 
+class RestGroupName(StrEnum):
+    """The REST-07 grouping of a rest by the following set's taxonomy rule ([design] mapping)."""
+
+    COMPOUND = "compound"
+    ISOLATION = "isolation"
+    UNCLASSIFIED = "unclassified"
+
+
 @dataclass(frozen=True)
 class RestGroup:
     median_seconds: float | None
@@ -252,6 +260,36 @@ def is_suspect(strength_set: StrengthSet) -> bool:
 
 def suspect_sequences(activity: NormalizedActivity) -> tuple[int, ...]:
     return tuple(item.sequence for item in _ordered_sets(activity) if is_suspect(item))
+
+
+def rest_triples(activity: NormalizedActivity) -> tuple[tuple[StrengthSet, StrengthSet, StrengthSet], ...]:
+    """Every consecutive ``(ACTIVE, REST, ACTIVE)`` row triple, in canonical ``sequence`` order."""
+    ordered = _ordered_sets(activity)
+    return tuple(
+        (before, rest, after)
+        for before, rest, after in zip(ordered, ordered[1:], ordered[2:], strict=False)
+        if before.set_type == _ACTIVE and rest.set_type == _REST and after.set_type == _ACTIVE
+    )
+
+
+def rest_group(before: StrengthSet, after: StrengthSet) -> RestGroupName | None:
+    """The group of the rest between two ACTIVE sets; None when either label is UNKNOWN or they differ.
+
+    No taxonomy rule for the following set's label is unclassified; a ``COMPOUND_PATTERNS`` movement
+    pattern is compound; any other rule is isolation (REST-07 + [design]).
+    """
+    classification = classify_strength_set(after)
+    if (
+        classification.unmapped_reason is UnmappedReason.UNKNOWN_SOURCE_LABEL
+        or classify_strength_set(before).unmapped_reason is UnmappedReason.UNKNOWN_SOURCE_LABEL
+        or _label(before) != _label(after)
+    ):
+        return None
+    if classification.rule is None:
+        return RestGroupName.UNCLASSIFIED
+    if classification.rule.movement_pattern in COMPOUND_PATTERNS:
+        return RestGroupName.COMPOUND
+    return RestGroupName.ISOLATION
 
 
 def needs_heart_rate(activity: NormalizedActivity) -> bool:
@@ -514,16 +552,9 @@ def rest_between_sets(
     values: dict[str, list[tuple[int, bool]]] = {"compound": [], "isolation": [], "unclassified": []}
     excluded: Counter[str] = Counter()
     for _day, activity in activities:
-        ordered = _ordered_sets(activity)
-        for before, rest, after in zip(ordered, ordered[1:], ordered[2:], strict=False):
-            if rest.set_type != _REST or before.set_type != _ACTIVE or after.set_type != _ACTIVE:
-                continue
-            classification = classify_strength_set(after)
-            if (
-                classification.unmapped_reason is UnmappedReason.UNKNOWN_SOURCE_LABEL
-                or classify_strength_set(before).unmapped_reason is UnmappedReason.UNKNOWN_SOURCE_LABEL
-                or _label(before) != _label(after)
-            ):
+        for before, rest, after in rest_triples(activity):
+            group = rest_group(before, after)
+            if group is None:
                 excluded["label_change_or_unknown"] += 1
                 continue
             if not is_checked(after):
@@ -541,12 +572,6 @@ def rest_between_sets(
                     excluded["missing_duration"] += 1
                     continue
                 value, estimated = rest_ms, False
-            if classification.rule is None:
-                group = "unclassified"
-            elif classification.rule.movement_pattern in COMPOUND_PATTERNS:
-                group = "compound"
-            else:
-                group = "isolation"
             values[group].append((value, estimated))
     overall = [item for group in values.values() for item in group]
     return RestBetweenSets(
