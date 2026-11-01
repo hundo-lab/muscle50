@@ -45,7 +45,7 @@ from muscle50.presentation.terminal import render_training_snapshot, render_trai
 
 AS_OF = "2026-03-14"
 SRC = Path(__file__).resolve().parents[1] / "src" / "muscle50"
-_PULL_UP = {"category": "PULL_UP", "name": "WIDE_GRIP_PULL_UP"}
+_PULL_UP: dict[str, Any] = {"category": "PULL_UP", "name": "WIDE_GRIP_PULL_UP"}
 
 
 @pytest.fixture(autouse=True)
