@@ -829,3 +829,9 @@ migration loader를 사용한다. feature-local `nutrition_schema.sql`은 제거
   값을 지우지 않는다"는 규칙은 repository가 아니라 `RefreshGarminActivity`에서
   `_preserve_missing_canonical_values()`로 적용한다 — replace 계약을 바꾸면 다른 호출자에서
   의도적인 값 삭제까지 막히기 때문이다.
+- (2026-11-02) 이 PC의 `telegram run`은 창 없이 돈다. 작업 스케줄러 "muscle50 telegram bot"(로그온 + 30분마다
+  watchdog)이 저장소 밖 `C:\Users\hundo\muscle50-ops\start-telegram-bot.ps1`을 실행하고, 이 스크립트가 숨긴
+  PowerShell에서 `uv run muscle50 telegram run`을 띄운다. 예전에는 최소화된 콘솔 창(`muscle50 telegram`)으로 띄웠는데,
+  창을 닫으면 bot이 멈췄다. 콘솔 출력은 `%TEMP%\muscle50-telegram-console.log`와 bot 자체 로그
+  `telegram\run-YYYY-MM.log`에 남는다. 재시작: `muscle50.exe` 프로세스를 끝내고
+  `Start-ScheduledTask -TaskName "muscle50 telegram bot"`. 다시 창으로 띄우는 변경은 하지 않는다.
