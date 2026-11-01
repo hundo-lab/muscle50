@@ -87,6 +87,8 @@ muscle50 nutrition food add --id banana --name 바나나 --per 1 piece `
   (`visual_estimate`, `language_estimate`) are reserved for a future parser and refused.
 - `--accuracy`: `exact` or `estimated`. No default.
 - `--source-ref`: free text; default `entered with muscle50 nutrition food add`.
+- `--satfat`, `--fiber` (optional, LDL Nutrients v1): saturated fat and fiber in g; left out or `unknown`
+  means missing, never 0. `--general-estimate` also takes `satfat=MIN-MAX`, `fiber=MIN-MAX`. See `ldl-nutrients.md`.
 
 Duplicates: an existing food ID is refused, as is a name or alias that already matches any
 food's name or alias (case-insensitive). The existing food is never changed by `food add`;

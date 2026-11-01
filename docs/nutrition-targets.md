@@ -57,6 +57,10 @@ float), unknown keys are refused. A malformed file is an error (`오류: nutriti
 missing file means no targets are set; `target show` and `status` never create it, and
 `ensure_directories` does not create `config\`.
 
+LDL Nutrients v1 (`ldl-nutrients.md`): with a saturated fat (`satfat --max-energy-percent`) or fiber
+(`fiber --minimum`) target set, the file is written as `schema_version: 2` with `saturated_fat_g` and
+`fiber_g` after the four nutrients; without them it stays schema 1, byte for byte as above.
+
 ## Target model
 
 | Kind | Meaning | Validation |
