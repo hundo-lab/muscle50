@@ -93,7 +93,7 @@ JSON(`daily --json`, additive, 끝에 key 추가):
 - [ ] AC4: `/sync`는 7일 이하면 바로, 넘으면 확인 명령 뒤에 운동, load metrics, 회복을 받고 짧은 요약을 보낸다. 추천은 만들지 않는다.
 - [ ] AC5: 잘못된 날짜, 31일 초과, 미래 날짜, 만료·재사용된 확인 명령은 Garmin을 부르지 않고 거부된다.
 - [ ] AC6: `/daily` 답장과 `sync_request` 안내는 빠진 날이 남아 있을 때만 `/sync` 명령을 더한다.
-- [ ] AC7: 실제 Garmin으로 한 번 확인한다(live-garmin 게이트): 빠진 날이 있는 상태에서 `daily`가 그 날들을 채우고 coverage가 `synced`가 된다.
+- [x] AC7: 실제 Garmin으로 한 번 확인한다(live-garmin 게이트): 빠진 날이 있는 상태에서 `daily`가 그 날들을 채우고 coverage가 `synced`가 된다.
 - [ ] AC8: `garmin latest`, `garmin refresh`, 다른 CLI 출력은 byte-identical이다.
 - [ ] AC9: 품질 게이트 4개가 통과한다.
 
@@ -130,4 +130,10 @@ JSON(`daily --json`, additive, 끝에 key 추가):
   - `garmin coverage`의 `Recorded by:` 줄은 `garmin sync`를 적지 않는다.
   - 코치의 `/sync`와 `/daily` 선택은 프롬프트 규칙이라 틀릴 수 있다. 확정된 안내는 `sync_request` 답장과 `/daily` 요약의 `/sync` 줄이다.
   - `garmin sync`의 stderr 진행 줄은 bot에서 걸러지지 않는다(검사가 끝난 뒤에만 쓰므로 실제로는 보이지 않는다).
-- **live Garmin 확인(AC7)은 통합 뒤 사용자 확인으로 남아 있음.** 순서는 `docs/daily-catch-up.md` "사람 확인"이다. migration은 없다.
+- **live Garmin 확인(AC7, 사용자 확인).** 순서는 `docs/daily-catch-up.md` "사람 확인"이다. migration은 없다.
+  - `daily` 이어 받기: 2026-10-23에 10-20..10-23, 2026-10-25에 10-23..10-25를 받았다.
+  - Telegram `/sync`(2026-11-01, bot run log): 7일 이하 `/sync`가 바로 실행됐다(13:02 `/sync -> exit 0`). 10일 `/sync`는
+    확인 제안 뒤(15:16:40 `offered for confirmation`) `/sync_ok_`로 실행됐다(15:17:24 `/sync -> exit 0`). 미래 끝 날짜는
+    Garmin 호출 없이 거부됐다(15:17:26 `/sync refused (no Garmin call)`). 이어서 `garmin coverage --from 2026-10-20
+    --to 2026-10-31`은 12일 모두 activities·recovery `synced`였다.
+  - 같은 `/sync_ok_`를 다시 누른 거부(`/sync_ok refused`)는 run log에 없어 live로는 확인하지 않았다(테스트로만 확인).
