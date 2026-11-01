@@ -163,7 +163,8 @@ def test_optional_rows_are_append_only_and_exact_facts_take_no_range(database: P
             )
         with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
             connection.execute(
-                "INSERT INTO nutrition_fact_optional_nutrients VALUES ('food:syn-oats:1', 'cholesterol', '1', NULL, NULL)"
+                "INSERT INTO nutrition_fact_optional_nutrients "
+                "VALUES ('food:syn-oats:1', 'cholesterol', '1', NULL, NULL)"
             )
         with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
             connection.execute(

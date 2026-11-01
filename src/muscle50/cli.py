@@ -54,6 +54,7 @@ from muscle50.application.nutrition_logging import (
 )
 from muscle50.application.nutrition_recommendation import BuildNutritionContext
 from muscle50.application.nutrition_targets import (
+    SetLdlTarget,
     SetNutritionTarget,
     ShowDailyNutritionStatus,
     ShowNutritionTargets,
@@ -123,10 +124,19 @@ from muscle50.domain.nutrition import (
     MealType,
     NutrientField,
     NutritionValue,
+    OptionalNutrient,
+    OptionalNutrientAmount,
     QuantityUnit,
     normalize_general_meal_note,
 )
-from muscle50.domain.nutrition_targets import ExactTarget, NutrientTarget, NutritionTargetError, RangeTarget
+from muscle50.domain.nutrition_targets import (
+    ExactTarget,
+    FiberTarget,
+    NutrientTarget,
+    NutritionTargetError,
+    RangeTarget,
+    SaturatedFatTarget,
+)
 from muscle50.domain.recovery_normalization import RecoveryNormalizationError, validate_calendar_date
 from muscle50.domain.strength_recommendation import StrengthFocus
 from muscle50.domain.swim_normalization import SwimNormalizationError
@@ -247,6 +257,11 @@ _TARGET_NUTRIENTS: dict[str, NutrientField] = {
     "protein": NutrientField.PROTEIN_G,
     "carbs": NutrientField.CARBOHYDRATE_G,
     "fat": NutrientField.FAT_G,
+}
+# LDL Nutrients v1: their own target kinds (saturated fat: --max-energy-percent, fiber: --minimum).
+_LDL_TARGET_NUTRIENTS: dict[str, OptionalNutrient] = {
+    "satfat": OptionalNutrient.SATURATED_FAT_G,
+    "fiber": OptionalNutrient.FIBER_G,
 }
 
 
@@ -572,15 +587,43 @@ def _add_nutrition_parser(commands: argparse._SubParsersAction[argparse.Argument
     target = nutrition_commands.add_parser("target", help="Daily nutrition targets you set explicitly")
     target_commands = target.add_subparsers(dest="target_command", required=True)
     target_set = target_commands.add_parser(
-        "set", help="Set one nutrient's daily target to an exact value or an inclusive range, or unset it"
+        "set",
+        help=(
+            "Set one nutrient's daily target to an exact value or an inclusive range, or unset it; satfat takes "
+            "--max-energy-percent and fiber takes --minimum (your settings; advice only)"
+        ),
     )
-    target_set.add_argument("nutrient", choices=list(_TARGET_NUTRIENTS), help="kcal, or protein/carbs/fat in g")
-    target_value = target_set.add_mutually_exclusive_group(required=True)
+    target_set.add_argument(
+        "nutrient",
+        choices=[*_TARGET_NUTRIENTS, *_LDL_TARGET_NUTRIENTS],
+        help="kcal, or protein/carbs/fat in g; satfat (saturated fat) or fiber in g",
+    )
+    # Exactly one value flag is required; _check_target_arguments says so (argparse exit 2) per nutrient.
+    target_value = target_set.add_mutually_exclusive_group()
     target_value.add_argument("--exact", metavar="N", help="one target value, e.g. --exact 80")
     target_value.add_argument(
         "--range", nargs=2, metavar=("MIN", "MAX"), help="inclusive range, MIN <= MAX, e.g. --range 170 180"
     )
+    target_value.add_argument(
+        "--max-energy-percent",
+        metavar="P",
+        help="satfat only: keep saturated fat under P %% of energy (0 < P < 100), e.g. 7 (LDL-05 reference < 7 %%)",
+    )
+    target_value.add_argument(
+        "--minimum",
+        metavar="G",
+        help="fiber only: at least G g per day (G > 0), e.g. 25 (LDL-08 reference >= 25 g)",
+    )
     target_value.add_argument("--unset", action="store_true", help="remove the target (unset is not 0)")
+    target_set.add_argument(
+        "--meal-note-percent",
+        metavar="N",
+        help=(
+            "satfat with --max-energy-percent only: note a meal whose saturated fat reaches N %% of the day limit "
+            "(N > 0; no default, so no note without it)"
+        ),
+    )
+    target_set.set_defaults(target_usage_error=target_set.error)
     target_set.add_argument("--json", action="store_true", help="print all targets as JSON")
     target_show = target_commands.add_parser("show", help="Show the configured daily targets")
     target_show.add_argument("--json", action="store_true", help="print as JSON")
@@ -602,7 +645,8 @@ _GENERAL_NOTE_HELP = (
 _GENERAL_ESTIMATE_HELP = (
     "estimated ranges for the --general (or its --general-note) just before it, e.g. "
     "visual_estimate:kcal=700-950,protein=30-45 (source visual_estimate or language_estimate; nutrients kcal, "
-    "protein, carbs, fat). Stored as ranges marked estimated; the values stay unknown, never 0"
+    "protein, carbs, fat, and optionally satfat, fiber). Stored as ranges marked estimated; the values stay "
+    "unknown, never 0"
 )
 _GENERAL_ESTIMATE_REF_HELP = (
     "where the --general-estimate just before it came from (optional; one line, at most "
@@ -790,6 +834,14 @@ def _add_fact_arguments(parser: argparse.ArgumentParser, command: str) -> None:
             required=True,
             metavar="N|unknown",
             help=f"{label} for the reference quantity; '{_UNKNOWN_NUTRIENT}' records it as missing (never as 0)",
+        )
+    for flag, label in (("--satfat", "saturated fat in g"), ("--fiber", "dietary fiber in g")):
+        parser.add_argument(
+            flag,
+            default=_UNKNOWN_NUTRIENT,
+            metavar="N|unknown",
+            help=f"{label} for the reference quantity (optional; left out or '{_UNKNOWN_NUTRIENT}' means missing, "
+            "never 0)",
         )
     parser.add_argument(
         "--source",
@@ -1482,7 +1534,12 @@ def _local_timezone(day: date) -> tzinfo:
 
 
 def _nutrition(args: argparse.Namespace) -> int:
+    if args.nutrition_command == "target" and args.target_command == "set":
+        _check_target_arguments(args)
     try:
+        if args.nutrition_command == "target" and args.target_command == "set":
+            # Refused before anything is created or migrated (nothing is written).
+            _check_target_kind(args)
         paths = AppPaths.from_environment()
         paths.ensure_directories()
         foods = SqliteFoodNutritionRepository(paths.database_path)
@@ -1557,6 +1614,23 @@ def _nutrition(args: argparse.Namespace) -> int:
             print(render_daily_intake_json(intake) if args.json else render_daily_intake(intake))
             return 0
         targets = JsonNutritionTargetRepository(paths.nutrition_targets_path)
+        if (
+            args.nutrition_command == "target"
+            and args.target_command == "set"
+            and args.nutrient in _LDL_TARGET_NUTRIENTS
+        ):
+            ldl_nutrient = _LDL_TARGET_NUTRIENTS[args.nutrient]
+            stored = SetLdlTarget(targets).execute(ldl_nutrient, _ldl_target(args))
+            if args.json:
+                print(render_targets_json(stored))
+            else:
+                ldl = (
+                    stored.ldl.saturated_fat_g
+                    if ldl_nutrient is OptionalNutrient.SATURATED_FAT_G
+                    else stored.ldl.fiber_g
+                )
+                print(f"{args.nutrient} target {'unset' if ldl is None else 'set'}.\n{render_targets(stored)}")
+            return 0
         if args.nutrition_command == "target" and args.target_command == "set":
             nutrient = _TARGET_NUTRIENTS[args.nutrient]
             stored = SetNutritionTarget(targets).execute(nutrient, _target(args))
@@ -1824,6 +1898,19 @@ def _nutrient(text: str, flag: str) -> Decimal | None:
     return None if text == _UNKNOWN_NUTRIENT else _decimal_argument(text, flag)
 
 
+def _optional_amounts(args: argparse.Namespace) -> tuple[OptionalNutrientAmount, ...]:
+    """`--satfat`/`--fiber` point values; left out or `unknown` means no amount (never 0)."""
+    amounts = []
+    for nutrient, text, flag in (
+        (OptionalNutrient.SATURATED_FAT_G, args.satfat, "--satfat"),
+        (OptionalNutrient.FIBER_G, args.fiber, "--fiber"),
+    ):
+        value = _nutrient(text, flag)
+        if value is not None:
+            amounts.append(OptionalNutrientAmount(nutrient, value))
+    return tuple(amounts)
+
+
 def _new_food(args: argparse.Namespace) -> NewFood:
     fact = _new_food_fact(args)
     return NewFood(
@@ -1836,6 +1923,7 @@ def _new_food(args: argparse.Namespace) -> NewFood:
         accuracy=fact.accuracy,
         source_reference=fact.source_reference,
         aliases=tuple(args.alias),
+        optional=fact.optional,
     )
 
 
@@ -1854,6 +1942,59 @@ def _new_food_fact(args: argparse.Namespace) -> NewFoodFact:
         source_type=next(source for source in CATALOG_SOURCE_TYPES if source.value == args.source),
         accuracy=Accuracy(args.accuracy),
         source_reference=args.source_ref,
+        optional=_optional_amounts(args),
+    )
+
+
+_TARGET_VALUE_FLAGS: dict[str, tuple[str, ...]] = {
+    "satfat": ("--max-energy-percent", "--unset"),
+    "fiber": ("--minimum", "--unset"),
+}
+
+
+def _check_target_arguments(args: argparse.Namespace) -> None:
+    """`target set` needs one value flag; argparse cannot say which per nutrient, so this exits 2 here."""
+    given = (
+        args.exact is not None
+        or args.range is not None
+        or args.max_energy_percent is not None
+        or args.minimum is not None
+        or args.unset
+    )
+    if not given:
+        flags = _TARGET_VALUE_FLAGS.get(args.nutrient, ("--exact", "--range", "--unset"))
+        args.target_usage_error(f"one of the arguments {' '.join(flags)} is required")
+
+
+def _check_target_kind(args: argparse.Namespace) -> None:
+    """A value flag of another nutrient's kind is refused (exit 1) before anything is read or written."""
+    nutrient = args.nutrient
+    if nutrient == "satfat":
+        allowed = "--max-energy-percent P or --unset"
+        wrong = args.exact is not None or args.range is not None or args.minimum is not None
+    elif nutrient == "fiber":
+        allowed = "--minimum G or --unset"
+        wrong = args.exact is not None or args.range is not None or args.max_energy_percent is not None
+    else:
+        allowed = "--exact N, --range MIN MAX or --unset"
+        wrong = args.max_energy_percent is not None or args.minimum is not None
+    if wrong:
+        raise NutritionTargetError(f"{nutrient} takes {allowed}. Nothing was changed.")
+    if args.meal_note_percent is not None and (nutrient != "satfat" or args.max_energy_percent is None):
+        raise NutritionTargetError(
+            "--meal-note-percent goes with satfat --max-energy-percent only. Nothing was changed."
+        )
+
+
+def _ldl_target(args: argparse.Namespace) -> SaturatedFatTarget | FiberTarget | None:
+    if args.unset:
+        return None
+    if args.nutrient == "fiber":
+        return FiberTarget(_target_value(args.minimum, "--minimum"))
+    note = args.meal_note_percent
+    return SaturatedFatTarget(
+        _target_value(args.max_energy_percent, "--max-energy-percent"),
+        _target_value(note, "--meal-note-percent") if note is not None else None,
     )
 
 

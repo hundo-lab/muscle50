@@ -8,7 +8,7 @@ meals and never treats a missing nutrient value as zero.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from enum import StrEnum
 
@@ -138,28 +138,32 @@ class NutritionTargets:
     protein_g: NutrientTarget | None = None
     carbohydrate_g: NutrientTarget | None = None
     fat_g: NutrientTarget | None = None
-    # LDL Nutrients v1 (additive): saturated fat and fiber, outside the NutrientField loops.
-    ldl: LdlTargets = LdlTargets()
+    # LDL Nutrients v1 (additive): saturated fat and fiber, outside the NutrientField loops. Not a
+    # constructor argument, so every existing NutritionTargets(...) call keeps its exact signature;
+    # set it with ``with_ldl``.
+    ldl: LdlTargets = field(default=LdlTargets(), init=False)
 
     def __post_init__(self) -> None:
         for nutrient in NutrientField:
             target = self.get(nutrient)
             if target is not None and not isinstance(target, ExactTarget | RangeTarget):
                 raise NutritionTargetError(f"{nutrient.value} target must be exact, range or unset")
-        if not isinstance(self.ldl, LdlTargets):
-            raise NutritionTargetError("ldl targets must be LdlTargets")
 
     def get(self, nutrient: NutrientField) -> NutrientTarget | None:
         target: NutrientTarget | None = getattr(self, nutrient.value)
         return target
 
     def with_target(self, nutrient: NutrientField, target: NutrientTarget | None) -> NutritionTargets:
-        values: dict[str, NutrientTarget | None] = {field.value: self.get(field) for field in NutrientField}
+        values: dict[str, NutrientTarget | None] = {item.value: self.get(item) for item in NutrientField}
         values[nutrient.value] = target
-        return NutritionTargets(**values, ldl=self.ldl)
+        return NutritionTargets(**values).with_ldl(self.ldl)
 
     def with_ldl(self, ldl: LdlTargets) -> NutritionTargets:
-        return replace(self, ldl=ldl)
+        if not isinstance(ldl, LdlTargets):
+            raise NutritionTargetError("ldl targets must be LdlTargets")
+        targets = replace(self)  # an init=False field is not copied by replace(); it is set below
+        object.__setattr__(targets, "ldl", ldl)
+        return targets
 
 
 class TargetStatus(StrEnum):

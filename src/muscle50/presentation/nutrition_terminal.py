@@ -42,7 +42,8 @@ from muscle50.domain.nutrition_targets import (
     TargetStatus,
 )
 from muscle50.infrastructure.decimal_text import decimal_to_text
-from muscle50.infrastructure.nutrition_target_store import target_payload
+from muscle50.infrastructure.nutrition_target_store import target_payload, targets_payload_with_ldl
+from muscle50.presentation import ldl_terminal
 from muscle50.presentation.goal_terminal import goal_reference_lines, goal_reference_payload
 
 _LABELS = {
@@ -77,6 +78,7 @@ def render_food_list(profiles: tuple[FoodNutritionProfile, ...]) -> str:
         lines.append(f"  {profile.profile_id}  {profile.name}")
         for fact in _active_facts(profile):
             lines.append(f"    {_fact_line(fact)}")
+            lines.extend(ldl_terminal.fact_lines(fact, "    "))
     return "\n".join(lines)
 
 
@@ -91,6 +93,7 @@ def render_food(profile: FoodNutritionProfile) -> str:
             state += f", replaces {fact.supersedes_fact_id}"
         lines.append(f"  fact {fact.fact_id} ({state})")
         lines.append(f"    {_fact_line(fact)}")
+        lines.extend(ldl_terminal.fact_lines(fact, "    "))
         lines.append(f"    reference: {fact.provenance.source_reference}")
         lines.append(f"    recorded: {fact.provenance.created_at.isoformat()}")
     return "\n".join(lines)
@@ -203,6 +206,7 @@ def render_daily_intake(intake: DailyIntake) -> str:
     if nutrition.estimated_fields:
         names = ", ".join(_NAMES[nutrient] for nutrient in _ordered(nutrition.estimated_fields))
         lines.append(f"Estimated: {names} include values from facts marked estimated.")
+    lines.extend(ldl_terminal.day_lines(intake))
     return "\n".join(lines)
 
 
@@ -214,6 +218,7 @@ def render_daily_intake_json(intake: DailyIntake) -> str:
             "scope": "intake_only",
             "meals": [_meal_payload(meal) for meal in intake.meals],
             "total": _aggregate_payload(intake.summary.nutrition),
+            **ldl_terminal.day_payload(intake),
         }
     )
 
@@ -241,9 +246,11 @@ def _meal_lines(intake: MealIntake, *, facts: bool = False) -> list[str]:
             lines.append(f"     facts: {_item_fact_versions(item)}")
         if item.missing_fields:
             lines.append(f"     missing: {', '.join(_NAMES[nutrient] for nutrient in item.missing_fields)}")
+        lines.extend(ldl_terminal.item_lines(item))
     nutrition = intake.summary.nutrition
     totals = " | ".join(f"{_SHORT[nutrient]} {_aggregate_value(nutrition, nutrient)}" for nutrient in NutrientField)
     lines.append(f"  Meal total: {totals}")
+    lines.extend(ldl_terminal.meal_lines(intake))
     # Only `meal show/void/edit/merge` attach a history; nothing changes for a meal without corrections.
     if intake.history is not None and intake.history.recorded:
         lines.extend(_history_lines(intake.history))
@@ -421,7 +428,8 @@ def render_targets(targets: NutritionTargets) -> str:
     lines = ["Daily nutrition targets (the same targets apply to every date):"]
     for nutrient in NutrientField:
         lines.append(f"  {_LABELS[nutrient]:<13} {_target_text(targets.get(nutrient), nutrient)}")
-    if all(targets.get(nutrient) is None for nutrient in NutrientField):
+    lines.extend(ldl_terminal.target_lines(targets))
+    if all(targets.get(nutrient) is None for nutrient in NutrientField) and not targets.ldl.is_set:
         lines.append("No targets set. See: muscle50 nutrition target set --help")
     return "\n".join(lines)
 
@@ -459,11 +467,13 @@ def render_nutrition_status(status: DailyNutritionStatus, goal_reference: CutNut
     if nutrition.estimated_fields:
         names = ", ".join(_NAMES[nutrient] for nutrient in _ordered(nutrition.estimated_fields))
         lines.append(f"Estimated: {names} include values from facts marked estimated.")
-    if all(status.targets.get(nutrient) is None for nutrient in NutrientField):
+    if all(status.targets.get(nutrient) is None for nutrient in NutrientField) and not status.targets.ldl.is_set:
         lines.append("No targets set. See: muscle50 nutrition target set --help")
     if goal_reference is not None:
         lines.append("")
         lines.extend(goal_reference_lines(goal_reference))
+    # LDL Nutrients v1 (additive): only with an LDL target or saturated fat / fiber data.
+    lines.extend(ldl_terminal.status_lines(status))
     return "\n".join(lines)
 
 
@@ -485,6 +495,8 @@ def render_nutrition_status_json(
     if goal_reference is not None:
         # Training Goal Mode v1 (additive): a trailing key, only with a cut goal set.
         payload["goal_reference"] = goal_reference_payload(goal_reference)
+    # LDL Nutrients v1 (additive): a trailing key, only with an LDL target or saturated fat / fiber data.
+    payload.update(ldl_terminal.status_payload(status))
     return _dumps(payload)
 
 
@@ -648,7 +660,10 @@ def _food_payload(profile: FoodNutritionProfile) -> dict[str, Any]:
         "food_id": profile.profile_id,
         "name": profile.name,
         "aliases": list(profile.aliases),
-        "facts": [{**_fact_payload(fact), "active": fact.fact_id in active} for fact in profile.facts],
+        "facts": [
+            {**_fact_payload(fact), "active": fact.fact_id in active, **ldl_terminal.fact_payload(fact)}
+            for fact in profile.facts
+        ],
     }
 
 
@@ -676,12 +691,14 @@ def _item_payload(item: ItemIntake) -> dict[str, Any]:
         "unit": item.item.quantity_unit.value if item.item.quantity_unit is not None else None,
         "nutrients": nutrients,
         "missing_fields": [nutrient.value for nutrient in item.missing_fields],
-        "facts": [_fact_payload(fact) for fact in item.item.nutrition_facts],
+        "facts": [{**_fact_payload(fact), **ldl_terminal.fact_payload(fact)} for fact in item.item.nutrition_facts],
     }
     if item.item.is_general:
         # Only general meal items carry these keys; every other item keeps its exact document.
         payload["general_meal"] = True
         payload["note"] = item.item.serving_description
+    # LDL Nutrients v1 (additive): the last key, only for an item with saturated fat or fiber.
+    payload.update(ldl_terminal.item_payload(item))
     return payload
 
 
@@ -699,6 +716,7 @@ def _meal_payload(intake: MealIntake) -> dict[str, Any]:
     history = intake.history
     if history is None or not history.recorded:
         # Every meal without corrections keeps the exact document `nutrition log --json` prints.
+        payload.update(ldl_terminal.meal_payload(intake))
         return payload
     void = history.void
     payload["voided"] = void is not None
@@ -722,6 +740,7 @@ def _meal_payload(intake: MealIntake) -> dict[str, Any]:
         }
         for before_type, before_eaten_at, revision in history.revision_steps()
     ]
+    payload.update(ldl_terminal.meal_payload(intake))
     return payload
 
 
@@ -755,6 +774,9 @@ def _aggregate_payload(nutrition: NutritionAggregate) -> dict[str, Any]:
 
 
 def _targets_payload(targets: NutritionTargets) -> dict[str, Any]:
+    if targets.ldl.is_set:
+        # LDL Nutrients v1 (additive): saturated fat and fiber after the four, only while one is set.
+        return targets_payload_with_ldl(targets)
     return {nutrient.value: target_payload(targets.get(nutrient)) for nutrient in NutrientField}
 
 

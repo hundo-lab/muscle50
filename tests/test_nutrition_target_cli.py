@@ -162,7 +162,8 @@ def test_no_targets_configured(capsys: pytest.CaptureFixture[str], targets_file:
         (["protein", "--exact", "175", "--unset"], 2, "not allowed with argument"),
         (["protein", "--exact", "175", "--range", "170", "180"], 2, "not allowed with argument"),
         (["protein", "--range", "170"], 2, "expected 2 arguments"),
-        (["fiber", "--exact", "30"], 2, "invalid choice"),
+        (["fiber", "--exact", "30"], 1, "fiber takes --minimum G or --unset. Nothing was changed."),
+        (["sodium", "--exact", "30"], 2, "invalid choice"),
     ],
 )
 def test_invalid_target_input_is_rejected_and_nothing_is_written(

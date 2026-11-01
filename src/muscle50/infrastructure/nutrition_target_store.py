@@ -143,14 +143,14 @@ def _targets_from_document(document: Any) -> NutritionTargets:
         nutrient.value: _target(nutrient, entries[nutrient.value]) for nutrient in NutrientField
     }
     if version == SCHEMA_VERSION:
-        return NutritionTargets(**values, ldl=LdlTargets())
+        return NutritionTargets(**values)
     ldl = LdlTargets(
         _saturated_fat_target(entries[OptionalNutrient.SATURATED_FAT_G.value]),
         _fiber_target(entries[OptionalNutrient.FIBER_G.value]),
     )
     if not ldl.is_set:
         raise ValueError("schema_version 2 is only written with a saturated_fat_g or fiber_g target")
-    return NutritionTargets(**values, ldl=ldl)
+    return NutritionTargets(**values).with_ldl(ldl)
 
 
 def _target(nutrient: NutrientField, entry: Any) -> NutrientTarget | None:
