@@ -1,7 +1,7 @@
 ---
 id: rest-interval-advice
 title: Rest Interval Advice v1
-status: draft
+status: integrated
 migration: none
 output_change: additive
 user_gates: [design, integration]
@@ -53,7 +53,7 @@ user_gates: [design, integration]
 
 ## 명령 예시
 
-명령과 flag는 그대로다(설계 결정 D2에서 opt-in flag를 고르면 `--rest-advice`가 더해진다).
+명령과 flag는 그대로다(설계 결정 D2-A: 새 flag 없음).
 
 ```powershell
 # text
@@ -65,31 +65,33 @@ muscle50 analytics snapshot --date 2026-03-14 --days 28 --json
 
 기본 window는 7일이라 표본이 작다. 예시는 `--days 28`을 쓴다.
 
-예상 text 출력(합성 값). Strength 절 끝, 기존 taxonomy 줄과 (있으면) `Set timing` 줄 뒤에 붙는다.
+예상 text 출력(합성 값, 통합 때 실제 출력으로 바꿈: `tests/test_rest_interval_advice.py`의 `happy_rows()`). Strength 절
+끝, 기존 taxonomy 줄과 (있으면) `Set timing` 줄 뒤에 붙는다.
 
 ```text
-  Rest advice [advice only; used by no rule]: recorded REST between two sets of the same exercise; sets under 1.0 s/rep excluded [design]
-    compound: median 55 s from 18 rests (band short <= 60 s) [REST-01; groups REST-07, design]
-    isolation: median 75 s from 9 rests (band 60-120 s) [REST-01; groups REST-07, design]
+  Rest advice [advice only; used by no rule]: recorded REST between two sets of the same Garmin exercise label; rests before a set under 1.0 s/rep are excluded [design]
+    compound: median 56 s from 3 rests (band short <= 60 s) [REST-01; groups REST-07, design]
+    isolation: median 65 s from 3 rests (band 60-120 s) [REST-01; groups REST-07, design]
     unclassified: unavailable (0)
-    excluded: suspect set 4 [design], label change or UNKNOWN 6, unchecked 1, missing duration 0
-    BENCH_PRESS/BARBELL_BENCH_PRESS (compound): median 50 s from 6 rests
-    PULL_UP/WIDE_GRIP_PULL_UP (compound): median 58 s from 8 rests
-    SQUAT/BARBELL_BACK_SQUAT (compound): median 95 s from 4 rests
-    CURL/DUMBBELL_BICEPS_CURL (isolation): median 75 s from 9 rests
-    evidence (8 of 9 hypertrophy trials in adults 18-35, 1 in > 65; trained-only analysis not possible [REST-01]):
-      [REST-01] rest > 60 s: small, uncertain hypertrophy benefit (CrIs include 0); whether > 90 s adds more is equivocal
-      [REST-02] 3 min vs 1 min, young trained men, whole-body routine, n=21: larger squat/bench 1RM and thigh thickness gains
-      [REST-05] reps in later sets: 1 min lost the most; 2 vs 3 min differed trivially (Smith squat, leg extension)
-      [REST-07] ACSM 2009, maximal-strength goal: at least 2-3 min for heavy core lifts such as squat and bench; 1-2 min may suffice for assistance lifts (replaced by REST-08)
-      [REST-08] ACSM 2026 sets no rest time: strength unaffected by < 1 vs > 1 min; hypertrophy effect could not be determined
-      [REST-04, REST-06] with short rests, volume load mattered more than rest length; self-selected rest also worked
+    excluded: label change or UNKNOWN 2, unchecked 1, suspect set 1 [design], missing duration 1
+    BENCH_PRESS/- (compound): median 53 s from 2 rests
+    SQUAT/BARBELL_BACK_SQUAT (compound): median 100 s from 1 rests
+    CURL/- (isolation): median 65 s from 3 rests
+    evidence (fixed lines, the same for every median; REST-01 trials: 8 of 9 in adults 18-35, 1 in > 65; no trained-only analysis) [REST-01; design]:
+      [REST-01] rest > 60 s: small, uncertain hypertrophy benefit (credible intervals include 0), possibly through volume load; whether > 90 s adds more is equivocal
+      [REST-02] 3 min vs 1 min, trained men, whole-body routine, 8 weeks, n=21: larger squat and bench 1RM and front-thigh thickness gains with 3 min
+      [REST-04] untrained adults, knee extension, 10 weeks, n=28: hypertrophy followed total volume load more than rest length (1 min with volume load matched to 3 min: 12.9 % vs 3 min: 13.1 %)
+      [REST-05] acute, reps kept in later sets: the largest loss was between 1 min and 2-3 min, 2 vs 3 min differed trivially (lower body); heavy bench at 85 % 1RM kept reps over 4 sets only with 8 min
+      [REST-06] self-selected vs fixed 75 s rest, trained men, 8 weeks, n=33: similar strength gains (6.8 % vs 7.4 %); fixed rest was 37 % more time-efficient
+      [REST-07] ACSM 2009, replaced by REST-08: strength, at least 2-3 min for heavy core lifts such as squat and bench, 1-2 min for assistance lifts; hypertrophy, 1-2 min for novice and intermediate
+      [REST-08] ACSM 2026 sets no rest time: strength was unaffected by < 1 vs > 1 min rests (2 reviews, n=982); for hypertrophy the data could not decide (4 reviews, n=265)
     option for compound (median in band short <= 60 s), no ranking: rest longer [REST-01] / keep short rests and match volume load (sets x reps x load) [REST-04]
 ```
 
 - 휴식 값은 `{:.0f} s`. 값이 없는 그룹은 `unavailable (0)`이고 0 s가 아니다.
 - `option` 줄은 중앙값이 short 구간인 그룹마다 한 줄이다. 그런 그룹이 없으면 없다.
-- 운동별 줄은 group(compound, isolation, unclassified) 순서, 그 안에서 `(category, name)` 사전순이다.
+- 운동별 줄은 센 휴식이 하나 이상인 label만, group(compound, isolation, unclassified) 순서, 그 안에서 `(category, name)` 사전순이다.
+- 근거 줄은 REST-01, 02, 04, 05, 06, 07, 08 순서로 한 줄씩이다(REST-04와 REST-06도 따로).
 - ASCII만 쓴다(label은 Garmin 값 그대로, 이미 ASCII).
 
 예상 JSON 출력(합성 값, key 순서 고정). top-level 마지막 key다: `strength_set_timing`이 있으면 그 뒤, 없으면
@@ -105,20 +107,20 @@ muscle50 analytics snapshot --date 2026-03-14 --days 28 --json
       "bands": ["REST-01"],
       "groups": ["REST-07", "design"],
       "suspect_exclusion": ["design"],
-      "notes": ["REST-01", "REST-02", "REST-05", "REST-07", "REST-08", "REST-04", "REST-06"],
+      "notes": ["REST-01", "REST-02", "REST-04", "REST-05", "REST-06", "REST-07", "REST-08"],
       "option_short_rest": ["REST-01", "REST-04"]
     },
     "groups": {
-      "compound": {"median_seconds": 55.0, "rest_count": 18, "band": "short"},
-      "isolation": {"median_seconds": 75.0, "rest_count": 9, "band": "intermediate"},
+      "compound": {"median_seconds": 56.0, "rest_count": 3, "band": "short"},
+      "isolation": {"median_seconds": 65.0, "rest_count": 3, "band": "intermediate"},
       "unclassified": {"median_seconds": null, "rest_count": 0, "band": null}
     },
-    "excluded": {"suspect_set": 4, "label_change_or_unknown": 6, "unchecked": 1, "missing_duration": 0},
+    "excluded": {"label_change_or_unknown": 2, "unchecked": 1, "suspect_set": 1, "missing_duration": 1},
     "exercises": [
-      {"exercise_category": "BENCH_PRESS", "exercise_name": "BARBELL_BENCH_PRESS", "group": "compound",
-       "median_seconds": 50.0, "rest_count": 6, "band": "short"}
+      {"exercise_category": "BENCH_PRESS", "exercise_name": null, "group": "compound",
+       "median_seconds": 53.0, "rest_count": 2, "band": "short"}
     ],
-    "options": [{"group": "compound", "code": "short_rest_longer_or_more_sets"}]
+    "options": [{"group": "compound", "code": "rest_longer_or_match_volume_load"}]
   }
 ```
 
@@ -130,10 +132,10 @@ muscle50 analytics snapshot --date 2026-03-14 --days 28 --json
 1. **비교 기준은 기록된 휴식이다(v1).** 값은 REST row의 `duration_seconds`를 `round(× 1000)` ms로 쓴다. 심박 추정 휴식
    (`estimated_rest_ms`)은 쓰지 않는다. 이유: 추정은 `[design]` 상수(1.0 s/rep, 10 bpm, 10 s 공백, 보정 세트 3·5개)에 기대고
    신뢰도가 최고 medium이다(HR-02). 근거 줄 옆에 놓는 값은 근거 없는 상수에 기대지 않아야 한다.
-   - **REST-01 적용 메모와의 차이(게이트 1 결정 D1)**: 승인된 REST-01 메모는 "보정된 휴식(strength-set-timing)이 있을 때만
-     판정한다"고 적었다. 이 스펙은 판정을 하지 않고(구간 위치와 선택지만), 보정값 대신 **늦게 누른 흔적이 없는 세트 앞의
-     기록값**만 쓴다. set-timing 문서 Known issues의 "기록된 휴식만 쓰거나"를 고른 것이다. 문구 그대로의 메모와 다르므로
-     사용자가 정한다.
+   - **REST-01 메모와의 관계(게이트 1 결정 D1-A, 2026-11-01)**: 초안 때의 REST-01 메모("보정된 휴식이 있을 때만 판정한다")는
+     2026-11-01 승인된 근거 수정(P1)으로 바뀌었다. 지금 메모는 조언만, 90 s를 이득이 멈추는 값으로 쓰지 않음, 판정·자동 규칙에
+     쓰지 않음이다. 이 스펙은 판정을 하지 않고(구간 위치와 선택지만), 보정값 대신 **늦게 누른 흔적이 없는 세트 앞의
+     기록값**만 쓴다. set-timing 문서 Known issues의 "기록된 휴식만 쓰거나"를 고른 것이고, 사용자가 D1-A로 정했다.
 2. **세는 곳**: 활동마다 canonical `sequence` 순서에서 연속한 `(before, rest, after)`가 `ACTIVE, REST, ACTIVE`인 곳. 다음
    순서로 처음 해당하는 이유 하나로 제외하고 센다(기존 `rest_between_sets`와 같은 순서, 이유 하나만 다름):
    1. 앞이나 뒤 label이 UNKNOWN이거나 둘이 다르다 → `label_change_or_unknown`(superset·circuit은 여기로 빠진다).
@@ -153,7 +155,7 @@ muscle50 analytics snapshot --date 2026-03-14 --days 28 --json
 5. **중앙값**: `statistics.median`(ms 정수 목록), 출력은 `/ 1000` 초. 표본 수 하한은 두지 않는다(하한은 근거 없는 상수가
    된다). 대신 개수를 늘 함께 쓴다.
 6. **문장 규칙**(조언이 규칙처럼 읽히지 않게):
-   - 근거 줄 6개는 고정 문장이다. 중앙값에 따라 바뀌는 것은 구간 이름과 `option` 줄뿐이다.
+   - 근거 줄 7개는 고정 문장이다. 중앙값에 따라 바뀌는 것은 구간 이름과 `option` 줄뿐이다.
    - `option` 줄은 그룹 중앙값이 short 구간일 때만 나오고, **늘 두 선택지를 함께, 순위 없이** 쓴다: 더 쉬기
      (REST-01) / 짧게 쉬면서 volume load(sets x reps x load) 맞추기(REST-04). 모든 그룹에 같은 문장이고 한쪽만 쓰지 않는다.
      REST-02는 그룹별 선택지에 붙이지 않는다(1분 vs 3분 전신 루틴 비교라 종목 종류별 근거가 아님). 고정 근거 줄에만 있다.
@@ -162,21 +164,22 @@ muscle50 analytics snapshot --date 2026-03-14 --days 28 --json
    - 출력에 쓰지 않는 말(대소문자 무시): `enough`, `sufficient`, `optimal`, `must`, `should`, `too short`, `too long`,
      `stops`, `no benefit`, `ceiling`, `plateau`, `warning`, `recommended rest`. 의심 세트는 `suspect set`으로만 부른다.
    - text의 모든 줄(첫 줄, 그룹 줄, 제외 줄, 근거 줄, 선택지 줄)은 승인된 근거 ID(REST-01..08) 또는 `[design]`을 가진다.
-     운동별 줄과 `unavailable` 줄은 위 그룹 줄의 근거를 따른다(aerobic-guide AC8과 같은 정의). 승인되지 않은 ID(제안 문서의
-     REST-09, TEMPO-01 등)는 출력에 쓰지 않는다.
-   - 나이 문구는 REST-01 원문 사실("8 of 9 hypertrophy trials in adults 18-35, 1 in > 65; trained-only analysis not possible")
+     운동별 줄과 `unavailable` 줄은 위 그룹 줄의 근거를 따른다(aerobic-guide AC8과 같은 정의). REST-09(고령자)와 TEMPO-01은
+     2026-11-01 승인됐지만 출력에 쓰지 않는다(REST-09는 > 65세 근거라 나이 문구를 REST-01 사실로 한정한 이 규칙에 맞지 않고,
+     TEMPO-01은 휴식이 아니라 set-timing의 1.0 s/rep 기준에 관한 근거다. 기능 문서 Known issues에만 있다). REST-03도 쓰지 않는다.
+   - 나이 문구는 REST-01 원문 사실("REST-01 trials: 8 of 9 in adults 18-35, 1 in > 65; no trained-only analysis", 근거 머리 줄)
      뿐이다. 사용자 나이에 기대는 문장(예: "40-60세 근거 없음")은 출력하지 않는다(사용자 나이는 34세, 사용자 확인
      2026-11-01). 나이별 다른 기준이나 문장은 없다.
-7. **보여 주는 조건(게이트 1 결정 D2)**: 추천안 A는 window에 값이 된 휴식이 하나라도 있거나 제외된 휴식이 하나라도 있을 때
+7. **보여 주는 조건(게이트 1 결정 D2-A)**: window에 값이 된 휴식이 하나라도 있거나 제외된 휴식이 하나라도 있을 때
    (즉 `ACTIVE, REST, ACTIVE` 세 줄이 하나라도 있을 때) 블록을 보여 준다. 그런 곳이 없으면 text 줄도 JSON key도 없다(기존 출력
    byte-identical).
-8. **계산 위치**: 순수 domain 함수(I/O·시계 없음, 정수 ms). Strength Set Timing의 `is_checked`, `is_suspect`/
-   `suspect_sequences`, `_ordered_sets`, `classify_strength_set`, `COMPOUND_PATTERNS`를 재사용하고 **기존 `rest_between_sets`와
-   그 출력은 바꾸지 않는다**. 이 함수는 `analytics snapshot` 경로에서만 부른다. 심박 RAW(`details.json`)를 읽지 않는다.
+8. **계산 위치**: 순수 domain 함수(I/O·시계 없음, 정수 ms). Strength Set Timing의 `is_checked`, `is_suspect`,
+   `set_duration_ms`, `classify_strength_set`, `COMPOUND_PATTERNS`를 재사용하고, 세트 순서 walk와 그룹 나누기는 set-timing에서
+   꺼낸 공개 helper `rest_triples`, `rest_group`을 같이 쓴다(D6-A). **기존 `rest_between_sets`와 그 출력은 바꾸지 않는다**. 이 함수는 `analytics snapshot` 경로에서만 부른다. 심박 RAW(`details.json`)를 읽지 않는다.
    snapshot은 지금처럼 read-only다(`ensure_directories()`/`migrate()`/mkdir 없음).
 9. 날짜와 window는 기존 `analytics snapshot`(`--date`, `--days` 1–90, 기본 7)과 같다. 시간대 처리 추가 없음.
 
-### 설계 결정 후보(게이트 1에서 고른다)
+### 설계 결정 후보(게이트 1, 2026-11-01: 모두 추천안 A. 아래 "설계 승인 결정")
 
 | ID | 질문 | 추천안 | 대안 |
 | --- | --- | --- | --- |
@@ -192,32 +195,59 @@ muscle50 analytics snapshot --date 2026-03-14 --days 28 --json
 
 ## 인수 조건
 
-- [ ] AC1: 합성 DB(같은 label `ACTIVE, REST, ACTIVE`가 compound와 isolation에 있음)에서 `analytics snapshot --days 28`이 위
+- [x] AC1: 합성 DB(같은 label `ACTIVE, REST, ACTIVE`가 compound와 isolation에 있음)에서 `analytics snapshot --days 28`이 위
       모양의 `Rest advice` 블록을 Strength 절 끝(taxonomy 줄, 있으면 `Set timing` 블록 뒤)에 출력하고 exit 0이다. 그룹·운동별
       중앙값과 개수가 손으로 계산한 값과 같다.
-- [ ] AC2: 값은 기록된 REST `duration`뿐이다. 심박으로 추정된 의심 세트가 있는 DB에서 그 세트 앞 REST는 `suspect_set`으로
+- [x] AC2: 값은 기록된 REST `duration`뿐이다. 심박으로 추정된 의심 세트가 있는 DB에서 그 세트 앞 REST는 `suspect_set`으로
       세고 값에 들어가지 않으며, 추정이 바뀌어도(심박 RAW를 바꾸거나 지워도) `rest_interval_advice` payload가 byte 단위로 같다.
-- [ ] AC3: 제외 이유가 규칙 2의 순서로 하나만 붙는다: label 바뀜/UNKNOWN, unchecked, suspect set(정확히 1.0 s/rep는 정상),
+- [x] AC3: 제외 이유가 규칙 2의 순서로 하나만 붙는다: label 바뀜/UNKNOWN, unchecked, suspect set(정확히 1.0 s/rep는 정상),
       REST 시간 없음. 각 경우 테스트가 있고 개수가 text와 JSON에서 같다. 값이 없는 그룹은 `unavailable (0)` / `null`이다.
-- [ ] AC4: 구간 경계 테스트: 60000 ms → short, 60001 → intermediate, 119999 → intermediate, 120000 → long, 179999 → long,
+- [x] AC4: 구간 경계 테스트: 60000 ms → short, 60001 → intermediate, 119999 → intermediate, 120000 → long, 179999 → long,
       180000 → very_long. 구간 이름·표기와 `band_edges_seconds`에 90이 없다(90 s는 REST-01 근거 줄의 "equivocal" 문장에만 나온다).
-- [ ] AC5: `option` 줄(JSON `options`)은 그룹 중앙값이 short일 때만 그 그룹에 하나 나오고, 늘 두 선택지(더 쉬기 [REST-01] /
+- [x] AC5: `option` 줄(JSON `options`)은 그룹 중앙값이 short일 때만 그 그룹에 하나 나오고, 늘 두 선택지(더 쉬기 [REST-01] /
       volume load 맞추기 [REST-04])를 함께 쓴다. 문장은 그룹과 무관하게 같고 REST-02가 붙지 않는다. short 그룹이 없으면 `options: []`이고 text 줄이 없다.
-- [ ] AC6: 블록의 모든 text 줄이 규칙 6의 정의대로 REST-01..08 중 하나 또는 `[design]`을 가진다. 다른 ID가 없다.
-- [ ] AC7: 규칙 6의 금지어가 블록 text와 JSON 문자열 어디에도 없다(대소문자 무시, 테스트로 고정).
-- [ ] AC8: `"advice_only": true`이고 점수, 등급, 경고, 판정 key가 없다. 새 domain 함수는 snapshot 경로에서만 import된다(grep).
+- [x] AC6: 블록의 모든 text 줄이 규칙 6의 정의대로 REST-01..08 중 하나 또는 `[design]`을 가진다. 다른 ID가 없다.
+- [x] AC7: 규칙 6의 금지어가 블록 text와 JSON 문자열 어디에도 없다(대소문자 무시, 테스트로 고정).
+- [x] AC8: `"advice_only": true`이고 점수, 등급, 경고, 판정 key가 없다. 새 domain 함수는 snapshot 경로에서만 import된다(grep).
       `recommend`(text/JSON, golden 전부), `daily`, `goal *`, `inbody *`, `nutrition *`, Telegram 응답이 byte-identical이다.
-- [ ] AC9: `ACTIVE, REST, ACTIVE`가 없는 window에서 `analytics snapshot` text와 `--json`이 기능 전과 byte-identical이다(골든
+- [x] AC9: `ACTIVE, REST, ACTIVE`가 없는 window에서 `analytics snapshot` text와 `--json`이 기능 전과 byte-identical이다(골든
       `analytics_snapshot_2026-03-16.json` 포함). 있으면 text는 블록 줄만 더해지고 JSON은 끝에 `rest_interval_advice` key 하나만
       더해진다. `strength_set_timing`이 있는 경우와 없는 경우 key 위치를 각각 테스트한다. 기존 `Set timing`/`Rest between sets`
       줄과 `strength_set_timing` payload는 그대로다.
-- [ ] AC10: `--json` 출력이 재실행 시 byte-identical이고 text는 ASCII다. key 순서가 위 예시와 같다.
-- [ ] AC11: 블록 계산은 심박 RAW를 읽지 않는다(의심 세트 없는 window에서 `details.json` 읽기 0회, 기존과 같음). snapshot은 DB와
+- [x] AC10: `--json` 출력이 재실행 시 byte-identical이고 text는 ASCII다. key 순서가 위 예시와 같다.
+- [x] AC11: 블록 계산은 심박 RAW를 읽지 않는다(의심 세트 없는 window에서 `details.json` 읽기 0회, 기존과 같음). snapshot은 DB와
       파일에 쓰지 않고 mkdir·migrate를 하지 않는다(임시 `MUSCLE50_HOME` smoke).
-- [ ] AC12: 기능 문서 `docs/rest-interval-advice.md`에 규칙, 구간과 근거, 금지어, 제외 이유, 설계 결정, Known issues, 아래
+- [x] AC12: 기능 문서 `docs/rest-interval-advice.md`에 규칙, 구간과 근거, 금지어, 제외 이유, 설계 결정, Known issues, 아래
       "근거 확인 결과" 요약이 있다. 코드 상수 옆에 근거 ID 또는 `[design]` 주석이 있다.
-- [ ] AC13: 품질 게이트 4개가 통과한다: `uv run --extra dev pytest`, `uv run ruff check .`, `uv run mypy src tests`,
+- [x] AC13: 품질 게이트 4개가 통과한다: `uv run --extra dev pytest`, `uv run ruff check .`, `uv run mypy src tests`,
       `git diff --check`.
+
+AC8의 `daily`와 Telegram 항목은 구조로 확인했다: 새 모듈은 `analytics snapshot` 경로에서만 import되고(grep 테스트),
+`recommend` text/JSON은 smoke에서 main과 byte-identical이며, `daily`와 Telegram은 그 `recommend` 출력을 읽는다.
+
+## 설계 승인 결정 (2026-11-01)
+
+사용자 답: 모두 추천안(D1-D6). 상세: `docs/rest-interval-advice.md` "설계 결정".
+
+- **D1-A**: 비교값은 확인된 정상 세트 앞의 기록된 REST `duration`뿐이다. 심박 추정값은 쓰지 않는다(AC2).
+- **D2-A**: 새 flag 없이, window에 `ACTIVE, REST, ACTIVE`가 하나라도 있으면 블록과 JSON key가 나온다. 대가로
+  `tests/test_strength_set_timing_cli.py`의 계약 테스트 3개와 `docs/strength-set-timing.md` "바뀌지 않는 출력" 한 문장을 고쳤다.
+- **D3-A**: 운동별 줄을 넣는다(센 휴식이 하나 이상인 label만).
+- **D4-A**: `analytics snapshot`만. `recommend`, `daily`, Telegram, 코치 입력은 그대로다.
+- **D5-A**: 선택지 줄은 중앙값이 short 구간(<= 60 s)인 그룹에만, 두 선택지를 늘 함께 순위 없이 쓴다(AC5).
+- **D6-A**: `domain/strength_set_timing.py`에서 공개 helper `rest_triples`, `rest_group`(그리고 `RestGroupName`)을 꺼내고
+  `rest_between_sets`가 그것을 쓴다. 동작은 같고 기존 테스트는 고치지 않았다.
+
+### 계획이 고친 스펙 내용(위 본문에 반영함)
+
+- JSON 선택지 코드 `short_rest_longer_or_more_sets`는 "세트를 더한다" 금지(규칙 6)와 부딪쳐 `rest_longer_or_match_volume_load`가 됐다.
+- 초안 예시의 label(`PULL_UP/WIDE_GRIP_PULL_UP`, `BENCH_PRESS/BARBELL_BENCH_PRESS`, `CURL/DUMBBELL_BICEPS_CURL`)은 taxonomy rule이
+  없어 unclassified다. 예시는 rule이 있는 label(`BENCH_PRESS/-`, `SQUAT/BARBELL_BACK_SQUAT`, `CURL/-`)로 바꿨다.
+- 근거 줄은 REST ID마다 한 줄이다(REST-04와 REST-06도 따로, 범위 4). `evidence.notes`는 출력 순서(01, 02, 04, 05, 06, 07, 08)다.
+- 제외 줄과 JSON `excluded`는 규칙 2의 순서(label, unchecked, suspect, missing)다.
+- 머리 줄은 "same Garmin exercise label; rests before a set under 1.0 s/rep are excluded"로, 근거 머리 줄은 고정 줄임과 REST-01
+  연구 대상 사실을 적는 문장으로 바뀌었다.
+- 근거 문구: "young" 삭제, "may suffice"는 "1-2 min"으로(금지어 "sufficient"와 같은 주장), "Smith squat"는 "lower body"로.
 
 ## 한계 / 후속 후보
 
@@ -233,12 +263,26 @@ muscle50 analytics snapshot --date 2026-03-14 --days 28 --json
 - **compound/isolation은 taxonomy 매핑이다.** 다관절과 단관절의 장기 근비대 휴식을 직접 비교한 시험은 찾지 못했다(근거 문서 1절
   충돌 메모).
 - 기본 7일 window는 표본이 작다. 필요하면 `--days 28`.
+- 구현자·검증자가 보고한 한계:
+  - **표시 반올림과 구간이 어긋나 보일 수 있다.** 구간은 ms 중앙값으로 정하고 표시는 `{:.0f} s`라, 60.4 s는
+    `60 s (band 60-120 s)`로 보이고 선택지 줄이 없다(검증 smoke에서 60.25 s 확인, JSON은 60.25).
+  - **선택지 줄은 구간으로 켜진다(D5-A).** 규칙에 가장 가까운 부분이다. 표시 선택일 뿐이고 두 선택지를 늘 함께 쓰지만, 규칙처럼
+    읽히면 조건 없이 고정 줄을 쓰는 D5-B로 바꿀 수 있다.
+  - **REST-07 줄은 원문 표현 "at least 2-3 min"을 쓴다**(같은 줄에 REST-08이 대체했다고 적음). 처방처럼 읽히면 "2-3 min for heavy
+    core lifts"로 줄일 수 있다.
+  - **운동별 줄은 센 휴식이 있는 label만 나온다.** 모든 휴식이 빠진 label(예: 늘 늦게 누르는 운동)은 window 전체 제외 개수에만 보인다.
+  - 기존 `Rest between sets` 줄(추정값 포함, 의심 세트 앞 REST는 `not estimated`)과 이 블록(기록값만, 그 REST는 `suspect set`)은
+    같은 window에서 중앙값과 제외 개수가 다를 수 있다.
+  - **중간 commit 하나가 mypy에서 실패한다(bisect 주의).** `91fa370`(feat: add the Rest advice block to analytics snapshot)만 꺼내면
+    `tests/test_rest_interval_advice_cli.py`에 테스트 전용 arg-type 오류 12개가 있고, 바로 다음 `2b85bad`(fix: type the PULL_UP
+    label kwargs ...)가 한 줄로 고친다. 실행 동작 차이는 없다. squash와 history 재작성 금지 규칙 때문에 그대로 두었다. bisect가 이
+    commit에 서면 `git bisect skip`한다.
 - 후속 후보:
   - `recommend` 근력 절의 한 줄(D4-B). golden과 Telegram/코치 영향을 따로 설계한다.
   - 사용자가 정한 목표 휴식 범위(`[design: user setting]`)와 나란히 보여 주기.
   - 1.0 s/rep 기준을 반복 시간 근거(TEMPO-01, 2026-11-01 승인)로 다시 보거나 사용자 설정으로 바꾸기(set-timing 쪽 기능).
-  - 제안 문서의 새 근거(REST-09 고령자, TEMPO-01)가 승인되면 나이 문구와 근거 줄을 다시 본다(2026-11-01 승인·근거 문서에 반영됨.
-    다시 보는 일은 남았다).
+  - REST-09(고령자)와 TEMPO-01은 2026-11-01 승인됐고 v1은 출력에 쓰지 않기로 했다(규칙 6). 사용자 조건이 바뀌면 나이 문구와
+    근거 줄을 다시 본다.
 
 ## 근거 확인 결과
 

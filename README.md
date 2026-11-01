@@ -153,7 +153,13 @@ muscle group 매핑(Exercise Taxonomy v1)은 `docs/exercise-taxonomy.md`를 참�
 근력 세트 중 1회당 1.0초 미만인 ACTIVE 세트(버튼을 늦게 눌러 운동이 앞 REST로 기록된 경우)가 기간 안에 있으면
 Strength 절 끝에 `Set timing`과 `Rest between sets` 줄이, `--json` 끝에 `strength_set_timing` key가 붙습니다. 저장된
 세트와 심박 RAW(`details.json`)만 읽어 추정하고(방법과 신뢰도 표시, 심박 값은 출력하지 않음), 아무것도 저장하지 않으며
-추천 규칙은 이 값을 쓰지 않습니다. 의심 세트가 없으면 출력은 전과 같습니다. 규칙과 한계는 `docs/strength-set-timing.md`.
+추천 규칙은 이 값을 쓰지 않습니다. 의심 세트가 없으면 이 줄과 key는 없습니다. 규칙과 한계는 `docs/strength-set-timing.md`.
+
+의심 세트와 상관없이, 기간 안에 같은 종목 두 세트 사이의 REST(`ACTIVE, REST, ACTIVE`)가 하나라도 있으면 Strength 절 끝에
+`Rest advice` 블록이, `--json` 끝에 `rest_interval_advice` key가 붙습니다. 정상 세트 앞의 기록된 휴식만 써서 compound /
+isolation / unclassified와 종목별 중앙값·개수, 제외 이유별 개수, Singer 2024 구간(<= 60 / 60-120 / 120-180 / >= 180 s)을 보이고,
+고정 근거 줄(REST-01..08)을 함께 적습니다. 조언만이며 어떤 규칙이나 다른 명령도 이 값을 쓰지 않습니다. 그런 REST가 없으면
+출력은 전과 같습니다. 상세: `docs/rest-interval-advice.md`.
 
 ## 하루 workflow (`muscle50 daily`)
 
