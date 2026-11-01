@@ -47,7 +47,7 @@ user_gates: [design, integration]
     목록 유지). 오늘 계획 옆의 휴식 문장은 처방처럼 읽히고 Telegram `/daily`와 코치가 그 JSON을 읽는다. 후속 후보로 둔다.
   - 추정 휴식(심박 기반, `[design]` 상수, 신뢰도 최고 medium)은 조언의 비교값으로 쓰지 않는다. 기존 `Set timing` /
     `Rest between sets` 줄과 `strength_set_timing` JSON은 바뀌지 않는다.
-  - 1.0 s/rep 기준(`MIN_MILLISECONDS_PER_REP`)은 바꾸지 않는다(set-timing의 상수다. 아래 근거 확인 결과와 제안 문서 참고).
+  - 1.0 s/rep 기준(`MIN_MILLISECONDS_PER_REP`)은 바꾸지 않는다(set-timing의 상수다. 아래 근거 확인 결과와 근거 문서 TEMPO-01(2026-11-01 승인) 참고).
   - 목표 휴식 시간 설정, 세션 중 타이머, 운동별 휴식 처방, 나이·목표 모드에 따른 다른 기준 없음.
   - migration 없음(읽을 때 계산, 저장 없음). Garmin 동기화 변경 없음. 심박 RAW를 읽지 않는다. LLM 없음.
 
@@ -165,8 +165,8 @@ muscle50 analytics snapshot --date 2026-03-14 --days 28 --json
      운동별 줄과 `unavailable` 줄은 위 그룹 줄의 근거를 따른다(aerobic-guide AC8과 같은 정의). 승인되지 않은 ID(제안 문서의
      REST-09, TEMPO-01 등)는 출력에 쓰지 않는다.
    - 나이 문구는 REST-01 원문 사실("8 of 9 hypertrophy trials in adults 18-35, 1 in > 65; trained-only analysis not possible")
-     뿐이다. 사용자 나이에 기대는 문장(예: "40-60세 근거 없음")은 출력하지 않는다(근거 문서의 대상 나이와 요청의 나이가 달라
-     열린 질문이다). 나이별 다른 기준이나 문장은 없다.
+     뿐이다. 사용자 나이에 기대는 문장(예: "40-60세 근거 없음")은 출력하지 않는다(사용자 나이는 34세, 사용자 확인
+     2026-11-01). 나이별 다른 기준이나 문장은 없다.
 7. **보여 주는 조건(게이트 1 결정 D2)**: 추천안 A는 window에 값이 된 휴식이 하나라도 있거나 제외된 휴식이 하나라도 있을 때
    (즉 `ACTIVE, REST, ACTIVE` 세 줄이 하나라도 있을 때) 블록을 보여 준다. 그런 곳이 없으면 text 줄도 JSON key도 없다(기존 출력
    byte-identical).
@@ -236,15 +236,17 @@ muscle50 analytics snapshot --date 2026-03-14 --days 28 --json
 - 후속 후보:
   - `recommend` 근력 절의 한 줄(D4-B). golden과 Telegram/코치 영향을 따로 설계한다.
   - 사용자가 정한 목표 휴식 범위(`[design: user setting]`)와 나란히 보여 주기.
-  - 1.0 s/rep 기준을 반복 시간 근거(제안 TEMPO-01)로 다시 보거나 사용자 설정으로 바꾸기(set-timing 쪽 기능).
-  - 제안 문서의 새 근거(REST-09 고령자, TEMPO-01)가 승인되면 나이 문구와 근거 줄을 다시 본다.
+  - 1.0 s/rep 기준을 반복 시간 근거(TEMPO-01, 2026-11-01 승인)로 다시 보거나 사용자 설정으로 바꾸기(set-timing 쪽 기능).
+  - 제안 문서의 새 근거(REST-09 고령자, TEMPO-01)가 승인되면 나이 문구와 근거 줄을 다시 본다(2026-11-01 승인·근거 문서에 반영됨.
+    다시 보는 일은 남았다).
 
 ## 근거 확인 결과
 
 2026-11-01, 원문 확인(Europe PMC REST API로 초록·PMC 본문, ACSM 2009는 대학 강의 사이트에 올라온 PDF 사본). 표기:
 `verified (full text)` 본문에서 숫자 확인 / `verified (abstract)` 초록에서 확인 / `verified (PDF copy)` 제3자 사이트 PDF로 확인 /
-`unverified` 확인 못 함 / `design` 근거 없는 설계 값 / `refuted` 원문이 그 주장을 뒷받침하지 않음. 수정·추가 제안은
-`docs/evidence/proposals/rest-interval-advice-evidence.md`에 있다(근거 문서 본문은 바꾸지 않았다).
+`unverified` 확인 못 함 / `design` 근거 없는 설계 값 / `refuted` 원문이 그 주장을 뒷받침하지 않음. 수정·추가 제안
+(`docs/evidence/proposals/rest-interval-advice-evidence.md`)은 사용자가 2026-11-01 승인했고 근거 문서에 반영했다(REST-01·02·04·07·08
+수정, REST-09, TEMPO-01 추가). 제안 파일은 반영 뒤 지웠다.
 
 ### 1. 반복 시간 "약 0.5–8 s"(1.0 s/rep 기준과의 관계)
 
@@ -266,7 +268,7 @@ muscle50 analytics snapshot --date 2026-03-14 --days 28 --json
 | REST-01: > 60 s에서 작은 근비대 이득 | verified (full text) | Singer 2024, PMID 39205815, PMC11349676. "a small hypertrophic benefit to employing inter-set rest interval durations >60 s". 대조 SMD 팔 0.13 [−0.27, 0.51], 허벅지 0.17 [−0.13, 0.43], 전신 −0.08 [−0.45, 0.29](모두 0 포함) |
 | REST-01: 분석 구간 | verified (full text) | short ≤ 60 s, intermediate 60 < d < 120 s, long 120 ≤ d < 180 s, very long ≥ 180 s(이 스펙의 band) |
 | REST-01: "> 90 s부터 차이를 찾지 못했다" | verified (full text), 단 해석 주의 | 초록 "did not detect appreciable differences in hypertrophy when resting >90 s"; 결론 "The current evidence remains equivocal as to whether resting more than 90 s ... further enhances". 90 s는 분석 구간이 아니다. network 추정(short 대비) 허벅지 very long 0.32 [−0.10, 0.68] |
-| REST-01 메모 "'충분' 기준 90초", "결정적 규칙 가능" | refuted(과장) | 저자는 "equivocal"이라 했고 이득이 90 s에서 멈춘다고 하지 않았다. 이 스펙은 90 s를 쓰지 않는다. 제안 문서 P1 |
+| REST-01 메모 "'충분' 기준 90초", "결정적 규칙 가능" | refuted(과장) | 저자는 "equivocal"이라 했고 이득이 90 s에서 멈춘다고 하지 않았다. 이 스펙은 90 s를 쓰지 않는다. 제안 문서 P1(2026-11-01 승인·반영) |
 | REST-01: 훈련자·나이 | verified (full text) | "Insufficient data were available to subanalyze results in trained individuals". 9편 중 8편 18–35세, 1편 > 65세(Villanueva 2015) |
 | REST-02: 3분 > 1분(훈련자) | verified (abstract) | Schoenfeld 2016, PMID 26605807. 젊은 훈련자 남성 21명, 1분 vs 3분, 8주, 주 3회 전신 7종목 3세트 8–12RM. 3분 군이 스쿼트·벤치 1RM, 대퇴 전면 근두께에서 유의하게 큼, 삼두 경향 p = 0.06. 효과 크기·최종 분석 수는 이번에도 다시 읽지 않음(unverified, 근거 문서 확인 못 함 3) |
 | 과제 예시 "compound 종목은 근비대에 ≥ 2분이 유리 [REST-xx]" | refuted | 어느 REST 행도 이것을 보이지 않는다. Schoenfeld 2016은 1분 vs 3분 비교이고 루틴에 단관절(레그 익스텐션 등)이 섞였다. ACSM 2009의 2–3분은 고중량 핵심 종목(근력 B, 근비대 상급 C)이고 2026 판이 대체했다. 출력에서는 규칙 6의 고정 문장으로 바꿨다 |
@@ -284,12 +286,12 @@ muscle50 analytics snapshot --date 2026-03-14 --days 28 --json
 | --- | --- | --- |
 | 40–60세 훈련자에서 휴식 길이를 비교한 장기 시험 | unverified(찾지 못함) | Europe PMC 제목 검색과 웹 검색에서 찾지 못했다 |
 | ACSM 2026은 나이로 나누지 않았다 | verified (full text) | "not separated by participant age ... younger and older than the cutoff of 55-yr old. Thus, our recommendations are evidence-based across all ages" |
-| 고령 남성(65.6 / 70.3세)에서 60 s가 4분보다 제지방·근력 증가가 컸다 | verified (abstract), 승인 안 된 근거 | Villanueva MG, Lane CJ, Schroeder ET. 2015. *Eur J Appl Physiol* 115(2):295-308. doi:10.1007/s00421-014-3014-7. n = 22, 4주 근비대 훈련 뒤 8주 근력 훈련(Singer 표: 4–6회). LBM p = 0.001, 벤치·레그프레스 1RM p < 0.001. 두 군 평균 나이가 4.7세 다르다 |
-| 훈련된 고령 여성(66.4세)에서 1분 vs 3분 차이 없음 | verified (abstract), 승인 안 된 근거 | Jambassi Filho JC, et al. 2017. *Am J Phys Med Rehabil* 96(9):627-633. doi:10.1097/PHM.0000000000000701. n = 21, 레그프레스 3×15, 8주. 집단 간 차이 없음(15RM 증가는 3분 군만 유의, 3.6 %) |
-| 급성: 고령 남성은 2분 휴식으로 최대 토크가 회복, 젊은 남성은 아님 | verified (abstract), 승인 안 된 근거 | Bottaro M, et al. 2010. *Int J Sports Med* 31(1):22-25. doi:10.1055/s-0029-1239497. 비훈련, 등속성 무릎 신전 |
-| 급성: 훈련된 고령 여성은 3분이 1분보다 총 볼륨 29.4 % 많음 | verified (abstract), 승인 안 된 근거 | Jambassi Filho JC, et al. 2013. *J Sports Sci Med* 12(1):138-143. PMID 24149737 |
+| 고령 남성(65.6 / 70.3세)에서 60 s가 4분보다 제지방·근력 증가가 컸다 | verified (abstract), REST-09(2026-11-01 승인) | Villanueva MG, Lane CJ, Schroeder ET. 2015. *Eur J Appl Physiol* 115(2):295-308. doi:10.1007/s00421-014-3014-7. n = 22, 4주 근비대 훈련 뒤 8주 근력 훈련(Singer 표: 4–6회). LBM p = 0.001, 벤치·레그프레스 1RM p < 0.001. 두 군 평균 나이가 4.7세 다르다 |
+| 훈련된 고령 여성(66.4세)에서 1분 vs 3분 차이 없음 | verified (abstract), REST-09(2026-11-01 승인) | Jambassi Filho JC, et al. 2017. *Am J Phys Med Rehabil* 96(9):627-633. doi:10.1097/PHM.0000000000000701. n = 21, 레그프레스 3×15, 8주. 집단 간 차이 없음(15RM 증가는 3분 군만 유의, 3.6 %) |
+| 급성: 고령 남성은 2분 휴식으로 최대 토크가 회복, 젊은 남성은 아님 | verified (abstract), REST-09(2026-11-01 승인) | Bottaro M, et al. 2010. *Int J Sports Med* 31(1):22-25. doi:10.1055/s-0029-1239497. 비훈련, 등속성 무릎 신전 |
+| 급성: 훈련된 고령 여성은 3분이 1분보다 총 볼륨 29.4 % 많음 | verified (abstract), REST-09(2026-11-01 승인) | Jambassi Filho JC, et al. 2013. *J Sports Sci Med* 12(1):138-143. PMID 24149737 |
 | ACSM 2009 고령자 1–3분 | verified (PDF copy), 해석 주의 | "1-3 min of rest in between sets"는 category A 권고 묶음(운동 종류, 속도, 1–3세트, 60–80 % 1RM, 8–12회, 주 2–3회)의 일부다. 휴식 하나만의 근거 등급이 아니다. "older adults"의 나이 정의는 확인 못 함 |
-| 결론 | unverified | 약 50세 훈련자에게 맞는 휴식 근거는 없다. 고령자 자료는 "길수록 좋다"를 지지하지 않는다(Villanueva는 반대 방향). 그래서 출력은 나이 문구 하나만 쓰고 선택지는 늘 두 방향을 함께 쓴다 |
+| 결론 | unverified | 사용자 나이는 34세다(사용자 확인 2026-11-01). Singer 2024의 9편 중 8편이 18–35세라 나이 범위는 사용자를 포함하지만, 훈련자만 따로 본 분석은 없다. 40–60세 훈련자 장기 시험은 찾지 못했다. 고령자 자료는 "길수록 좋다"를 지지하지 않는다(Villanueva는 반대 방향). 그래서 출력은 나이 문구 하나만 쓰고 선택지는 늘 두 방향을 함께 쓴다 |
 
 ### 4. 이 스펙의 설계 값
 
