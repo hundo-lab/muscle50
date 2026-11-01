@@ -199,6 +199,6 @@ schema 2의 값이 null/bool/문자열/소수/범위 밖이거나 cut + `weekly_
 - **목표 파일 두 형태**: schema 1(설정 없음)과 schema 2(설정 있음). 이전 버전의 muscle50은 schema 2 파일을 `(schema_version)`으로
   거절한다.
 - **외부 LLM 노출**: Telegram 코치는 `recommend --json`을 그대로 받으므로 새 `goal_mode` key(분, 거리, 비율, 선택지 code)도 받는다.
-  측정 kg은 없다. Telegram 요약(`/today`, `/daily`)은 바뀌지 않는다.
+  측정 kg은 없다. `/daily` 요약에 목표 줄이 붙는다(`docs/telegram-goal-summary.md`); `/today`는 그대로.
 - 후속 후보: Telegram 요약 줄(러닝 알림, 정체), 주간 러닝 증가 상한을 사용자 설정으로(RUNPROG-01), moderate-equivalent 분, 목표 없이도
   유산소 분 보이기(D1-C), 코치가 정체 선택지를 읽기, v3 에이전트 도구로 열기.
