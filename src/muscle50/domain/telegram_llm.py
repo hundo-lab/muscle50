@@ -22,6 +22,7 @@ from muscle50.domain.nutrition import (
     MealType,
     NutrientField,
     NutritionSourceType,
+    OptionalNutrient,
     QuantityUnit,
     normalize_general_meal_note,
 )
@@ -142,6 +143,16 @@ _REQUIRED_ESTIMATES = frozenset({"kcal", "protein"})
 NutrientRanges = tuple[tuple[NutrientField, Decimal, Decimal], ...]
 """(nutrient, minimum, maximum) in NutrientField order; nutrients not estimated are left out."""
 
+_OPTIONAL_ESTIMATE_FIELDS: tuple[tuple[OptionalNutrient, str, Decimal], ...] = (
+    (OptionalNutrient.SATURATED_FAT_G, "satfat", GRAM_LIMIT),
+    (OptionalNutrient.FIBER_G, "fiber", GRAM_LIMIT),
+)
+"""LDL Nutrients B: the two extra ranges of a meal-log item's estimate (after the four, never inside them)."""
+
+OptionalRanges = tuple[tuple[OptionalNutrient, Decimal, Decimal], ...]
+"""(nutrient, minimum, maximum) in OptionalNutrient order, the shape of `GeneralMealEstimate.optional_ranges`;
+a nutrient not estimated is left out (unknown, never 0)."""
+
 
 # --- validated LLM output ----------------------------------------------------------------------------
 
@@ -182,6 +193,8 @@ class InterpretItem:
     lookup_wanted: bool = False
     """v2.5: a named brand, restaurant, chain or packaged product whose values a web lookup would change; under Codex
     such an item sends the message once more to Claude with web search."""
+    optional_ranges: OptionalRanges = ()
+    """LDL Nutrients B: the saturated fat and fiber ranges the model estimated (display-only estimates, never 0)."""
 
 
 @dataclass(frozen=True)
@@ -403,6 +416,7 @@ def _item(value: Any, index: int) -> InterpretItem:
     lookup_wanted = entry["lookup_wanted"]
     if type(lookup_wanted) is not bool:
         raise LlmOutputError(f"{where}.lookup_wanted must be a boolean")
+    estimate, optional_ranges = _item_estimate(entry["estimate"], f"{where}.estimate")
     return InterpretItem(
         kind=_enum(ItemKind, entry["kind"], f"{where}.kind"),
         food_text=_text(entry["food_text"], f"{where}.food_text", FOOD_TEXT_MAX),
@@ -410,7 +424,7 @@ def _item(value: Any, index: int) -> InterpretItem:
         unit=_optional_enum(QuantityUnit, entry["unit"], f"{where}.unit"),
         quantity_estimated=quantity_estimated,
         memo=_optional_text(entry["memo"], f"{where}.memo", MEMO_TEXT_MAX),
-        estimate=_estimate(entry["estimate"], f"{where}.estimate", required=_REQUIRED_ESTIMATES),
+        estimate=estimate,
         meal_type=_optional_enum(MealType, entry["meal_type"], f"{where}.meal_type"),
         food_id=_optional_text(entry["food_id"], f"{where}.food_id", FOOD_ID_MAX),
         source=_no_url(_optional_text(entry["source"], f"{where}.source", SOURCE_MAX), f"{where}.source"),
@@ -422,6 +436,7 @@ def _item(value: Any, index: int) -> InterpretItem:
         menu_ref=_menu_ref(entry["menu_ref"], f"{where}.menu_ref"),
         join_existing=join_existing,
         lookup_wanted=lookup_wanted,
+        optional_ranges=optional_ranges,
     )
 
 
@@ -453,9 +468,27 @@ def _slot(value: Any) -> MealType:
 
 
 def _estimate(value: Any, where: str, *, required: frozenset[str] = frozenset()) -> NutrientRanges:
+    """The 8-key estimate of an edit, a menu item and a suggestion (the four nutrients only)."""
     entry = _object(value, where, 8)
+    return tuple(_ranges(entry, where, _ESTIMATE_FIELDS, required))
+
+
+def _item_estimate(value: Any, where: str) -> tuple[NutrientRanges, OptionalRanges]:
+    """LDL Nutrients B: a meal-log item's 12-key estimate, the four nutrients and then saturated fat and fiber.
+
+    The two extra ranges follow the same rules (both bounds or neither, min <= max, 0-`GRAM_LIMIT`) and are
+    optional; a broken one is a format failure like any other bound.
+    """
+    entry = _object(value, where, 12)
+    ranges = tuple(_ranges(entry, where, _ESTIMATE_FIELDS, _REQUIRED_ESTIMATES))
+    return ranges, tuple(_ranges(entry, where, _OPTIONAL_ESTIMATE_FIELDS, frozenset()))
+
+
+def _ranges[N](
+    entry: dict[str, Any], where: str, fields: tuple[tuple[N, str, Decimal], ...], required: frozenset[str]
+) -> list[tuple[N, Decimal, Decimal]]:
     ranges = []
-    for nutrient, name, limit in _ESTIMATE_FIELDS:
+    for nutrient, name, limit in fields:
         low = _bounded(entry[f"{name}_min"], f"{where}.{name}_min", limit)
         high = _bounded(entry[f"{name}_max"], f"{where}.{name}_max", limit)
         if name in required and (low is None or high is None):
@@ -466,7 +499,7 @@ def _estimate(value: Any, where: str, *, required: frozenset[str] = frozenset())
             if low > high:
                 raise LlmOutputError(f"{where}.{name}_min is above {name}_max")
             ranges.append((nutrient, low, high))
-    return tuple(ranges)
+    return ranges
 
 
 def _object(value: Any, where: str, size: int) -> dict[str, Any]:
@@ -856,7 +889,14 @@ HISTORY_KEYS = (*HISTORY_KEYS_V22, "failure_reason", "retry_of")
 """New lines (v2.5) add why the last LLM call failed and the `/retry_` token a message was sent again with."""
 RECHECK_OUTCOMES = frozenset({"fixed", "still_inconsistent", "reask_failed"})
 RECHECK_CODES = frozenset(
-    {"range_too_wide", "range_is_a_point", "macros_vs_kcal", "macros_exceed_kcal", "assumption_number"}
+    {
+        "range_too_wide",
+        "range_is_a_point",
+        "macros_vs_kcal",
+        "macros_exceed_kcal",
+        "assumption_number",
+        "satfat_exceeds_fat",  # LDL Nutrients B
+    }
 )
 HISTORY_ATTEMPT_KEYS = ("provider", "model", "outcome", "retry")
 HISTORY_LOOKUP_ATTEMPT_KEYS = (*HISTORY_ATTEMPT_KEYS, "lookup")

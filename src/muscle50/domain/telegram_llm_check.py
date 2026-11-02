@@ -15,8 +15,8 @@ from decimal import Decimal
 from enum import StrEnum
 
 from muscle50.domain.llm_number_guard import allowed_numbers, unknown_numbers
-from muscle50.domain.nutrition import NutrientField
-from muscle50.domain.telegram_llm import NutrientRanges, Portion
+from muscle50.domain.nutrition import NutrientField, OptionalNutrient
+from muscle50.domain.telegram_llm import NutrientRanges, OptionalRanges, Portion
 
 WIDTH_RATIO = Decimal("0.7")
 """A range is too wide when `max - min` is above this share of `max` ..."""
@@ -40,6 +40,8 @@ class CheckCode(StrEnum):
     MACROS_VS_KCAL = "macros_vs_kcal"
     MACROS_EXCEED_KCAL = "macros_exceed_kcal"
     ASSUMPTION_NUMBER = "assumption_number"
+    SATFAT_EXCEEDS_FAT = "satfat_exceeds_fat"
+    """LDL Nutrients B: the lowest saturated fat is above the highest total fat (saturated fat is part of fat)."""
 
 
 class RecheckOutcome(StrEnum):
@@ -54,6 +56,7 @@ CHECK_REASON_TEXTS = {
     CheckCode.MACROS_VS_KCAL: "열량과 영양소 합이 맞지 않음",
     CheckCode.MACROS_EXCEED_KCAL: "영양소 합이 열량보다 큼",
     CheckCode.ASSUMPTION_NUMBER: "가정에 쓴 숫자가 수량·추정값과 다름",
+    CheckCode.SATFAT_EXCEEDS_FAT: "포화지방이 지방보다 큼",
 }
 """The fixed Korean reason line shown under a marked item."""
 
@@ -78,12 +81,15 @@ def check_estimate(
     quantity: Decimal | None,
     label: bool = False,
     portions: Sequence[Portion] = (),
+    optional: OptionalRanges = (),
 ) -> tuple[CheckFailure, ...]:
     """The failed checks of one estimated general item, in a fixed order (empty: it passes).
 
     ``label``: the values are printed on a nutrition label, so a single value (min = max) is expected and only
     `range_is_a_point` is skipped; the range width, the kcal/macro sums and the assumption numbers are still checked.
     ``portions``: the assumed grams, which an assumption may repeat.
+    ``optional`` (LDL Nutrients B): the saturated fat and fiber ranges. Only `satfat_exceeds_fat` looks at them,
+    last; they get no width or point check and fiber is not compared with carbs.
     """
     by_field = {nutrient: (low, high) for nutrient, low, high in ranges}
     failures: list[CheckFailure] = []
@@ -107,7 +113,23 @@ def check_estimate(
             failures.append(
                 CheckFailure(CheckCode.ASSUMPTION_NUMBER, f"{len(unknown_numbers(assumption, allowed))} numbers")
             )
+    if satfat_over_fat(ranges, optional):
+        satfat = _optional_bounds(optional, OptionalNutrient.SATURATED_FAT_G)
+        assert fat is not None and satfat is not None
+        failures.append(CheckFailure(CheckCode.SATFAT_EXCEEDS_FAT, f"fat {_range(fat)}, satfat {_range(satfat)}"))
     return tuple(failures)
+
+
+def satfat_over_fat(ranges: NutrientRanges, optional: OptionalRanges) -> bool:
+    """Saturated fat that the CLI would refuse: both ranges present and the lowest saturated fat above the highest
+    fat (the rule of `_validate_optional_amounts`). Without a fat range nothing is compared (D5)."""
+    fat = next(((low, high) for nutrient, low, high in ranges if nutrient is NutrientField.FAT_G), None)
+    satfat = _optional_bounds(optional, OptionalNutrient.SATURATED_FAT_G)
+    return fat is not None and satfat is not None and satfat[0] > fat[1]
+
+
+def _optional_bounds(optional: OptionalRanges, nutrient: OptionalNutrient) -> tuple[Decimal, Decimal] | None:
+    return next(((low, high) for field_, low, high in optional if field_ is nutrient), None)
 
 
 def _macro_failures(

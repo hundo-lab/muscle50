@@ -20,7 +20,7 @@ from muscle50.domain.nutrition import (
     NutrientField,
     QuantityUnit,
 )
-from muscle50.domain.telegram_llm import NutrientRanges, Portion
+from muscle50.domain.telegram_llm import NutrientRanges, OptionalRanges, Portion
 
 MEAL_WORDS = frozenset(
     {
@@ -217,12 +217,19 @@ def _grams(value: Decimal) -> str:
 # --- label values and the dish name in the memo ------------------------------------------------------------------
 
 
-def is_label_estimate(ranges: NutrientRanges, from_label: bool) -> bool:
+def is_label_estimate(ranges: NutrientRanges, from_label: bool, optional: OptionalRanges = ()) -> bool:
     """A label value: the LLM says it was read from a label and every given range is a single value (min = max).
 
     A label with a real range (the model mixed a value with a range) is an ordinary estimate and runs every check.
+    LDL Nutrients B (D8): the saturated fat and fiber ranges count too, so a label with a ranged saturated fat is an
+    ordinary estimate.
     """
-    return from_label and bool(ranges) and all(low == high for _nutrient, low, high in ranges)
+    return (
+        from_label
+        and bool(ranges)
+        and all(low == high for _nutrient, low, high in ranges)
+        and all(low == high for _nutrient, low, high in optional)
+    )
 
 
 def dish_memo(food_text: str, memo: str | None) -> str:

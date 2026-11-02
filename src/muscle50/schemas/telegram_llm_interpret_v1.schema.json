@@ -147,7 +147,11 @@
               "carbs_min",
               "carbs_max",
               "fat_min",
-              "fat_max"
+              "fat_max",
+              "satfat_min",
+              "satfat_max",
+              "fiber_min",
+              "fiber_max"
             ],
             "properties": {
               "kcal_min": {
@@ -185,9 +189,33 @@
                   "number",
                   "null"
                 ]
+              },
+              "satfat_min": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "satfat_max": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "fiber_min": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "fiber_max": {
+                "type": [
+                  "number",
+                  "null"
+                ]
               }
             },
-            "description": "estimated ranges for the whole dish or meal; kcal and protein are required, carbs and fat are null when not estimated"
+            "description": "estimated ranges for the whole dish or meal; kcal and protein are required, carbs and fat are null when not estimated; satfat (saturated fat, g, part of fat) and fiber (dietary fiber, g) are null when not estimated, never 0"
           },
           "meal_type": {
             "type": [

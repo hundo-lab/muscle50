@@ -17,7 +17,14 @@ from typing import Any
 
 import pytest
 import test_telegram_bot as v1
-from test_telegram_llm_domain import ITEM_ESTIMATE, NEW_ITEM_KEYS, NULL_EDIT, NULL_ESTIMATE, interpretation
+from test_telegram_llm_domain import (
+    ITEM_ESTIMATE,
+    NEW_ITEM_KEYS,
+    NULL_EDIT,
+    NULL_ESTIMATE,
+    NULL_LDL_ESTIMATE,
+    interpretation,
+)
 
 import muscle50.cli as cli
 from muscle50.application.llm_provider import LlmAttempt, LlmCallResult, LlmRequest, SchemaName
@@ -205,6 +212,9 @@ def _item(food: str, quantity: float | None, unit: str | None, **fields: Any) ->
         **NEW_ITEM_KEYS,
     }
     item.update(fields)
+    # LDL Nutrients B: a meal-log item's estimate has 12 keys; an 8-key fixture gets the four null ones appended
+    # (a new dict: the same constants are also 8-key menu estimates).
+    item["estimate"] = {**item["estimate"], **{key: item["estimate"].get(key) for key in NULL_LDL_ESTIMATE}}
     return item
 
 

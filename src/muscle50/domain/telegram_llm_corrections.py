@@ -18,9 +18,30 @@ from decimal import Decimal
 from typing import Any
 
 from muscle50.domain.llm_today_totals import NUTRIENT_NAMES, amount_text
-from muscle50.domain.nutrition import GENERAL_MEAL_FOOD_ID, Meal, MealItem, MealType, NutrientField, QuantityUnit
-from muscle50.domain.telegram_llm import MENU_PROPOSAL_TTL_S, NutrientRanges, Proposal, ProposalKind, ProposalState
-from muscle50.domain.telegram_llm_prompt import MEAL_NAMES
+from muscle50.domain.nutrition import (
+    GENERAL_MEAL_FOOD_ID,
+    Meal,
+    MealItem,
+    MealType,
+    NutrientField,
+    OptionalNutrient,
+    QuantityUnit,
+)
+from muscle50.domain.telegram_llm import (
+    MENU_PROPOSAL_TTL_S,
+    NutrientRanges,
+    OptionalRanges,
+    Proposal,
+    ProposalKind,
+    ProposalState,
+)
+from muscle50.domain.telegram_llm_prompt import (
+    LDL_ESTIMATE_TAG,
+    LDL_LABEL_TAG,
+    LDL_UNKNOWN_TEXT,
+    MEAL_NAMES,
+    SATFAT_DROPPED_TEXT,
+)
 
 RECENT_MEALS = 2
 """How many of the chat's latest recorded meals are offered as "the last recorded" (the user's decision)."""
@@ -155,6 +176,31 @@ def ranges_summary(ranges: NutrientRanges) -> str:
         value = amount_text(low) if low == high else f"{amount_text(low)}~{amount_text(high)}"
         parts.append(f"{NUTRIENT_NAMES[nutrient]} {value}{unit}")
     return ", ".join(parts)
+
+
+def optional_summary(optional: OptionalRanges, *, label: bool, satfat_dropped: bool) -> str | None:
+    """LDL Nutrients B: `포화지방 8~14 g · 섬유 4~8 g (추정, 정확도 미확인)` under an estimated general item.
+
+    A nutrient the model did not estimate is `모름` (never 0); saturated fat left out because it was above fat is
+    `모름(지방보다 커서 뺌)`. The tag is `(라벨)` for a label value and is left off when no value is shown. None (no
+    line) when neither nutrient has a value and nothing was left out.
+    """
+    bounds = {nutrient: (low, high) for nutrient, low, high in optional}
+    if not bounds and not satfat_dropped:
+        return None
+
+    def part(nutrient: OptionalNutrient) -> str:
+        if nutrient is OptionalNutrient.SATURATED_FAT_G and satfat_dropped:
+            return SATFAT_DROPPED_TEXT
+        if nutrient not in bounds:
+            return LDL_UNKNOWN_TEXT
+        low, high = bounds[nutrient]
+        return f"{amount_text(low) if low == high else f'{amount_text(low)}~{amount_text(high)}'} g"
+
+    text = f"포화지방 {part(OptionalNutrient.SATURATED_FAT_G)} · 섬유 {part(OptionalNutrient.FIBER_G)}"
+    if not bounds:
+        return text
+    return f"{text} {LDL_LABEL_TAG if label else LDL_ESTIMATE_TAG}"
 
 
 def item_summary(item: MealItem) -> str:

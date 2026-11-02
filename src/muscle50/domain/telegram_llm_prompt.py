@@ -50,7 +50,8 @@ def fixed_rules_web(max_searches: int) -> str:
         [
             f"11. 웹 검색은 한 메시지에 최대 {max_searches}번만 합니다.",
             "12. 상표, 식당, 제품 이름의 음식이나 사진에서 읽을 수 있는 제품명·상표·식당 이름만 검색합니다. "
-            "김밥, 오뎅국, 계란 같은 흔한 음식은 검색하지 않습니다.",
+            "김밥, 오뎅국, 계란 같은 흔한 음식은 검색하지 않습니다. "
+            "사용자가 검색해 달라고 한 음식은 흔한 음식이어도 검색할 수 있습니다.",
             "13. 검색어에는 음식·상표·식당 이름만 넣습니다. 사람 이름이나 메시지 전체는 넣지 않습니다.",
             "14. 정확한 메뉴를 찾지 못하면 가장 가까운 일반 요리로 추정하고 assumption에 그렇게 적습니다. "
             "정확한 값을 지어내지 않습니다.",
@@ -87,6 +88,11 @@ TASKS = {
             "- estimate: 모든 item(카탈로그 음식도 대체값으로)에 말한 양 기준의 범위. kcal과 protein은 필수, "
             "탄수화물과 지방은 범위를 알 때만 적고 모르면 null입니다. 모르는 영양소를 0으로 채우지 않습니다. "
             "사진이면 보이는 양 기준.",
+            "- estimate의 satfat(포화지방 g)과 fiber(식이섬유 g): 말한 양 기준의 범위를 알 수 있을 때만 적고 모르면 "
+            "null입니다(0으로 채우지 않습니다). 포화지방은 총지방의 일부라서 satfat를 적으면 fat도 적고 satfat_min이 "
+            "fat_max보다 크지 않게 합니다. 라벨(from_label)에 인쇄된 값이면 한 값(min과 max를 같게), 라벨에 없으면 "
+            "null. 웹 검색으로 찾은 페이지에 포화지방·식이섬유가 있으면 그 값을 쓰되, 라벨이 아니면 한 숫자여도 그 "
+            "값을 포함하는 범위로 적습니다.",
             "- assumption: 추정에 쓴 가정을 한 문장으로(숫자 없이). 없으면 null. source: 웹 검색으로 찾은 값일 때만 "
             "사이트 이름(주소 금지), 아니면 null.",
             "- from_label: 영양정보 라벨(사진 속 표시, 또는 사용자가 문장으로 알려 준 라벨 값)에서 읽은 값이면 true. "
@@ -105,7 +111,8 @@ TASKS = {
             "더합니다. 앞선 수정을 되돌리지 않습니다.",
             "- lookup_wanted: 상표, 식당, 체인점, 포장 제품처럼 이름이 정해진 음식이라 웹에서 찾으면 영양값이 "
             "크게 달라질 item만 true('맥도날드 빅맥 세트', '스타벅스 카페라떼'). 밥, 김치, 계란말이 같은 흔한 "
-            "집밥·일반 음식은 false.",
+            "집밥·일반 음식은 false. 사용자가 그 음식을 검색해 달라고 하면('검색해서', '찾아서', '찾아봐') "
+            "흔한 음식이어도 true.",
             "- join_existing: meal_log에서 사용자가 이미 기록한 같은 끼니에 더해 달라고 하면('같이', '하나에', "
             "'기존 ~에 추가', '~에 더해') 그 끼니의 item마다 true, 아니면 false.",
             "- question_topics: question이면 training, nutrition, body, bot(이 bot의 명령이나 쓰는 법을 묻는 말: "
@@ -117,6 +124,7 @@ TASKS = {
             "- edit.change_estimate: 일반식의 영양값이나 메모를 고칠 때. target_food_text에는 그 음식의 메모(이름), "
             "estimate에는 바뀌는 영양소만(그 영양소의 min, max. 나머지는 null), new_memo에는 새 메모(없으면 null), "
             "from_label에는 라벨에서 읽은 값인지(true면 min과 max를 같게). 카탈로그 음식의 값은 고칠 수 없습니다.",
+            "- 이미 기록한 식사의 포화지방·식이섬유만 고치는 말은 고칠 수 없으니 edit.action을 null로 둡니다.",
             "- edit.target_meal_ordinal: '아침 1식'은 meal_type breakfast와 1, '두 번째 점심'은 lunch와 2. 순서를 "
             "말하지 않았으면 null.",
             "- reply: chat일 때만 짧은 답(숫자 없이). 아니면 null.",
@@ -261,6 +269,13 @@ REASON_BAD_ID = "고른 음식 ID가 카탈로그에 없음"
 REASON_NO_AMOUNT = "수량·단위를 말하지 않음"
 CHECK_MARKER = "(값 확인 필요)"
 CHECK_LINE_HEAD = "값 확인 필요: "
+LDL_ESTIMATE_TAG = "(추정, 정확도 미확인)"
+"""LDL Nutrients B: the end of the saturated fat / fiber line of an estimate (the accuracy is not verified)."""
+LDL_LABEL_TAG = "(라벨)"
+LDL_UNKNOWN_TEXT = "모름"
+"""Saturated fat or fiber the model did not estimate: unknown, never 0."""
+SATFAT_DROPPED_TEXT = "모름(지방보다 커서 뺌)"
+"""Saturated fat above total fat, left out so that the CLI records the rest (unknown)."""
 SEQUENCE_HINT = "남은 끼니는 다시 보내거나 /log로 기록하세요."
 
 

@@ -37,7 +37,16 @@ from muscle50.domain.telegram_llm import (
 from muscle50.domain.telegram_llm_prompt import FIXED_RULES, PromptTask, build_prompt
 
 NULL_ESTIMATE = {f"{name}_{end}": None for name in ("kcal", "protein", "carbs", "fat") for end in ("min", "max")}
-ITEM_ESTIMATE = {**NULL_ESTIMATE, "kcal_min": 300, "kcal_max": 400, "protein_min": 10, "protein_max": 20}
+NULL_LDL_ESTIMATE = {f"{name}_{end}": None for name in ("satfat", "fiber") for end in ("min", "max")}
+"""LDL Nutrients B: the four keys a meal-log item's estimate adds after the eight (edit, menu, suggest keep eight)."""
+ITEM_ESTIMATE = {
+    **NULL_ESTIMATE,
+    "kcal_min": 300,
+    "kcal_max": 400,
+    "protein_min": 10,
+    "protein_max": 20,
+    **NULL_LDL_ESTIMATE,
+}
 """A meal item must carry a kcal and a protein range (catalog items too, as the fallback)."""
 NEW_ITEM_KEYS: dict[str, Any] = {
     "meal_type": None,
