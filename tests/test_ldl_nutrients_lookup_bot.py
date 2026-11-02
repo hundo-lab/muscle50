@@ -20,6 +20,7 @@ from test_telegram_llm_lookup_bot import _config as codex_config
 
 from muscle50.domain.llm_failure import FailureReason
 from muscle50.domain.telegram_llm_check import RECHECK_INTRO
+from muscle50.presentation.telegram_llm_replies import history_text, render_telegram_history
 
 home = bot.home  # the autouse fixture of the bot tests: temporary MUSCLE50_HOME, fake clock, no network
 LUNCH = "2026-10-06-lunch-1"
@@ -253,6 +254,21 @@ def test_satfat_still_above_fat_is_left_out_and_the_rest_is_recorded(
     ldl = shown_ldl(capsys, LUNCH)
     assert ldl["saturated_fat_g"] is None
     assert (ldl["fiber_g"]["minimum"], ldl["fiber_g"]["maximum"]) == ("3", "5")
+
+
+def test_a_history_line_with_the_new_code_is_rendered_by_history_and_telegram_history(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], home: Path
+) -> None:
+    prepare(capsys, home)
+    first = pasta(**OVER)
+    bot._session(monkeypatch, capsys, bot.FakeProvider(first, first), bot.text(1, "점심 크림파스타"))
+    entries = bot._history(home)
+    assert entries[-1]["recheck"] == {"reasons": ["satfat_exceeds_fat"], "outcome": "still_inconsistent"}
+    assert "recheck=still_inconsistent" in render_telegram_history(entries)
+    assert "재확인(남음)" in history_text(entries)
+    replies, _provider = say(monkeypatch, capsys, None, 2, "/history")
+    assert "재확인(남음)" in replies[0]
+    assert "recheck=still_inconsistent" in bot._ok(capsys, "telegram", "history")
 
 
 def test_satfat_with_another_failure_marks_only_that_failure(
