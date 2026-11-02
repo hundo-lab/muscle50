@@ -219,6 +219,8 @@ def _item_lines(number: int, item: ProposalItemView, *, indent: str) -> list[str
         if item.printed:
             estimate += " (메뉴판 표기)"
         lines.append(f"{estimate} {CHECK_MARKER}" if item.check else estimate)
+    if item.ldl:
+        lines.append(f"{sub}{item.ldl}")
     if item.check:
         lines.append(f"{sub}{CHECK_LINE_HEAD}{', '.join(CHECK_REASON_TEXTS[code] for code in item.check)}")
     if item.portions:

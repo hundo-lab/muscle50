@@ -79,6 +79,7 @@ from muscle50.domain.nutrition import (
     MealType,
     NutrientField,
     NutritionSourceType,
+    OptionalNutrient,
     QuantityUnit,
     is_reserved_food_reference,
 )
@@ -105,6 +106,7 @@ from muscle50.domain.telegram_llm import (
     MealCommand,
     MenuChoice,
     NutrientRanges,
+    OptionalRanges,
     PhotoKind,
     Portion,
     Proposal,
@@ -139,6 +141,7 @@ from muscle50.domain.telegram_llm_check import (
     RecheckOutcome,
     check_estimate,
     recheck_note,
+    satfat_over_fat,
 )
 from muscle50.domain.telegram_llm_context import (
     command_lines,
@@ -160,6 +163,7 @@ from muscle50.domain.telegram_llm_corrections import (
     menu_name_matches,
     merge_estimate,
     open_proposal_block,
+    optional_summary,
     overlap_name,
     pick_meals,
     plan_fix,
@@ -226,6 +230,7 @@ from muscle50.domain.telegram_llm_prompt import (
     REASON_BAD_ID,
     REASON_NO_AMOUNT,
     REASON_NOT_IN_CATALOG,
+    SATFAT_DROPPED_TEXT,
     SEQUENCE_HINT,
     SYNC_HINT_TEXT,
     UNCLEAR_TEXT,
@@ -345,6 +350,8 @@ class ProposalItemView:
     """`닭 150~200 g, 감자 100~150 g`: the assumed grams (shown as `양 가정:`)."""
     printed: bool = False
     """The values are the menu's printed numbers (`(메뉴판 표기)`)."""
+    ldl: str | None = None
+    """LDL Nutrients B: the saturated fat / fiber line under the estimate (None: no line)."""
 
 
 @dataclass(frozen=True)
@@ -954,6 +961,7 @@ class TelegramLlmHandler:
             entries, interpretation, day, used = self._recheck(
                 chat_id, words, photo, photo_digest, interpretation, day, entries, failures, exchange
             )
+        entries = _settle_ldl(entries)
         label = "사진 추정" if photo_digest is not None else None
         self._store_proposal(
             chat_id,
@@ -1017,9 +1025,10 @@ class TelegramLlmHandler:
                 index=index,
                 meal_type=item.meal_type,
                 own_quantity=item.quantity,
-                label=is_label_estimate(item.estimate, item.from_label),
+                label=is_label_estimate(item.estimate, item.from_label, item.optional_ranges),
                 portions=item.portions,
                 join=item.join_existing,
+                optional=item.optional_ranges,
             )
 
         if item.kind is ItemKind.GENERAL:
@@ -1912,6 +1921,12 @@ class TelegramLlmHandler:
         fact = item.general_estimate
         # LDL Nutrients v1 (D10): stored satfat=/fiber= ranges are kept like the other unnamed nutrients.
         kept = general_optional_ranges(item)
+        dropped = None
+        if satfat_over_fat(merged, kept):
+            # LDL Nutrients B (D4): the new fat is below the stored saturated fat, which the CLI would refuse; the
+            # saturated fat is left out (unknown) and shown. The old item and its fact stay (`replace-item`).
+            dropped = next((low, high) for nutrient, low, high in kept if nutrient is OptionalNutrient.SATURATED_FAT_G)
+            kept = tuple(bounds for bounds in kept if bounds[0] is not OptionalNutrient.SATURATED_FAT_G)
         label = edit.from_label and bool(edit.estimate) and all(low == high for _n, low, high in edit.estimate)
         codes: tuple[CheckCode, ...] = ()
         args: list[str] = ["--general"]
@@ -1944,6 +1959,8 @@ class TelegramLlmHandler:
             was = f"{_range_text(old[nutrient])}{unit}" if nutrient in old else "알 수 없음"
             line = f"  {NUTRIENT_NAMES[nutrient]} {was} → {_range_text((low, high))}{unit}"
             lines.append(line + (" (라벨)" if label else "") + (f" {CHECK_MARKER}" if codes else ""))
+        if dropped is not None:
+            lines.append(f"  포화지방 {_range_text(dropped)} g → {SATFAT_DROPPED_TEXT}")
         if edit.new_memo and memo != item_memo(item):
             lines.append(f"  메모: {item_memo(item) or '없음'} → {memo}")
         if codes:
@@ -2659,6 +2676,11 @@ class _Entry:
     printed: bool = False
     join: bool = False
     """v2.5: the user asked to add this food to the day's recorded meal of that type (`join_existing`)."""
+    optional: OptionalRanges = ()
+    """LDL Nutrients B: the saturated fat / fiber ranges stored with the estimate (`satfat=`/`fiber=`); only a general
+    item estimated by the model has them (never a catalog item, a menu pick or the photo-failed entry)."""
+    satfat_dropped: bool = False
+    """The model's saturated fat was above its fat range and was left out (unknown), so the CLI records the rest."""
 
     def argv(self, source: NutritionSourceType, reference: str, with_estimate: bool) -> tuple[str, ...]:
         if self.food_id is not None and self.quantity is not None and self.unit is not None:
@@ -2667,7 +2689,8 @@ class _Entry:
         if self.memo:
             args.append(f"--general-note={self.memo}")
         if with_estimate and self.estimate:
-            args.append(f"--general-estimate={format_general_estimate(self.menu_source or source, self.estimate)}")
+            estimate = format_general_estimate(self.menu_source or source, self.estimate, self.optional)
+            args.append(f"--general-estimate={estimate}")
             if self.menu_reference is not None:
                 args.append(f"--general-estimate-ref={estimate_reference(self.menu_reference, None, None)}")
             elif reference:
@@ -2703,6 +2726,7 @@ def _item_views(entries: Sequence[_Entry]) -> tuple[ProposalItemView, ...]:
             entry.label,
             portions_text(entry.portions) if entry.food_id is None else None,
             entry.printed,
+            optional_summary(entry.optional, label=entry.label, satfat_dropped=entry.satfat_dropped),
         )
         for entry in entries
     )
@@ -2766,7 +2790,10 @@ def _valued(entry: _Entry) -> str:
     text = f"{entry.display()}: {ranges_summary(entry.estimate)}"
     if entry.label:
         text += " (라벨)"
-    return f"{text} {CHECK_MARKER}" if entry.check else text
+    if entry.check:
+        text += f" {CHECK_MARKER}"
+    ldl = optional_summary(entry.optional, label=entry.label, satfat_dropped=entry.satfat_dropped)
+    return f"{text} / {ldl}" if ldl else text
 
 
 def _replace_change(name: str, number: int, old: MealItem, entry: _Entry) -> str:
@@ -2779,6 +2806,9 @@ def _replace_change(name: str, number: int, old: MealItem, entry: _Entry) -> str
     now = ranges_summary(entry.estimate) or "값 없음"
     line = f"  {was} → {now}" + (" (라벨)" if entry.label else "") + (f" {CHECK_MARKER}" if entry.check else "")
     lines = [head, line]
+    ldl = optional_summary(entry.optional, label=entry.label, satfat_dropped=entry.satfat_dropped)
+    if ldl:
+        lines.append(f"  {ldl}")
     if entry.check:
         lines.append(f"  {CHECK_LINE_HEAD}{', '.join(CHECK_REASON_TEXTS[code] for code in entry.check)}")
     return "\n".join(lines)
@@ -2843,8 +2873,30 @@ def _failures(entries: Sequence[_Entry]) -> list[tuple[_Entry, CheckFailure]]:
             quantity=entry.own_quantity,
             label=entry.label,
             portions=entry.portions,
+            optional=entry.optional,
         )
     ]
+
+
+def _settle_ldl(entries: Sequence[_Entry]) -> list[_Entry]:
+    """LDL Nutrients B (rule 6): after the re-check, whatever its outcome, an entry whose saturated fat is above its
+    fat range loses the saturated fat (unknown, shown as left out) so that `/ok` never sends a SPEC the CLI refuses.
+    The stored values then agree, so `satfat_exceeds_fat` no longer marks the entry (the history keeps the re-check).
+    This is the one place the saturated fat of a new item is dropped (an edit drops it in `_edit_estimate`, D4); every
+    other entry is the same object."""
+    settled = []
+    for entry in entries:
+        if satfat_over_fat(entry.estimate, entry.optional):
+            entry = replace(
+                entry,
+                optional=tuple(
+                    bounds for bounds in entry.optional if bounds[0] is not OptionalNutrient.SATURATED_FAT_G
+                ),
+                satfat_dropped=True,
+                check=tuple(code for code in entry.check if code is not CheckCode.SATFAT_EXCEEDS_FAT),
+            )
+        settled.append(entry)
+    return settled
 
 
 def _mark(entries: Sequence[_Entry], failures: Sequence[tuple[_Entry, CheckFailure]]) -> list[_Entry]:
