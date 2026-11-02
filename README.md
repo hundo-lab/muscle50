@@ -280,6 +280,10 @@ muscle50 nutrition food show chicken-breast   # fact history (active/superseded)
 # 기존 음식에 새 영양 fact version 추가(이전 fact와 이미 기록한 식사는 그대로, 이후 식사부터 새 fact 사용)
 muscle50 nutrition food fact add chicken-breast --per 100 g `
   --kcal <kcal> --protein <g> --carbs <g> --fat <g> --source food_database --accuracy estimated --source-ref "<출처>"
+# 선택: 포화지방·식이섬유(g). food add / food fact add 공통. 빼거나 unknown이면 unknown(0이 아님)
+# 기존 음식에 채우려면 4개 값을 다시 적은 새 fact version을 추가(이미 기록한 식사는 그대로)
+muscle50 nutrition food fact add chicken-breast --per 100 g `
+  --kcal <kcal> --protein <g> --carbs <g> --fat <g> --satfat <g|unknown> --fiber <g|unknown> --source nutrition_label --accuracy exact
 # 아직 값이 없는 단위(pack, count 등)의 첫 fact를 기존 단위 옆에 추가(다른 단위 fact는 그대로, 환산 없음)
 muscle50 nutrition food fact add chicken-breast --per 1 pack `
   --kcal <kcal> --protein <g> --carbs <g> --fat <g> --source nutrition_label --accuracy exact --new-unit
@@ -342,6 +346,9 @@ incomplete이고 부족 판단이나 행동 안내가 나오지 않습니다. `�
 muscle50 nutrition target set protein --range 170 180     # 범위(양 끝 포함)
 muscle50 nutrition target set fat --exact 80              # 정확한 값
 muscle50 nutrition target set kcal --unset                # 목표 없음 (0이 아님)
+muscle50 nutrition target set satfat --max-energy-percent 7 --meal-note-percent 50   # 포화지방 상한(에너지 %), 끼니 메모는 선택
+muscle50 nutrition target set fiber --minimum 25          # 식이섬유 하한(g/일)
+muscle50 nutrition target set satfat --unset              # fiber --unset도 같음
 muscle50 nutrition target show                            # --json 가능
 muscle50 nutrition status                                 # 오늘 섭취 vs 목표 (--date YYYY-MM-DD, --json)
 ```
@@ -361,6 +368,16 @@ muscle50 nutrition status                                 # 오늘 섭취 vs 목
 보여 줍니다. 참고일 뿐 목표 값은 바꾸지 않으며, `--json`은 끝에 `goal_reference` key가 붙습니다. 목표 파일이 깨졌으면 이 부분만
 "unavailable" 한 줄이 되고 status는 계속 나옵니다. maintain/gain이나 목표가 없으면 출력은 그대로입니다. 상세:
 `docs/training-goal-mode.md`.
+
+포화지방·식이섬유(LDL 관련, 조언만): 음식 fact의 선택 값 `--satfat`/`--fiber`와 일반식 추정 `--general-estimate`의
+`satfat=MIN-MAX`, `fiber=MIN-MAX` 키로 기록합니다(이 둘만 있는 fact나 추정은 거부, 포화지방이 총지방보다 크면 거부).
+`nutrition day`/`meal show`/`food show`/`food list`는 값이 있는 항목·끼니·날에만 새 줄을 붙이고, 값이 빠진 item이 있으면 합계 대신 아는 item
+합계와 `Unknown, not 0:` 목록을 보여 줍니다. `nutrition status`는 LDL 목표가 있거나 그날 값이 있으면 끝에 블록을 붙여, 사용자가 정한
+포화지방 상한(kcal 목표 x % / 9 kcal/g로 g 환산; kcal 목표가 없으면 판정하지 않음)과 식이섬유 하한에 비교하고 근거 참고값(LDL-05
+< 7 %, LDL-08 >= 25 g)을 옆에 적습니다. 목표를 자동으로 정하지 않고, 검사값·위험도·경고 등급은 없으며, 운동 계획과 `recommend`/`daily`
+출력은 바뀌지 않습니다. JSON은 끝에 `ldl_nutrients` key가 붙습니다. LDL 목표를 하나라도 정하면 목표 파일이 schema 2가 되고(둘 다
+지우면 schema 1로 돌아감) 이전 빌드는 그 파일을 읽지 못합니다. 이 기능은 migration 011을 씁니다(첫 쓰기 명령에서 적용). production
+에는 백업 후 적용하고 확인할 때까지 LDL 목표를 정하지 마세요. 상세: `docs/ldl-nutrients.md`.
 
 ## 개발 검증
 

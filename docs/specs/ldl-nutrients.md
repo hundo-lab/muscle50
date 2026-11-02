@@ -1,8 +1,8 @@
 ---
 id: ldl-nutrients
 title: LDL Nutrients - Saturated Fat and Fiber v1
-status: draft
-migration: none
+status: integrated
+migration: reserved:011
 output_change: additive
 user_gates: [design, integration, prod-migration]
 ---
@@ -59,41 +59,44 @@ muscle50 nutrition food fact add syn-rice --per 1 pack --kcal 300 --protein 5 --
 # 일반식 추정 범위
 muscle50 nutrition log --meal dinner --general --general-note SynPorkBBQ --general-estimate language_estimate:kcal=800-1100,protein=35-50,fat=50-70,satfat=15-25
 
-# 목표 (사용자 설정)
-muscle50 nutrition target set satfat --max-energy-percent 7
+# 목표 (사용자 설정. --meal-note-percent는 선택이고 기본값 없음: 빼면 끼니 메모 없음)
+muscle50 nutrition target set satfat --max-energy-percent 7 --meal-note-percent 50
 muscle50 nutrition target set fiber --minimum 25
+muscle50 nutrition target set satfat --unset
 
 muscle50 nutrition status --date 2026-11-05
 muscle50 nutrition status --date 2026-11-05 --json
 ```
 
-예상 `nutrition status` text: 기존 줄은 그대로이고 끝에 블록이 붙는다(합성 값, kcal 목표 2400 exact, 정확한 문구는 설계에서 정한다):
+`nutrition status` text: 기존 줄은 그대로이고 끝에 블록이 붙는다. 통합 때 실제 출력으로 바꿨다(합성 값, kcal 목표 2400 exact,
+`satfat --max-energy-percent 7 --meal-note-percent 50`, `fiber --minimum 25`. 출처: `docs/ldl-nutrients.md`). 섬유 음식 줄은 D9로
+두 줄로 나뉘었고, 끼니 메모 문구는 구현 차이 8이다:
 
 ```text
 LDL-related nutrients (your targets; advice only, not a diagnosis):
-  Saturated fat  incomplete (known items only: 19.4 g (estimated)); limit < 7 % of energy [user setting; LDL-05 reference < 7 %]
-                 = under 18.7 g at your kcal target 2400 [design: 9 kcal/g]: above limit (the known items alone exceed it)
-  Fiber          17.5 g (estimated); target >= 25 g/day [user setting; LDL-08 reference >= 25 g]: below target, 7.5 g to go
-    foods that add fiber: oats, mixed grains, beans, tofu/soy, nuts [LDL-08, LDL-11; advice only]
-  Unknown, not 0: saturated fat: 2026-11-05-lunch-1 item 2 SynRice (syn-rice)
-  Meal note: 2026-11-05-dinner-1 is high in saturated fat: 13 g, 70 % of today's limit [design: user setting 50 %]
+  Saturated fat incomplete (known items only: 21 g (estimated)); limit < 7 % of energy [user setting; LDL-05 reference < 7 %]
+                = under 18.7 g at your kcal target 2400 [design: 9 kcal/g]: above limit (the known items alone reach it)
+  Fiber         incomplete (known items only: 9.2 g); target >= 25 g/day [user setting; LDL-08 reference >= 25 g]: cannot tell yet (incomplete)
+    foods with fiber: oats, mixed grains, legumes [LDL-08; advice only]
+    LDL diet pattern also uses soy/tofu protein and nuts [LDL-11; advice only]
+  Unknown, not 0: saturated fat: 2026-11-05-breakfast-1 item 2 SynRice (syn-rice); 2026-11-05-dinner-1 item 1 일반식 (general-meal)
+  Unknown, not 0: fiber: 2026-11-05-dinner-1 item 1 일반식 (general-meal)
+  Meal note: 2026-11-05-lunch-1 saturated fat 20 g = 107.1 % of the day limit 18.7 g, at or above your setting 50 % [user setting; advice only]
 ```
 
-불완전한 날의 다른 경우(같은 목표):
+다른 상태의 문구(전체 표: `docs/ldl-nutrients.md`): 포화지방 완전 `within limit, 13 g below it` / `at or above limit, 1 g over`,
+kcal 목표가 범위일 때 `between the limits of your kcal range (14-21 g): depends on where in your kcal range you end`(D3),
+kcal 목표 없음 `= no gram limit without a kcal target (...): not judged`, 섬유 `target reached` / `below target, 7.5 g to go`.
+
+`nutrition day`의 항목·끼니에 붙는 줄(값이 하나라도 있는 항목·끼니·날만):
 
 ```text
-  Saturated fat  incomplete (known items only: 9.8 g); limit < 7 % of energy [...]: cannot tell yet (incomplete)
-  Fiber          incomplete (known items only: 26 g); target >= 25 g/day [...]: target reached (the known items alone reach it)
+     LDL: sat fat unknown | fiber 1.2 g
+  LDL nutrients: sat fat incomplete (known items only: 1 g) | fiber 9.2 g
 ```
 
-`nutrition day`의 끼니에 붙는 줄(값이 하나라도 있는 끼니만):
-
-```text
-  Meal total: kcal 1050 (estimated) | P 42 g (estimated) | C 60 g | F 65 g (estimated)
-  LDL nutrients: sat fat 13 g (estimated) | fiber incomplete (known items only: 2 g)
-```
-
-예상 JSON(합성 값, 기존 key 뒤 마지막 key로 추가, key 이름은 설계에서 확정):
+JSON(합성 값, 기존 key 뒤 마지막 key로 추가). 아래는 초안 모양이다. 통합된 key는 `docs/ldl-nutrients.md` "JSON"에 있다
+(`limit_g`는 `{low, high}`, `limit_basis`에 `evidence`, `logged_energy_percent`, 섬유 `advice`, 목표의 `source: "user_setting"`이 더해졌다):
 
 ```json
 {
@@ -132,8 +135,9 @@ LDL-related nutrients (your targets; advice only, not a diagnosis):
 
 ## 규칙
 
-1. **저장과 migration** — **migration: reserve needed.** 번호는 오케스트레이터가 예약한다(`feature_state.py reserve-migration`).
-   작성자는 고르지 않는다.
+1. **저장과 migration** — **migration 011**(오케스트레이터 예약, `011_nutrition_fact_optional_nutrients.sql`). 설계 결정 D1-(b):
+   새 append-only 표 `nutrition_fact_optional_nutrients`(fact·영양소마다 한 행, 행이 없으면 unknown), nutrient 이름 CHECK(D1.1).
+   (a)는 `migrate()`가 매번 모든 `*.sql`을 다시 실행하고 SQLite에 `ADD COLUMN IF NOT EXISTS`가 없어서 쓸 수 없었다.
    - 이유: `nutrition_facts`(migration 003)는 영양소마다 고정 열(점 값 + min/max)을 갖고, 트리거로 append-only다. 새 영양소를
      담을 곳이 없다. 목표 파일은 JSON이라 migration이 필요 없다.
    - 저장 방식은 설계에서 고른다(D1):
@@ -165,7 +169,9 @@ LDL-related nutrients (your targets; advice only, not a diagnosis):
    - 포화지방 `< 7 %` 에너지: `[LDL-05]`(KSoLA, ESC 고콜레스테롤혈증 공통). 충돌: ESC 일반 `< 10 %`도 LDL-05이고, 사용자가
      10을 고르면 규칙 6대로 한 줄 덧붙인다. ACC/AHA는 숫자 없이 "대체"다.
    - 식이섬유 `≥ 25 g/일`: `[LDL-08]`(KSoLA, ESC 25–40 g의 아래 끝). 40은 상한이 아니므로 상한으로 쓰지 않는다.
-   - 섬유를 늘리는 음식 예(귀리, 잡곡, 콩류, 두부·콩, 견과): `[LDL-08, LDL-11]`, 조언만.
+   - 섬유를 늘리는 음식 예: D9로 두 줄로 나눴다. 귀리, 잡곡, 콩류 `[LDL-08; advice only]` / 두부·콩 단백, 견과는 LDL 식단 패턴
+     `[LDL-11; advice only]`(LDL-11은 섬유가 아니라 LDL을 낮추는 식품에 관한 행이다). 섬유 상태가 `below_target`이나
+     `indeterminate`일 때만 나온다.
    - g ↔ kcal 환산 `9 kcal/g`: 근거 문서의 행이 아니다. LDL-05 메모의 계산 예(2,400 kcal → 18.7 g)와 기존 상수
      `ATWATER_FAT`(`domain/telegram_llm_check.py`)에만 있다. `[design: 9 kcal/g]`로 적는다(열린 질문 2).
    - 근거 문서에서 확인 못 한 숫자(AHA < 5–6 %, 트랜스지방 < 1 %: "확인 못 한 것" 11·12)는 쓰지 않는다.
@@ -194,7 +200,7 @@ LDL-related nutrients (your targets; advice only, not a diagnosis):
    확인), 그때 새 값은 모두 unknown이다. `mode=ro`, migrate/mkdir 없음.
 10. **표시 위치**: v1은 `nutrition` 명령 그룹만. `recommend`/`daily`의 영양 절, Telegram `/status`·`/day`, LLM 답장의 `오늘 누적`에
     넣을지는 D6(추천: v1에서는 넣지 않고 후속).
-11. **단계 B — Telegram LLM 추정(D7)**: 넣는다면 해석 schema에 선택(nullable) 범위 `saturated_fat_g`, `fiber_g`. 모르면 null이고
+11. **단계 B — Telegram LLM 추정(D7: 후속으로 미룸, v1에 없음)**: 넣는다면 해석 schema에 선택(nullable) 범위 `saturated_fat_g`, `fiber_g`. 모르면 null이고
     0으로 채우지 않는다. 라벨 사진·문장의 값은 기존 라벨 규칙(min = max, `; 라벨`). 숫자 재확인에 `satfat_exceeds_fat`(satfat min >
     fat max) 코드 하나를 더한다 `[design]`. 저장은 `--general-estimate`의 새 키다. 두 CLI(Claude, Codex)로 바뀐 schema를 live로
     확인한다(합성 데이터). 두 값이 모두 null인 제안의 답장은 바뀌지 않는다.
@@ -203,58 +209,109 @@ LDL-related nutrients (your targets; advice only, not a diagnosis):
 
 ## 인수 조건
 
-- [ ] AC1: `food add`/`food fact add`가 `--satfat`/`--fiber`(숫자 또는 `unknown`)를 저장하고 `food show`/`--json`에 보인다.
+- [x] AC1: `food add`/`food fact add`가 `--satfat`/`--fiber`(숫자 또는 `unknown`)를 저장하고 `food show`/`--json`에 보인다.
       플래그를 빼면 unknown이다. 새 플래그 없는 기존 명령의 저장 값과 출력은 byte-identical이다.
-- [ ] AC2: 음수·비정규 숫자, 포화지방 > 총지방, 포화지방·섬유만 있는 fact, 현재 fact가 아는 값을 unknown으로 주는 새 버전,
+- [x] AC2: 음수·비정규 숫자, 포화지방 > 총지방, 포화지방·섬유만 있는 fact, 현재 fact가 아는 값을 unknown으로 주는 새 버전,
       `satfat=`/`fiber=`의 min > max는 exit 1, `오류:`, DB 변경 없음.
-- [ ] AC3: 식사 기록 때 새 값이 snapshot으로 복사된다. 나중의 카탈로그 새 버전은 이미 기록된 끼니를 바꾸지 않고, `repeat`은
+- [x] AC3: 식사 기록 때 새 값이 snapshot으로 복사된다. 나중의 카탈로그 새 버전은 이미 기록된 끼니를 바꾸지 않고, `repeat`은
       현재 카탈로그 값을, `meal merge`는 원래 값을 쓴다. supersession은 영양소별이다.
-- [ ] AC4: `--general-estimate`가 `satfat=`/`fiber=` 범위를 받고, 추정만 있는 항목은 합계를 불완전하게 둔다(0이 아님).
-- [ ] AC5: `nutrition day`/`meal show`가 항목·끼니·하루 값을 보이고, 값이 빠진 항목이 있으면 "incomplete (known items only: …)"와
+- [x] AC4: `--general-estimate`가 `satfat=`/`fiber=` 범위를 받고, 추정만 있는 항목은 합계를 불완전하게 둔다(0이 아님).
+- [x] AC5: `nutrition day`/`meal show`가 항목·끼니·하루 값을 보이고, 값이 빠진 항목이 있으면 "incomplete (known items only: …)"와
       항목 목록을 보인다. 어디에도 unknown을 0으로 쓴 값이 없다.
-- [ ] AC6: `target set satfat --max-energy-percent`/`fiber --minimum`이 동작하고 0·음수·100 이상은 거부된다. 규칙 6의 플래그
+- [x] AC6: `target set satfat --max-energy-percent`/`fiber --minimum`이 동작하고 0·음수·100 이상은 거부된다. 규칙 6의 플래그
       조합 밖(예: `fiber --exact 25`, `protein --minimum 100`)은 exit 1이고 파일이 바뀌지 않는다. `target show`가 새 목표를 보인다.
       새 목표가 없으면 목표 파일은 schema 1 그대로 byte-identical이다.
-- [ ] AC7: 포화지방 판정이 규칙 4대로다: 완전 + `< L` within, 완전 + `= L` above, 불완전 + known `≥ L` above(excess null),
+- [x] AC7: 포화지방 판정이 규칙 4대로다: 완전 + `< L` within, 완전 + `= L` above, 불완전 + known `≥ L` above(excess null),
       불완전 + known `< L` indeterminate, kcal 목표 없음 `no_kcal_target`. 테스트가 각 경우를 하나씩 확인한다.
-- [ ] AC8: 섬유 판정이 규칙 4대로다: 완전 + `≥ M` reached, 완전 + `< M` below와 remaining, 불완전 + known `≥ M` reached
+- [x] AC8: 섬유 판정이 규칙 4대로다: 완전 + `≥ M` reached, 완전 + `< M` below와 remaining, 불완전 + known `≥ M` reached
       (complete false), 불완전 + known `< M` indeterminate.
-- [ ] AC9: 새 text 줄과 JSON 목표 객체마다 근거 ID(`LDL-05`, `LDL-08`, `LDL-11`) 또는 `[design]`/`[user setting]`이 붙고, 그 밖의
+- [x] AC9: 새 text 줄과 JSON 목표 객체마다 근거 ID(`LDL-05`, `LDL-08`, `LDL-11`) 또는 `[design]`/`[user setting]`이 붙고, 그 밖의
       숫자 기준은 없다. 출력에 LDL-C 같은 검사값, 위험도, "warning" 등급이 없다.
-- [ ] AC10: 끼니 메모는 사용자 설정이 있고 그 끼니의 포화지방이 완전하며 기준 이상일 때만 나온다. 어떤 명령도(`target set` 제외)
+- [x] AC10: 끼니 메모는 사용자 설정이 있고 그 끼니의 포화지방이 완전하며 기준 이상일 때만 나온다. 어떤 명령도(`target set` 제외)
       목표 파일을 바꾸지 않는다.
-- [ ] AC11: 포화지방·섬유 목표와 값이 없는 데이터에서 `nutrition day/status/meal show/food list/food show`, `recommend`, `daily`의
+- [x] AC11: 포화지방·섬유 목표와 값이 없는 데이터에서 `nutrition day/status/meal show/food list/food show`, `recommend`, `daily`의
       text와 JSON이 이 기능 전과 byte-identical이다. 값이 있어도 `recommend`/`daily`의 운동 계획 부분은 byte-identical이다.
-- [ ] AC12: migration이 임시 `MUSCLE50_HOME`의 이전 DB에 적용되고, 새 저장소가 append-only(update/delete 거부)이며, migration
+- [x] AC12: migration이 임시 `MUSCLE50_HOME`의 이전 DB에 적용되고, 새 저장소가 append-only(update/delete 거부)이며, migration
       버전 기대값 테스트가 갱신된다. 읽기 전용 reader는 migration 전 DB에서 새 값을 unknown으로 보이고 오류 없이 끝난다.
-- [ ] AC13: `--json` 출력이 재실행 시 byte-identical이고 새 key는 기존 key 뒤 마지막에 있다. text는 ASCII다(사용자 입력 이름 제외).
-- [ ] AC14(단계 B를 넣을 때만): LLM 추정의 null은 unknown으로 저장되고, `satfat_exceeds_fat`가 한 번 다시 묻기를 일으키며,
-      두 값이 모두 null인 제안의 답장은 바뀌지 않는다. live 확인 기록이 기능 문서에 있다.
-- [ ] AC15: 품질 게이트 4개가 통과한다(`uv run --extra dev pytest`, `uv run ruff check .`, `uv run mypy src tests`, `git diff --check`).
+- [x] AC13: `--json` 출력이 재실행 시 byte-identical이고 새 key는 기존 key 뒤 마지막에 있다. text는 ASCII다(사용자 입력 이름 제외).
+- [ ] AC14 (n/a: D7로 단계 B를 미뤘다)(단계 B를 넣을 때만): LLM 추정의 null은 unknown으로 저장되고, `satfat_exceeds_fat`가
+      한 번 다시 묻기를 일으키며, 두 값이 모두 null인 제안의 답장은 바뀌지 않는다. live 확인 기록이 기능 문서에 있다.
+- [x] AC15: 품질 게이트 4개가 통과한다(`uv run --extra dev pytest`, `uv run ruff check .`, `uv run mypy src tests`, `git diff --check`).
+
+AC11의 `daily`는 코드 경로로 확인했다(`daily`는 Garmin을 sync하므로 smoke에서 실행하지 않음): 새 `ldl_terminal`은
+`nutrition_terminal`의 render 함수에서만 불리고, `daily`는 `recommend` renderer를 쓰며, `recommend` text/JSON은 smoke에서
+LDL 값·목표 유무와 상관없이 byte-identical이었다. Telegram `/status`·`/daily`·`/today` 요약도 같은 이유로 구조상 그대로다.
+
+## 설계 승인 결정 (2026-11-01)
+
+사용자 답: 모두 추천안(D1-D8)과 계획이 더한 D9, D10. 상세: `docs/ldl-nutrients.md` 머리말과 "규칙".
+
+- **D1-(b)**: 새 append-only 표 `nutrition_fact_optional_nutrients`(migration 011). fact·영양소마다 값이나 범위가 있을 때만 한 행,
+  행이 없으면 unknown. update/delete 트리거, exact fact에 범위 금지 트리거. D1.1: `nutrient IN ('saturated_fat_g','fiber_g')` CHECK
+  유지(후속 영양소는 새 migration이 필요하다).
+- **D2-A**: 포화지방 g 상한 `L = kcal 목표 x P / 100 / 9` `[design: 9 kcal/g]`. kcal과 포화지방이 모두 완전한 날에만 "logged
+  energy share" 정보 줄(판정에 쓰지 않음).
+- **D3**: kcal 목표가 범위면 양 끝에서 `L_low`, `L_high`. `above_limit`은 `>= L_high`, `within_limit`은 완전하고 `< L_low`일
+  때만, 그 사이의 완전한 합계는 새 상태 `between_limits`, 불완전하고 `< L_high`면 `indeterminate`.
+- **D4-(가)**: 끼니 메모는 그 끼니의 포화지방이 완전하고 오늘 상한(범위면 `L_high`)의 N % 이상일 때만. N은
+  `--meal-note-percent`로 사용자가 정하고 기본값이 없다.
+- **D5**: 새 줄은 LDL 목표가 있거나 그 항목·끼니·날에 값이 있을 때만(`status`). `day`/`meal show`/`food`는 값으로만 정한다(구현 차이 6).
+- **D6**: `recommend`, `daily`, Telegram 요약(`/status`, `/daily`, `/today`), LLM `오늘 누적`은 바꾸지 않는다. 대신 Telegram
+  `/day`, `/show`, `/log`, `/status full`은 CLI text를 그대로 전하므로 값이 있으면 새 줄이 보이고, 코치는 `nutrition status --json`의
+  새 `ldl_nutrients` key(advice_only, 검사값 없음)를 본다. 두 노출 모두 승인됐다.
+- **D7**: Telegram LLM 추정(단계 B)은 후속 스펙으로 미룬다. 카탈로그 음식으로 `/log`하면 snapshot에 값이 따라온다.
+- **D8**: 7 또는 10은 사용자가 실행 때 고른다(기본값 없음). P = 10이면 ESC 일반 `< 10 %` [LDL-05] 한 줄, JSON `reference`는 7.
+- **D9**(계획이 더함): 섬유 음식 줄을 `[LDL-08]`(귀리, 잡곡, 콩류)과 `[LDL-11]`(두부·콩 단백, 견과의 식단 패턴) 두 줄로 나눈다.
+- **D10**(계획이 더함): Telegram `change_estimate`가 저장된 `satfat=`/`fiber=` 범위를 다시 넘긴다(메모·kcal만 고쳐도 범위가 지워지지 않음).
+
+### 승인된 구현 차이(검증자가 모두 받아들임)
+
+1. 목표 class(`SaturatedFatTarget`, `FiberTarget`, `LdlTargets`)는 import 순환을 피하려고 `domain/nutrition_targets.py`에 있다.
+   `domain/ldl_nutrients.py`에는 상수와 판정만 있다.
+2. `NutritionTargets.ldl`은 `init=False`이고 `with_ldl()`로 정한다. 기존 생성자 signature가 그대로라 기존 테스트를 고치지 않았다.
+3. LDL text/JSON은 새 `presentation/ldl_terminal.py`에 있다. 공유 hotspot `nutrition_terminal.py`의 diff는 약 30줄이다.
+4. migration 버전 고정 테스트가 하나 더 있었다: `tests/test_telegram_bot.py`의 `range(1, 12)`.
+5. `target set`의 값 group이 `required`가 아니라 usage가 `[...]`로 보인다. 값 플래그가 없으면 exit 2(`main()`은 그대로), 종류가
+   맞지 않는 플래그는 exit 1이고 `ensure_directories()`/`migrate()` 전에 거부한다. 계획에 없던 거부: `--meal-note-percent`를
+   `--unset`, `fiber`, 기존 4개 영양소와 함께 쓰는 것.
+6. `day`/`meal show`/`food`는 목표 파일을 읽지 않고 값으로만 새 줄을 정한다(목표 파일이 깨져도 `day`와 Telegram `/day`가 동작한다).
+   "목표가 있거나 값이 있을 때"는 `status`만 쓴다.
+7. AC9의 근거 태그 범위는 한계·목표·참고값·기준·조언을 말하는 줄이다. 블록 머리 줄, `Unknown, not 0:` 줄, kcal 목표 없음의 이어지는
+   줄에는 숫자가 없어 태그가 없다.
+8. 문구: "the known items alone reach it"(계획: exceed), 완전하고 넘으면 `at or above limit, X g over`, 아래면
+   `within limit, X g below it`, 끼니 메모는 `Meal note: <id> saturated fat 20 g = 107.1 % of the day limit 18.7 g, at or above your
+   setting 50 % [user setting; advice only]`.
+9. `satfat=`/`fiber=`를 쓴 추정은 `original_text`에 새 키가 들어간다. 쓰지 않은 추정은 byte-identical이다.
+10. JSON의 Decimal 문자열은 기존 4개 영양소와 같은 scaling 계산을 따른다(예: `"1.0"`, `"21.0"`).
 
 ## 한계 / 후속 후보
 
 - 한계:
   - 이미 기록된 끼니는 snapshot을 유지하므로 카탈로그를 채워도 과거 날은 계속 unknown이다(원칙대로). 처음 몇 주는 대부분 불완전하다.
   - 기존 음식에 포화지방을 채우려면 4개 값을 다시 적은 새 fact 버전이 필요하다.
-  - 상한 `L`은 kcal 목표에서 계산한 값이다(D2 추천안일 때). 실제 섭취 열량의 %와는 다르다.
+  - 상한 `L`은 kcal 목표에서 계산한 값이다(D2-A). 실제 섭취 열량의 %와는 다르다.
   - LLM·사진 추정의 포화지방·섬유는 정확도가 알려지지 않았다. 추정은 계속 `estimated`이고 판정은 점 값만 쓴다.
   - schema 2 목표 파일은 이전 빌드가 읽지 못한다. production에 적용하려면 gate 3(백업 → 적용 → 확인)이 필요하다.
   - 통합 뒤 gate 3을 끝낼 때까지 hook이 production `muscle50` 실행을 막고, Telegram bot도 migration이 적용되지 않았으면 식사를
     기록하지 않는다. 그 사이에는 식사 기록이 멈추므로 통합 직후 바로 적용하는 것이 좋다.
-- 후속 후보: `recommend`/`daily`와 Telegram `/status`·`오늘 누적`에 표시(D6), 메뉴 제안이 섬유·포화지방을 보조 기준으로 쓰기,
-  식이 콜레스테롤 필드(LDL-07, ESC < 300 mg 참고값), 수용성 섬유(LDL-08), 코치가 새 JSON 읽기.
-- 설계 결정 질문(게이트 1에서 답):
-  - D1: 저장 (a) `nutrition_facts`에 열 추가 / (b) 새 append-only 표.
-  - D2: 포화지방 상한의 분모: (A, 추천) kcal 목표 기준 g 상한 / (B) 그날 기록된 kcal 기준 %(kcal이 완전한 날만 판정) /
-    (C) 사용자가 g 상한을 직접 입력하고 LDL-05는 참고 문구만.
-  - D3: kcal 목표가 범위일 때 최소·최대 중 어느 끝으로 `L`을 계산할지.
-  - D4: 끼니 메모 기준: (가, 추천) 오늘 상한의 N % 이상(사용자 설정) / (나) 그 끼니 열량의 7 % 이상(LDL-05의 하루 비율을 끼니에
-    적용, `[design]`) / (다) v1에서는 끼니 메모 없음.
-  - D5: 새 줄을 언제 보일지: 목표가 있거나 값이 있을 때(추천) / 목표가 있을 때만.
-  - D6: `recommend`/`daily`/Telegram 표시를 v1에 넣을지(추천: 후속).
-  - D7: Telegram LLM 추정(단계 B)을 이 기능에 넣을지, 다음 버전으로 나눌지.
-  - D8: 사용자가 고를 포화지방 값: 7(LDL-05 KSoLA·ESC 고콜레스테롤혈증, 근거 문서 메모의 추천) 또는 10(ESC 일반).
+  - 구현자·검증자가 보고한 한계(상세: `docs/ldl-nutrients.md` "Known issues / limitations"):
+    - **gate 3이 확인되기 전에는 LDL 목표를 정하지 않는다.** 이전 빌드는 schema 2 목표 파일을 `unsupported schema_version 2`로
+      거부한다. 코드만 되돌리는 것은 011 DB에서 동작하지만(검증됨) 목표 파일 때문에 막힌다. 되돌리려면 LDL 목표를 둘 다 지운다.
+    - 처음에는 `Unknown, not 0:` 목록이 길다(과거 끼니는 모두 unknown). Telegram `/day`에도 그대로 보이고 길이 제한이 없다.
+    - `--general-estimate`에 모르는 키를 주면 오류 문구가 아직 `<kcal|protein|carbs|fat>`만 적고 `satfat`, `fiber`를 빠뜨린다
+      (`parse_general_estimate`).
+    - D10 뒤 Telegram 수정이 지방 범위를 저장된 포화지방 범위보다 낮추면 규칙 2(포화지방 <= 총지방)로 거부된다. 맞는 동작이지만
+      기능 문서 Known issues에는 아직 없다.
+    - `infrastructure/nutrition_serialization.py`(교환 형식)는 선택 영양소를 싣지 않는다. 그 형식을 쓰면 포화지방·섬유가 빠진다.
+    - `meal show`의 `facts:` 줄은 4개 영양소의 fact 버전만 적는다. 선택 영양소를 옛 fact 버전에서 가져온 경우는 JSON `fact_id`에만 보인다.
+    - 목표는 하나뿐이고 이력이 없다. `target set satfat --max-energy-percent P`는 끼니 메모 설정도 함께 바꾼다(빼면 메모 없음).
+    - 포화지방 > 총지방 검사는 저장소가 아니라 domain 규칙이다. 선택 영양소 행이 fact와 같은 transaction에서 쓰였는지는 schema로
+      증명하지 못하고 repository가 유일한 writer다.
+    - 새 home에서 값 거부(예: `--max-energy-percent 0`)는 기존 `kcal --exact 0`과 같이 `auth db raw tmp` 폴더를 만든다(목표 파일은
+      쓰지 않음). 종류 거부는 아무것도 만들지 않는다.
+- 후속 후보: Telegram LLM 식사 추정·라벨 값에 포화지방·섬유 범위(D7, 규칙 11과 AC14가 초안), `recommend`/`daily`와 Telegram
+  `/status`·`오늘 누적`에 표시(D6), 메뉴 제안이 섬유·포화지방을 보조 기준으로 쓰기, 식이 콜레스테롤 필드(LDL-07, ESC < 300 mg
+  참고값), 수용성 섬유(LDL-08), 코치가 새 JSON을 쓰는 방식 정하기, `--general-estimate` 오류 문구에 새 키 넣기.
 - 열린 연구 질문(근거 문서에 없음, 이 스펙에서 조사하지 않았다. 필요하면 근거 문서를 갱신하고 다시 승인받는다):
   1. 끼니 단위 포화지방 "많음"의 기준. 근거 문서의 기준은 모두 하루 단위다.
   2. 지방 9 kcal/g 환산 계수의 출처(Atwater). 지금은 LDL-05 계산 예와 기존 코드 상수에만 있다.
