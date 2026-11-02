@@ -374,6 +374,7 @@ def test_lowering_fat_below_the_stored_satfat_drops_it_with_a_line_and_ok_succee
     replies, _provider = say(monkeypatch, capsys, _fat_edit(2), 1, "아까 SynOnigiri 지방 2g 이네 라벨에 나와있어")
     lines = replies[0].split("\n")
     assert lines[0] == "이렇게 고칠까요?"
+    assert lines[1] == f"저녁 2026-10-06-dinner-1 item 1: 일반식 (메모: {ONIGIRI})"
     assert lines[2:4] == ["  지방 4~8 g → 2 g (라벨)", "  포화지방 3~5 g → 모름(지방보다 커서 뺌)"]
     assert lines[-1] == "고치기: /ok_7f3a   취소: /no_7f3a"
     assert "(값 확인 필요)" not in replies[0]
