@@ -272,6 +272,11 @@ Live Garmin 확인은 필요 없다(Garmin 동기화 변경 없음). D7을 미�
 - 저장소는 선택 영양소 행이 그 fact와 같은 transaction에서 쓰였는지 schema로 증명하지 못한다. repository가 유일한 writer다.
 - 포화지방 > 총지방 검사는 저장소가 아니라 domain 규칙이다(003의 나머지 Decimal 규칙과 같다).
 - `nutrition_serialization.py`(교환 형식)는 선택 영양소를 싣지 않는다. 그 형식을 쓰면 포화지방·섬유가 빠진다.
-- Telegram LLM은 아직 포화지방·섬유를 추정하지 않는다(D7). 카탈로그 음식으로 `/log`하거나 LLM 제안이 카탈로그 음식을 고르면
-  snapshot에 값이 따라온다.
+- D7의 단계 B는 LDL Nutrients B(`docs/specs/ldl-nutrients-lookup.md`, `docs/telegram-llm.md` "포화지방·섬유 추정")가 구현했다. Telegram 일반식
+  제안에 모델이 추정한 포화지방·섬유 **범위**가 붙고 `/ok`하면 `--general-estimate`의 `satfat=`/`fiber=`로 저장된다(표시용, 정확도 미확인). 범위라서
+  판정에는 쓰이지 않으므로 그 항목은 계속 `Unknown, not 0:`에 남는다(규칙 3·4 그대로). 카탈로그 음식으로 `/log`하거나 LLM 제안이 카탈로그 음식을
+  고르면 지금처럼 snapshot에 값이 따라온다.
+- D10과 포화지방 > 총지방: Telegram `change_estimate`가 지방 최대를 저장된 포화지방 최소보다 낮추면, bot이 고치기 제안을 만들 때 저장된 포화지방을
+  빼고 `포화지방 3~5 g → 모름(지방보다 커서 뺌)` 줄로 알린다(LDL Nutrients B, D4). 그래서 `/ok` 뒤 CLI 거부가 없다. CLI는 그대로라서 손으로 친
+  `--general-estimate`의 `satfat=` 최소가 `fat=` 최대보다 크면 지금처럼 거부하고 아무것도 쓰지 않는다.
 - 끼니 메모·섬유 음식 줄의 문구는 고정이고 순위나 처방이 아니다.
