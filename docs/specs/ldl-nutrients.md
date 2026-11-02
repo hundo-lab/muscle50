@@ -284,6 +284,16 @@ LDL 값·목표 유무와 상관없이 byte-identical이었다. Telegram `/statu
 9. `satfat=`/`fiber=`를 쓴 추정은 `original_text`에 새 키가 들어간다. 쓰지 않은 추정은 byte-identical이다.
 10. JSON의 Decimal 문자열은 기존 4개 영양소와 같은 scaling 계산을 따른다(예: `"1.0"`, `"21.0"`).
 
+## 운영 migration 011 (gate 3, 2026-11-02)
+
+- 통합 전 기준본 출력 7개(`nutrition day/status` 2026-11-01·2026-10-16, `food list`, `target show`, `recommend` 2026-11-01)를
+  `C:\Users\hundo\muscle50-backups\pre011\`에 저장했다.
+- 백업: `C:\Users\hundo\muscle50-backups\db_backup_20261102a_pre_migration011\`(sqlite backup API, 읽기 전용 원본, DB SHA-256
+  `75ed1cef5390a6f8...`, `nutrition_targets.json` 사본). 백업 사본에서 먼저 리허설해 같은 결과를 확인했다.
+- 사용자가 `uv run muscle50 nutrition food list`로 적용했다. 확인(읽기 전용): migration 1..11, 더한 것은 새 테이블·autoindex·트리거 3개뿐,
+  기존 테이블 행은 백업과 모두 같음, `integrity_check` ok, `foreign_key_check` 비어 있음, 새 테이블 0행, 기준본 출력 7개 byte-identical.
+- Telegram bot을 새 코드로 다시 시작했다(2026-11-02 20:26).
+
 ## 한계 / 후속 후보
 
 - 한계:
