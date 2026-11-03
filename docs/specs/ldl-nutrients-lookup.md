@@ -1,11 +1,10 @@
 ---
 id: ldl-nutrients-lookup
 title: LDL Nutrients B - Telegram Saturated Fat and Fiber Estimates v1
-status: draft
+status: integrated
 migration: none
 output_change: additive
-# live-llm: 템플릿의 게이트 목록에 없는 이름이다. 정의는 본문 "규칙 13". 오케스트레이터가 live-garmin처럼 다룬다.
-user_gates: [design, integration, live-llm]
+user_gates: [design, integration]
 ---
 
 # LDL Nutrients B - Telegram Saturated Fat and Fiber Estimates v1
@@ -265,39 +264,123 @@ CLI JSON 출력은 바뀌지 않는다. `nutrition day --json`의 item `ldl_nutr
 
 ## 인수 조건
 
-- [ ] AC1: 해석 schema의 item `estimate`가 12개 키이고 새 4개는 required + `number|null`이다. 파서는 null 쌍, 범위, 라벨 한 값을
+아래 테스트 이름에서 P는 `tests/test_ldl_nutrients_lookup.py`(순수 테스트), B는 `tests/test_ldl_nutrients_lookup_bot.py`(가짜 Bot API와
+가짜 제공자로 끝까지)다.
+
+- [x] AC1: 해석 schema의 item `estimate`가 12개 키이고 새 4개는 required + `number|null`이다. 파서는 null 쌍, 범위, 라벨 한 값을
       받고, 한쪽만 있음·min > max·음수·`GRAM_LIMIT` 초과를 `bad_output`으로 거부한다. (D1-A면) `edit`, `menu.items`, suggest의
       estimate는 8개 그대로이고 기존 테스트가 고침 없이 통과한다.
-- [ ] AC2: 포화지방·섬유 범위가 있는 일반식 제안을 `/ok`하면 `nutrition log`(또는 `add-item`/`replace-item`) argv의
+      근거: P `test_the_item_estimate_has_twelve_required_keys_...`, `test_broken_optional_ranges_are_a_format_failure`(6경우),
+      `test_an_item_estimate_needs_exactly_twelve_keys`, `test_edit_menu_and_suggestion_estimates_refuse_twelve_keys`. 기존 테스트의 변경은
+      계획한 fixture 두 곳(null 키 4개)뿐이다.
+- [x] AC2: 포화지방·섬유 범위가 있는 일반식 제안을 `/ok`하면 `nutrition log`(또는 `add-item`/`replace-item`) argv의
       `--general-estimate`에 4개 뒤 `satfat=`/`fiber=`가 붙고, 임시 `MUSCLE50_HOME`의 `nutrition day --json` item에
       `value` null, min/max, 글은 `language_estimate`, 사진은 `visual_estimate`, `estimated`로 보인다. null인 영양소는 행이 없고 0이 아니다.
-- [ ] AC3: 카탈로그에 연결된 item, `menu_ref` item, `/plain_`은 LLM의 포화지방·섬유를 저장하지 않는다. bot이 포화지방·섬유를
+      근거: B `test_a_text_meal_shows_the_line_and_ok_stores_language_estimate_ranges`, `test_a_photo_meal_stores_visual_estimate_ranges`,
+      `test_an_unknown_fiber_has_no_row_and_is_not_zero`.
+- [x] AC3: 카탈로그에 연결된 item, `menu_ref` item, `/plain_`은 LLM의 포화지방·섬유를 저장하지 않는다. bot이 포화지방·섬유를
       스스로 계산하는 코드 경로가 없다(모델 값이 null이면 argv에 키가 없다).
-- [ ] AC4: `from_label`이고 모두 한 값인 item은 포화지방도 min = max로 저장되고 제안에 `(라벨)`로 보인다. 라벨이 아닌 한 값의
+      근거: B `test_a_catalog_linked_item_drops_the_models_satfat_and_fiber`, `test_a_menu_pick_keeps_the_menus_values_without_satfat_or_fiber`,
+      `test_plain_stores_no_satfat_or_fiber`. 검증자 확인: 값은 일반식 item에서만 실리고 `format_general_estimate` 범위로만 나간다.
+- [x] AC4: `from_label`이고 모두 한 값인 item은 포화지방도 min = max로 저장되고 제안에 `(라벨)`로 보인다. 라벨이 아닌 한 값의
       포화지방·섬유는 다시 묻기를 일으키지 않는다.
-- [ ] AC5: `satfat_min > fat_max`면 `satfat_exceeds_fat`로 한 번 다시 묻는다. `fixed`면 새 답을 쓰고, `still_inconsistent`·
+      근거: B `test_a_label_photo_stores_single_values_and_shows_the_label_tag`, `test_a_label_with_a_ranged_saturated_fat_is_an_ordinary_estimate`(D8),
+      `test_a_non_label_single_saturated_fat_or_fiber_value_is_not_re_asked`.
+- [x] AC5: `satfat_min > fat_max`면 `satfat_exceeds_fat`로 한 번 다시 묻는다. `fixed`면 새 답을 쓰고, `still_inconsistent`·
       `reask_failed`면 그 item의 포화지방만 빼고 규칙 9의 줄을 보이며(다른 코드가 없으면 `(값 확인 필요)`와 근거 문자열 표시 없음,
       history `recheck`에는 남음), `/ok`가 나머지를 exit 0으로 기록한다. 어떤 경로에서도 CLI가
       포화지방 > 지방으로 거부하는 argv가 만들어지지 않는다(가짜 runner 테스트). 지방이 null이면 검사하지 않는다(D5-가).
-- [ ] AC6: (D4-가) 저장된 포화지방보다 지방을 낮추는 `change_estimate`는 제안에서 포화지방을 빼는 줄을 보이고 `/ok`가 exit 0이다.
+      근거: B `test_satfat_above_fat_is_re_asked_once_and_a_fixed_answer_is_used`, `test_satfat_still_above_fat_is_left_out_and_the_rest_is_recorded`
+      (still_inconsistent, reask_failed), `test_satfat_with_another_failure_marks_only_that_failure`, `test_satfat_without_a_fat_range_is_kept_and_not_re_asked`,
+      `test_a_history_line_with_the_new_code_is_rendered_by_history_and_telegram_history`. 검증자가 손으로 친 `fat=10-15,satfat=18-25`가 CLI에서
+      exit 1("Nothing was changed")임을 확인했다(막아야 할 위험이 실제다).
+- [x] AC6: (D4-가) 저장된 포화지방보다 지방을 낮추는 `change_estimate`는 제안에서 포화지방을 빼는 줄을 보이고 `/ok`가 exit 0이다.
       그 밖의 `change_estimate`는 ldl D10 테스트(`tests/test_ldl_nutrients_telegram.py`)대로 저장된 범위를 유지한다.
-- [ ] AC7: Codex 답에 `lookup_wanted`가 있으면 Claude lookup 답의 포화지방·섬유가 Codex 답을 통째로 바꾸고, lookup이 실패하면
+      근거: B `test_lowering_fat_below_the_stored_satfat_drops_it_with_a_line_and_ok_succeeds`, `test_an_edit_that_keeps_fat_at_or_above_the_stored_satfat_keeps_it`.
+      기존 D10 테스트는 고치지 않았다.
+- [x] AC7: Codex 답에 `lookup_wanted`가 있으면 Claude lookup 답의 포화지방·섬유가 Codex 답을 통째로 바꾸고, lookup이 실패하면
       Codex의 값을 그대로 쓴다. D2에서 고른 시점 규칙(L2면 null 조건, L3면 프롬프트 줄)이 가짜 runner 테스트로 확인된다. 그 밖의
       lookup 규칙(1회, 모델, 150 s, 실패 안내 줄)은 기존 테스트가 고침 없이 통과한다.
-- [ ] AC8: 포화지방·섬유가 있는 item에 규칙 9의 줄이 정해진 위치·모양으로 보이고(하나만 있으면 `모름`), 여러 끼니 제안,
+      근거: B `test_the_lookup_answers_satfat_replace_codexs`(L3 문장 두 개도 확인), `test_a_failed_lookup_keeps_codexs_satfat_and_says_why`,
+      `test_a_home_meal_the_user_asks_to_search_is_looked_up`. lookup 코드(`_lookup`)는 바뀌지 않았고 기존 lookup 테스트도 그대로다.
+- [x] AC8: 포화지방·섬유가 있는 item에 규칙 9의 줄이 정해진 위치·모양으로 보이고(하나만 있으면 `모름`), 여러 끼니 제안,
       기존 끼니에 더하기, `/fix_`, 열린 제안 고치기에서도 argv와 줄이 맞다.
-- [ ] AC9: 모델이 모든 item에서 포화지방·섬유를 null로 주면 규칙 10의 첫 묶음(답장, argv, 근거 문자열, 상태 파일 제안 항목,
+      근거: P `test_the_line_shapes`(8경우); B `test_a_multi_meal_proposal_has_the_line_per_item_and_the_ranges_per_meal`,
+      `test_joining_a_recorded_meal_adds_the_item_with_its_ranges`, `test_add_offers_the_recorded_meal_with_the_same_ranges`,
+      `test_fix_replaces_the_recorded_item_with_the_ranges_and_shows_the_line`, `test_fix_adds_new_items_with_the_line_in_the_change_text`,
+      `test_correcting_an_open_proposal_carries_the_new_ranges`.
+- [x] AC9: 모델이 모든 item에서 포화지방·섬유를 null로 주면 규칙 10의 첫 묶음(답장, argv, 근거 문자열, 상태 파일 제안 항목,
       콘솔 줄)이 이 기능 전과 byte-identical이다. 기존 Telegram LLM 테스트는 schema·프롬프트 고정값과 null 키 4개를 더한 fixture
       말고는 고치지 않는다.
-- [ ] AC10: LLM이 꺼진 bot, 모든 CLI 명령(`nutrition day/status/meal show/target show`, `recommend`, `daily`)의 text와 JSON,
+      근거: 기존 exact-reply 테스트가 fixture 두 곳만 고쳐 통과한다. 검증자가 main(d852b65)과 branch를 `git archive`로 따로 꺼내 같은
+      가짜 제공자 시나리오 17개(글, 사진, 라벨, 여러 끼니, 카탈로그, 다시 묻기, `/plain_`, `/add_`, `/new_`, 더하기, `/fix_`, lookup, 고치기,
+      열린 제안 고치기, 메뉴 고르기, LLM 꺼짐)를 돌렸다: 답장, 상태 파일 제안, 콘솔 줄, 식사 표가 같고 history는 `llm_output`의 null 키 4개만 다르다.
+- [x] AC10: LLM이 꺼진 bot, 모든 CLI 명령(`nutrition day/status/meal show/target show`, `recommend`, `daily`)의 text와 JSON,
       목표 파일, LDL 상태 판정이 바뀌지 않는다. 추정 범위가 `nutrition status`의 합계와 판정에 들어가지 않는다.
-- [ ] AC11: 해석 프롬프트에 규칙 5의 문장(모르면 null·0 아님, 포화지방 ≤ 지방, 라벨 한 값, 검색 페이지 값)이 있고 프롬프트 고정
+      근거: CLI·terminal 코드는 diff에 없다. B `test_stored_ranges_do_not_change_the_status_verdict`, 검증자 smoke의 LLM 꺼짐 시나리오.
+      **검증자 정정**: 구현 보고의 "status text 전체가 byte-identical"은 틀렸다. 저장된 범위가 생기면 ldl v1 규칙대로 status text의
+      `(estimated)` 꼬리표와 JSON `estimated`, `nutrition day`의 `LDL:` 줄이 바뀐다(아래 "한계"). 판정, `known_subtotal`, `missing_items`는 같다.
+- [x] AC11: 해석 프롬프트에 규칙 5의 문장(모르면 null·0 아님, 포화지방 ≤ 지방, 라벨 한 값, 검색 페이지 값)이 있고 프롬프트 고정
       테스트가 갱신된다.
-- [ ] AC12: implementer live 확인(규칙 13): Codex strict schema와 Claude haiku가 새 schema로 `ok`이고, 합성 문장 3~4개의 결과
+      근거: P `test_the_interpret_task_has_every_new_sentence`, `test_web_rule_twelve_allows_a_search_the_user_asked_for`,
+      `test_the_shared_fixed_rules_and_the_other_tasks_are_unchanged`. 검증자 확인: `FIXED_RULE_LINES`, 질문 답·메뉴 제안 프롬프트는 같다.
+- [x] AC12: implementer live 확인(규칙 13): Codex strict schema와 Claude haiku가 새 schema로 `ok`이고, 합성 문장 3~4개의 결과
       (포화지방·섬유를 채웠는지, null을 0으로 쓰지 않았는지, `satfat_exceeds_fat` 발생 여부)가 기능 문서의 표에 있다.
-- [ ] AC13: 기능 문서(D6)가 값을 "표시용 추정 범위, 정확도 미확인(ldl 열린 연구 질문 5), LDL 상태 판정에 쓰지 않음"으로 적고,
+      근거: `docs/telegram-llm.md` "live 확인" 표(2026-11-03, 합성 문장 5개 x Codex·Haiku·Haiku 웹 = 15번 모두 `ok`, 0으로 쓴 값 없음,
+      `satfat_exceeds_fat` 없음). 검증자는 다시 돌리지 않고 내용이 맞는지만 확인했다.
+- [x] AC13: 기능 문서(D6)가 값을 "표시용 추정 범위, 정확도 미확인(ldl 열린 연구 질문 5), LDL 상태 판정에 쓰지 않음"으로 적고,
       Output change(규칙 10의 두 묶음)와 Known issues를 적는다.
-- [ ] AC14: 품질 게이트 4개가 통과한다(`uv run --extra dev pytest`, `uv run ruff check .`, `uv run mypy src tests`, `git diff --check`).
+      근거: `docs/telegram-llm.md` 새 절 "포화지방·섬유 추정 (LDL Nutrients B)"과 Known issues, `docs/ldl-nutrients.md` Known issues.
+      Output change 목록이 CLI text의 변화를 다 적지 않은 점은 "한계"에 있다.
+- [x] AC14: 품질 게이트 4개가 통과한다(`uv run --extra dev pytest`, `uv run ruff check .`, `uv run mypy src tests`, `git diff --check`).
+      근거: 통합 때 main(d852b65) 위에서 다시 돌렸다: pytest 3393 passed(기준 3326에서 +67: P 37, B 30), ruff clean, mypy 274 files,
+      `git diff --check` clean, 바뀐 파일 모두 LF.
+
+## 설계 승인 결정 (2026-11-03)
+
+사용자 답: L3와 모든 추천안(열린 질문 1~5). 상세: `docs/telegram-llm.md` "포화지방·섬유 추정 (LDL Nutrients B)".
+
+- **D0-A**(열린 질문 1): 값은 보여 주기만 한다. `nutrition status`의 LDL 판정은 그대로이고 Telegram 일반식은 `Unknown, not 0:`에 남는다.
+  상태에 추정 합계를 정보로 보이는 일은 후속 스펙이다.
+- **D1-A**: 새 값은 식사 기록 item의 `estimate`에만 들어온다. `edit`, `menu.items`, suggest의 estimate는 8개 키 그대로다. 이미 기록한 식사의
+  포화지방·섬유만 고치는 말은 프롬프트 한 줄로 `edit.action: null`이 되어 기존 `EDIT_UNCLEAR_TEXT`를 받는다.
+- **D1.1 엄격**: item estimate는 정확히 12개 키다. 8개나 13개는 `bad_output`이다.
+- **D2 = L3**(열린 질문 2): `lookup_wanted` 규칙은 지금 그대로(상표·식당·포장 제품만 Claude가 검색)이고, 두 문장을 더했다.
+  해석 프롬프트의 `lookup_wanted` 설명에 "사용자가 그 음식을 검색해 달라고 하면('검색해서', '찾아서', '찾아봐') 흔한 음식이어도 true",
+  웹 고정 규칙 12 끝에 "사용자가 검색해 달라고 한 음식은 흔한 음식이어도 검색할 수 있습니다". 값이 없다고 자동으로 검색하지 않는다(L2 아님).
+  lookup 횟수(1회), 모델, 150 s, 실패 처리는 v2.5 그대로다.
+- **D3**: 표시는 `추정:`/`라벨:` 줄 바로 다음의 따로 한 줄이다.
+- **Q3**(열린 질문 3): 줄 끝 꼬리표는 `(추정, 정확도 미확인)`이고 라벨 값은 `(라벨)`이다. 위 규칙 9와 명령 예시의 `(추정)`은 이 결정으로 바뀌었다.
+- **D4**(열린 질문 4): 포화지방 최소가 지방 최대보다 크면 포화지방만 빼고(unknown) 줄로 알린다. 새 끼니와 lookup은 `_settle_ldl`이 제안을
+  저장하기 직전에(재확인 결과와 상관없이), 이미 기록한 식사의 `change_estimate`(D4-가)는 고치기 제안을 만들 때 뺀다. 줄 문구는
+  `포화지방 모름(지방보다 커서 뺌)`, 고치기는 `포화지방 3~5 g → 모름(지방보다 커서 뺌)`이다(위 예시 4·5의 문구 대신). 지방에 맞춰 깎지 않는다
+  (값을 지어내는 일). 이것이 ldl-nutrients D10(고치기가 저장된 포화지방·섬유를 다시 보냄)과 CLI 규칙 2(포화지방 ≤ 지방)의 충돌을 Telegram
+  쪽에서 푼다.
+- **D5-가**: 지방이 null이면 비교하지 않고 포화지방을 그대로 저장한다(CLI와 같다).
+- **D6**: 기능 문서는 `docs/telegram-llm.md`의 새 절과 `docs/ldl-nutrients.md` Known issues 갱신이다.
+- **D7**: `<열린 제안>`·`<직전 기록>` 프롬프트 블록은 바꾸지 않는다.
+- **D8**: `from_label`이고 기존 4개와 포화지방·섬유가 모두 한 값일 때만 라벨 값이다. 섞이면 보통 추정이다.
+- **D9**: 새 문장은 해석 할 일(INTERPRET)에만 넣었다. 공유하는 `[고정 규칙]`은 그대로다(위 규칙 5의 "고정 규칙 6에 더한다" 대신).
+- **Q5**(열린 질문 5): 새 사람 게이트는 없다(`user_gates: [design, integration]`). implementer의 AC12 live 표가 live 확인이고, 통합 뒤 Claude가
+  main checkout에서 bot을 다시 시작한다. 사용자의 휴대폰 Telegram 확인은 선택이다. 위 규칙 13의 `live-llm` 게이트는 이 결정으로 없어졌다.
+- 숫자 재확인 코드 `satfat_exceeds_fat`: 포화지방 최소 > 지방 최대(CLI와 같은 비교), 실패 목록의 마지막, note 줄
+  `- items[1]: satfat_exceeds_fat (fat 10-15, satfat 18-25)`, 이유 문구 `포화지방이 지방보다 큼`. `RECHECK_CODES`에도 넣어 history 줄이 버려지지
+  않는다. 포화지방·섬유에는 범위 넓이·한 값 검사가 없고 섬유와 탄수화물은 비교하지 않는다.
+
+**`output_change: additive`(통합 때 판단)**: 같은 저장 데이터는 이 기능 전과 같은 출력을 낸다. CLI·terminal 코드는 diff에 없고, 검증자의
+같은 데이터 CLI 실행은 byte-identical이었다. 바뀌어 보이는 것은 모두 새 데이터가 있을 때만 나온다: Telegram 제안의 새 줄과 `/fix_` 변경 글,
+`/ok` argv의 `satfat=`/`fiber=`, history의 null 키 4개, 그리고 새 범위 행을 이미 승인된 ldl v1 렌더링이 보여 주는 CLI의 `(estimated)` 꼬리표,
+JSON `estimated: true`, `LDL:`·`LDL nutrients:` 줄. 기존 key나 줄의 모양이 바뀌거나 사라진 것은 없으므로 `breaking`이 아니다. 다만 같은 날에
+정확한 카탈로그 소계가 있으면 그 소계가 `(estimated)`로 보이는 변화가 사용자에게 보인다(아래 "한계"의 검증자 판단 1).
+
+### 승인된 구현 차이(검증자가 모두 받아들임)
+
+1. AC12 live 확인은 손으로 만든 argv 대신 bot과 같은 길(`CliLlmProvider` + `RunPin`)로 돌렸다. 기능 문서에 그렇게 적었다.
+2. AC10: 저장된 범위가 있으면 ldl v1의 `estimated` 꼬리표가 켜진다. 기존 v1 동작이고 코드 변경이 아니다. 테스트는 `estimated`를 고정하고
+   나머지를 비교한다. 검증자가 text도 바뀐다고 정정했다(AC10, "한계").
+3. 계획에 없던 테스트 하나: 새 코드가 든 history 줄을 `/history`와 `telegram history`가 보여 준다.
+4. 문구: `/fix_`의 더하기 변경 글에서는 줄이 `(라벨)`·확인 표시 뒤 ` / ` 다음에 붙는다. D4 줄은 영양소 변경 줄 다음, 메모·이유 줄 앞이다.
+   고치기 머리 줄은 기존 renderer의 `저녁 <meal_id> item 1: 일반식 (메모: …)`이다.
 
 ## 한계 / 후속 후보
 
@@ -305,29 +388,54 @@ CLI JSON 출력은 바뀌지 않는다. `nutrition day --json`의 item `ldl_nutr
   - **LDL 상태는 거의 그대로다**(목적, 열린 질문 1). 범위만 있는 Telegram 일반식은 `Unknown, not 0:`에 남고 포화지방·섬유 상태는
     `cannot tell yet`이 흔하다. 값은 `/day`와 제안에서만 보인다.
   - **정확도는 모른다**(ldl 열린 연구 질문 5). LLM·사진 추정과 웹 페이지 값 모두 검증되지 않았다. 사진 kcal 추정도 흔히 ±30~50 %다.
-    값은 표시용 추정 범위다.
-  - 기본 제공자 Codex는 검색하지 못한다(v2.5). D2-L1·L3에서 집밥의 값은 모델 지식에서 온다. `출처:` 줄은 item 전체에 대한 것이고
-    어느 영양소가 웹에서 왔는지는 모른다. 사이트 이름은 모델이 적은 것이다(v2.2 한계 그대로).
+    값은 표시용 추정 범위이고 LDL 판정에 쓰지 않는다. 제안 줄에는 `(추정, 정확도 미확인)`이 붙지만 CLI `/day`의 `LDL:` 줄은
+    `estimated`라고만 한다(CLI 출력 그대로).
+  - 기본 제공자 Codex는 검색하지 못한다(v2.5). L3에서 집밥의 값은 모델 지식에서 오고, 사용자가 "검색해서"라고 할 때만 Claude가 찾는다.
+    `출처:` 줄은 item 전체에 대한 것이고 어느 영양소가 웹에서 왔는지는 모른다. 사이트 이름은 모델이 적은 것이다(v2.2 한계 그대로).
   - 라벨이 아닌 한 값(min = max)의 포화지방·섬유는 프롬프트 문장으로만 막는다. 모델이 한 값을 주면 그대로 범위로 저장된다.
   - 한국 영양 라벨에 식이섬유가 없는 경우가 많아 라벨 사진에서도 섬유는 `모름`이 흔할 수 있다(확인하지 않음).
-  - 포화지방을 규칙 6·7로 빼면 그 item은 unknown이다. 사용자는 CLI `replace-item --general-estimate …,satfat=…`로 다시 넣을 수 있다.
-  - 프롬프트와 schema가 길어져 형식 실패가 아주 조금 늘 수 있다(기존 재시도 규칙). D2-L2를 고르면 Claude 호출과 지연이 는다.
-  - 통합 뒤 Telegram bot을 다시 시작해야 새 schema를 쓴다. 다시 시작하기 전에 만든 열린 제안은 옛 argv로 기록된다.
+  - 포화지방을 규칙 6·7(D4)로 빼면 그 item은 unknown이다. 사용자는 CLI `replace-item --general-estimate …,satfat=…`로 다시 넣을 수 있다.
+    Telegram에서 포화지방·섬유만 고치는 말은 받지 않는다(D1-A).
+  - 프롬프트와 schema가 길어져 형식 실패가 아주 조금 늘 수 있다(기존 재시도 규칙).
+  - 통합 뒤 Telegram bot을 다시 시작해야 새 schema를 쓴다. 다시 시작하기 전에 만든 열린 제안은 옛 argv로 기록된다. 과거 일반식은 채우지 않는다.
   - history 줄이 item마다 null 키 4개만큼 길어진다.
+  - 구현자·검증자가 보고한 한계(상세: `docs/telegram-llm.md` Known issues "포화지방·섬유 추정 (LDL Nutrients B)"):
+    - **CLI 출력이 바뀌어 보인다(검증자 판단 1).** CLI 코드는 그대로지만 저장된 Telegram 범위가 생기면 ldl v1 규칙대로 보인다.
+      `nutrition status` text의 포화지방·섬유 소계에 `(estimated)` 꼬리표가 붙고 JSON `estimated`가 true가 된다. 아는 소계가 정확한 카탈로그
+      음식에서만 왔어도 그렇다(예: 정확한 라벨 음식 0.5 g과 Telegram 일반식이 같은 날이면 `known items only: 0.5 g (estimated)`).
+      `nutrition day` text에는 item의 `LDL:` 줄과 끼니의 `LDL nutrients: ...` 줄이 생긴다. 승인된 v1 규칙대로이고 판정, `known_subtotal`,
+      `missing_items`는 같다. 다만 `docs/telegram-llm.md`의 Output change 목록은 status JSON의 `estimated`만 적어 **완전하지 않다**.
+    - **Claude 웹 lookup이 Codex의 포화지방을 지울 수 있다.** lookup 답이 Codex 답을 통째로 바꾸므로(v2.5) Claude가 null로 주면 Codex가
+      채운 값은 unknown이 된다(live: 상표 음식). 두 답을 합치지 않는 것은 의도다.
+    - **사진은 live로 확인하지 않았다**(합성 문장만). 사진 추정·라벨 사진은 가짜 제공자 테스트로만 확인했다.
+    - **Haiku는 대부분 `모름`이다.** live에서 Haiku는 라벨 말고는 포화지방·섬유를 채우지 않았다(검색한 뒤에도). Codex도 같은 문장에 채우기도
+      하고 비우기도 한다. `"provider": "claude"`로 쓰면 대부분 `모름`일 수 있다.
+    - 겹침 판단과 맥락 블록은 기존 4개 영양소만 본다(D7). 4개 값이 같고 포화지방만 다른 같은 메모의 식사는 "이미 기록"으로 나온다.
+    - 되돌릴 때: 이전 빌드는 `satfat_exceeds_fat`가 든 history 줄을 읽지 못한다(`/history`, `telegram history`가 `HistoryReadError`).
+    - 고치기(`change_estimate`)는 언제나 `language_estimate`다(기존 동작).
 - 후속 후보:
+  - `docs/telegram-llm.md` Output change 목록 보완: 저장된 범위가 있을 때의 status text `(estimated)` 꼬리표와 `nutrition day`의 `LDL:`·
+    `LDL nutrients:` 줄(검증자 판단 1).
+  - 정확한 소계와 추정이 섞인 날의 `(estimated)` 표시를 더 정확히 하기(ldl v1 규칙 변경이라 별도 스펙과 사용자 결정).
   - `nutrition status`에 추정 범위 합계를 정보로만 보이기(판정에는 쓰지 않음, 별도 스펙과 사용자 결정).
-  - `edit.change_estimate`로 포화지방·섬유 고치기(D1-B를 고르지 않았다면).
+  - `edit.change_estimate`로 포화지방·섬유 고치기(D1-B).
+  - lookup 답이 null인 영양소에 Codex 값을 남길지(지금은 통째로 바꿈, 사용자 결정).
   - 식이 콜레스테롤 필드와 추정(LDL-07), `오늘 누적`·짧은 요약에 표시(ldl D6), lookup 값을 카탈로그 음식으로 등록하는 안내.
   - `--general-estimate` 오류 문구에 `satfat`, `fiber` 넣기(ldl 후속 그대로).
   - Codex 검색이 가능해지면 lookup 없이 Codex가 검색(v2.5 후속).
 
-### 열린 질문
+### 열린 질문 (모두 게이트 1에서 정함, 2026-11-03)
 
 1. **상태 판정이 바뀌지 않아도 괜찮은가?** 사용자가 원한 "빈 값 채우기"가 `/status`의 판정까지 뜻한다면, 이 스펙만으로는
    부족하다. 후속(추정 합계를 정보로 보이기)을 함께 계획할지 게이트 1에서 정한다.
+   → 결정: D0-A. 판정은 그대로, 추정 합계 정보 줄은 후속 후보.
 2. **D2 검색 시점**: 사용자의 말은 "없으면 검색"(L2)이다. 추가 호출 비용을 받아들일지, L3(부탁할 때와 상표 음식만)로 할지.
+   → 결정: L3.
 3. **정확도 표시**: 줄마다 `(추정)`만 둘지, `(추정, 정확도 미확인)`처럼 더 적을지(폭 약 6자 증가). 근거 문서에 LLM·웹 추정의
    포화지방·섬유 정확도 연구가 없다(ldl 열린 연구 질문 5). 필요하면 근거 문서를 갱신하고 다시 승인받는다.
+   → 결정: `(추정, 정확도 미확인)`(Q3). 근거 문서는 갱신하지 않았다.
 4. **D4·D5**: 규칙 6·7의 "빼고 알림"이 맞는지, 지방 없는 포화지방을 받을지.
+   → 결정: D4 빼고 알림(고치기는 D4-가), D5-가 그대로 저장.
 5. **`live-llm` 게이트 이름**: 템플릿과 `docs/specs/README.md`의 게이트 목록에 없다. 오케스트레이터가 이 이름을 받아들일지,
    기존처럼 implementer live 확인만 두고 실제 Telegram 확인을 "필수 아님"으로 둘지 정한다.
+   → 결정: 새 게이트 없음(Q5). implementer live 확인(AC12)만 두고 휴대폰 확인은 선택이다.
